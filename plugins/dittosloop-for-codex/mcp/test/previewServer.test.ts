@@ -40,6 +40,8 @@ test("serves the preview shell", async () => {
 
   expect(response.status).toBe(200);
   expect(html).toContain("DittosLoop For Codex");
+  expect(html).toContain("Run detail");
+  expect(html).toContain("id=\"run-detail\"");
 });
 
 test("serves the loop snapshot api", async () => {
