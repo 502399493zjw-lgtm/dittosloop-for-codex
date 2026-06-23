@@ -3,6 +3,7 @@ export type TriggerMode = "manual";
 export type RunStatus = "running" | "waiting_for_human" | "repairing" | "completed" | "failed";
 export type AttemptStatus = "running" | "completed" | "failed";
 export type VerificationStatus = "passed" | "failed" | "skipped";
+export type HumanRequestStatus = "open" | "resolved";
 export type EventKind =
   | "note"
   | "run_created"
@@ -67,6 +68,7 @@ export interface RunEvent {
 export interface VerificationResult {
   id: string;
   runId: string;
+  attemptId?: string;
   status: VerificationStatus;
   summary: string;
   checks: Array<{
@@ -81,6 +83,8 @@ export interface HumanRequest {
   id: string;
   runId: string;
   question: string;
+  status: HumanRequestStatus;
+  response?: string;
   createdAt: string;
   resolvedAt?: string;
 }
@@ -107,6 +111,17 @@ export interface LoopState {
   version: 1;
   loops: LoopContract[];
   runs: LoopRun[];
+  attempts: RunAttempt[];
+  events: RunEvent[];
+  verificationResults: VerificationResult[];
+  humanRequests: HumanRequest[];
+  memoryCommits: MemoryCommit[];
+  artifacts: ArtifactRef[];
+}
+
+export interface RunDetail {
+  run: LoopRun;
+  loop: LoopContract;
   attempts: RunAttempt[];
   events: RunEvent[];
   verificationResults: VerificationResult[];

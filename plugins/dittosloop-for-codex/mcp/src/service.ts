@@ -5,6 +5,8 @@ import type {
   HumanRequest,
   LoopContract,
   LoopRun,
+  RunAttempt,
+  RunDetail,
   LoopState,
   MemoryCommit,
   RunEvent,
@@ -31,6 +33,15 @@ export interface TriggerRunInput {
   goal?: string;
 }
 
+export interface StartAttemptInput {
+  summary?: string;
+}
+
+export interface CompleteAttemptInput {
+  status?: Extract<RunAttempt["status"], "completed" | "failed">;
+  summary?: string;
+}
+
 export interface AppendEventInput {
   kind?: EventKind;
   message: string;
@@ -38,13 +49,23 @@ export interface AppendEventInput {
 }
 
 export interface RecordVerificationInput {
+  attemptId?: string;
   status: VerificationStatus;
   summary: string;
   checks?: VerificationResult["checks"];
+  repair?: boolean;
 }
 
 export interface RecordHumanRequestInput {
   question: string;
+}
+
+export interface ResolveHumanRequestInput {
+  response: string;
+}
+
+export interface MarkRunRepairingInput {
+  reason?: string;
 }
 
 export interface CommitMemoryInput {
@@ -129,6 +150,76 @@ export class LoopService {
     return run;
   }
 
+  async startAttempt(runId: string, input: StartAttemptInput = {}): Promise<RunAttempt> {
+    const timestamp = this.now();
+    const attempt: RunAttempt = {
+      id: this.nextId("attempt"),
+      runId,
+      status: "running",
+      summary: input.summary,
+      createdAt: timestamp
+    };
+
+    await this.options.store.updateState((state) => {
+      requireRun(state, runId);
+
+      return {
+        ...state,
+        attempts: [...state.attempts, attempt],
+        events: [
+          ...state.events,
+          lifecycleEvent(this.nextId("event"), runId, "attempt_started", input.summary ?? "Attempt started", timestamp)
+        ]
+      };
+    });
+
+    return attempt;
+  }
+
+  async completeAttempt(attemptId: string, input: CompleteAttemptInput = {}): Promise<RunAttempt> {
+    const timestamp = this.now();
+    const status = input.status ?? "completed";
+    let completedAttempt: RunAttempt | undefined;
+
+    await this.options.store.updateState((state) => {
+      const attempt = requireAttempt(state, attemptId);
+      const summary = input.summary ?? attempt.summary;
+
+      if (attempt.completedAt) {
+        if (attempt.status === status && attempt.summary === summary) {
+          completedAttempt = attempt;
+          return state;
+        }
+
+        throw new Error(`Attempt already completed: ${attemptId}`);
+      }
+
+      completedAttempt = {
+        ...attempt,
+        status,
+        summary,
+        completedAt: timestamp
+      };
+
+      return {
+        ...state,
+        attempts: state.attempts.map((candidate) => (candidate.id === attemptId ? completedAttempt! : candidate)),
+        events: [
+          ...state.events,
+          lifecycleEvent(
+            this.nextId("event"),
+            attempt.runId,
+            "attempt_completed",
+            completedAttempt.summary ?? `Attempt ${status}`,
+            timestamp
+          )
+        ]
+      };
+    });
+
+    return completedAttempt!;
+  }
+
   async appendEvent(runId: string, input: AppendEventInput): Promise<RunEvent> {
     const event: RunEvent = {
       id: this.nextId("event"),
@@ -152,20 +243,32 @@ export class LoopService {
   }
 
   async recordVerification(runId: string, input: RecordVerificationInput): Promise<VerificationResult> {
+    const timestamp = this.now();
     const result: VerificationResult = {
       id: this.nextId("verification"),
       runId,
+      attemptId: input.attemptId,
       status: input.status,
       summary: input.summary,
       checks: input.checks ?? [],
-      createdAt: this.now()
+      createdAt: timestamp
     };
 
     await this.options.store.updateState((state) => {
       requireRun(state, runId);
+      if (input.attemptId) {
+        const attempt = requireAttempt(state, input.attemptId);
+        if (attempt.runId !== runId) {
+          throw new Error(`Attempt does not belong to run: ${input.attemptId}`);
+        }
+      }
 
       return {
         ...state,
+        runs:
+          input.repair && input.status === "failed"
+            ? updateRun(state.runs, runId, { status: "repairing", updatedAt: timestamp })
+            : state.runs,
         verificationResults: [...state.verificationResults, result]
       };
     });
@@ -179,6 +282,7 @@ export class LoopService {
       id: this.nextId("human"),
       runId,
       question: input.question,
+      status: "open",
       createdAt: timestamp
     };
 
@@ -193,6 +297,40 @@ export class LoopService {
     });
 
     return request;
+  }
+
+  async resolveHumanRequest(requestId: string, input: ResolveHumanRequestInput): Promise<HumanRequest> {
+    const timestamp = this.now();
+    let resolvedRequest: HumanRequest | undefined;
+
+    await this.options.store.updateState((state) => {
+      const request = requireHumanRequest(state, requestId);
+
+      if (request.status === "resolved") {
+        if (request.response === input.response) {
+          resolvedRequest = request;
+          return state;
+        }
+
+        throw new Error(`Human request already resolved: ${requestId}`);
+      }
+
+      resolvedRequest = {
+        ...request,
+        status: "resolved",
+        response: input.response,
+        resolvedAt: timestamp
+      };
+
+      return {
+        ...state,
+        humanRequests: state.humanRequests.map((candidate) =>
+          candidate.id === requestId ? resolvedRequest! : candidate
+        )
+      };
+    });
+
+    return resolvedRequest!;
   }
 
   async commitMemory(loopId: string, input: CommitMemoryInput): Promise<MemoryCommit> {
@@ -242,6 +380,30 @@ export class LoopService {
     return artifact;
   }
 
+  async markRunRepairing(runId: string, input: MarkRunRepairingInput = {}): Promise<LoopRun> {
+    const timestamp = this.now();
+    let repairingRun: LoopRun | undefined;
+
+    await this.options.store.updateState((state) => {
+      const run = requireRun(state, runId);
+      repairingRun = {
+        ...run,
+        status: "repairing",
+        updatedAt: timestamp
+      };
+
+      return {
+        ...state,
+        runs: updateRun(state.runs, runId, { status: "repairing", updatedAt: timestamp }),
+        events: input.reason
+          ? [...state.events, lifecycleEvent(this.nextId("event"), runId, "note", input.reason, timestamp)]
+          : state.events
+      };
+    });
+
+    return repairingRun!;
+  }
+
   async completeRun(runId: string, input: CompleteRunInput = {}): Promise<LoopRun> {
     const timestamp = this.now();
     const status = input.status ?? "completed";
@@ -271,6 +433,23 @@ export class LoopService {
     });
 
     return completedRun!;
+  }
+
+  async getRunDetail(runId: string): Promise<RunDetail> {
+    const state = await this.options.store.readState();
+    const run = requireRun(state, runId);
+    const loop = requireLoop(state, run.loopId);
+
+    return {
+      run,
+      loop,
+      attempts: state.attempts.filter((attempt) => attempt.runId === runId),
+      events: state.events.filter((event) => event.runId === runId),
+      verificationResults: state.verificationResults.filter((result) => result.runId === runId),
+      humanRequests: state.humanRequests.filter((request) => request.runId === runId),
+      memoryCommits: state.memoryCommits.filter((commit) => commit.runId === runId),
+      artifacts: state.artifacts.filter((artifact) => artifact.runId === runId)
+    };
   }
 
   async getSnapshot(): Promise<Snapshot> {
@@ -305,6 +484,40 @@ function requireRun(state: LoopState, runId: string): LoopRun {
   return run;
 }
 
+function requireAttempt(state: LoopState, attemptId: string): RunAttempt {
+  const attempt = state.attempts.find((candidate) => candidate.id === attemptId);
+  if (!attempt) {
+    throw new Error(`Attempt not found: ${attemptId}`);
+  }
+
+  return attempt;
+}
+
+function requireHumanRequest(state: LoopState, requestId: string): HumanRequest {
+  const request = state.humanRequests.find((candidate) => candidate.id === requestId);
+  if (!request) {
+    throw new Error(`Human request not found: ${requestId}`);
+  }
+
+  return request;
+}
+
 function updateRun(runs: LoopRun[], runId: string, patch: Partial<LoopRun>): LoopRun[] {
   return runs.map((run) => (run.id === runId ? { ...run, ...patch } : run));
+}
+
+function lifecycleEvent(
+  id: string,
+  runId: string,
+  kind: EventKind,
+  message: string,
+  createdAt: string
+): RunEvent {
+  return {
+    id,
+    runId,
+    kind,
+    message,
+    createdAt
+  };
 }

@@ -88,3 +88,92 @@ test("records a run lifecycle in the snapshot", async () => {
   });
   expect(service.getPreviewUrl()).toBe("http://127.0.0.1:47888");
 });
+
+test("starts and completes an attempt under a run", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
+  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+
+  const attempt = await service.startAttempt(run.id, { summary: "First pass" });
+  const completed = await service.completeAttempt(attempt.id, {
+    status: "completed",
+    summary: "Tests passed"
+  });
+
+  expect(completed).toMatchObject({
+    id: "attempt_1",
+    runId: run.id,
+    status: "completed",
+    summary: "Tests passed",
+    completedAt: fixedTime
+  });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    attempts: [{ id: "attempt_1", runId: run.id, status: "completed" }],
+    events: [
+      { kind: "attempt_started", runId: run.id, message: "First pass" },
+      { kind: "attempt_completed", runId: run.id, message: "Tests passed" }
+    ]
+  });
+});
+
+test("records failed verification against an attempt and marks run repairing when requested", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
+  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const attempt = await service.startAttempt(run.id);
+
+  const result = await service.recordVerification(run.id, {
+    attemptId: attempt.id,
+    status: "failed",
+    summary: "Build failed",
+    repair: true,
+    checks: [{ name: "npm run build", status: "failed", output: "TS error" }]
+  });
+
+  expect(result).toMatchObject({ runId: run.id, attemptId: attempt.id, status: "failed" });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    runs: [{ id: run.id, status: "repairing", updatedAt: fixedTime }],
+    verificationResults: [{ id: "verification_1", attemptId: attempt.id }]
+  });
+});
+
+test("resolves a human request with a response", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
+  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const request = await service.recordHumanRequest(run.id, { question: "Continue with repair?" });
+
+  const resolved = await service.resolveHumanRequest(request.id, { response: "Yes, continue." });
+
+  expect(resolved).toMatchObject({
+    id: request.id,
+    status: "resolved",
+    response: "Yes, continue.",
+    resolvedAt: fixedTime
+  });
+});
+
+test("returns composed run detail", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
+  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const attempt = await service.startAttempt(run.id, { summary: "First pass" });
+  await service.appendEvent(run.id, { message: "Checked package scripts" });
+  await service.recordVerification(run.id, { attemptId: attempt.id, status: "passed", summary: "Tests passed" });
+  await service.recordHumanRequest(run.id, { question: "Ship it?" });
+  await service.commitMemory(loop.id, { runId: run.id, summary: "Checks passed locally." });
+  await service.addArtifact(run.id, { title: "Preview", url: "http://127.0.0.1:47888" });
+
+  const detail = await service.getRunDetail(run.id);
+
+  expect(detail).toMatchObject({
+    run: { id: run.id },
+    loop: { id: loop.id },
+    attempts: [{ id: attempt.id }],
+    verificationResults: [{ attemptId: attempt.id }],
+    humanRequests: [{ status: "open" }],
+    memoryCommits: [{ summary: "Checks passed locally." }],
+    artifacts: [{ title: "Preview" }]
+  });
+  expect(detail.events).toEqual(expect.arrayContaining([expect.objectContaining({ message: "Checked package scripts" })]));
+});

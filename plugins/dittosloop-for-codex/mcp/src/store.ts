@@ -67,7 +67,10 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
     attempts: value?.attempts ?? [],
     events: value?.events ?? [],
     verificationResults: value?.verificationResults ?? [],
-    humanRequests: value?.humanRequests ?? [],
+    humanRequests: (value?.humanRequests ?? []).map((request) => ({
+      status: "open",
+      ...request
+    })),
     memoryCommits: value?.memoryCommits ?? [],
     artifacts: value?.artifacts ?? []
   };
