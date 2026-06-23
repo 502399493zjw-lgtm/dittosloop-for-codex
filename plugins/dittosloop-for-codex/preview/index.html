@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DittosLoop For Codex</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local preview</p>
+          <h1>DittosLoop For Codex</h1>
+        </div>
+        <button id="refresh" type="button">Refresh</button>
+      </header>
+
+      <section class="metrics" aria-label="Loop metrics">
+        <div class="metric">
+          <span class="metric-value" id="loop-count">0</span>
+          <span class="metric-label">Loops</span>
+        </div>
+        <div class="metric">
+          <span class="metric-value" id="run-count">0</span>
+          <span class="metric-label">Runs</span>
+        </div>
+        <div class="metric">
+          <span class="metric-value" id="verify-count">0</span>
+          <span class="metric-label">Verifications</span>
+        </div>
+        <div class="metric">
+          <span class="metric-value" id="human-count">0</span>
+          <span class="metric-label">Human asks</span>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <div class="panel">
+          <div class="panel-heading">
+            <h2>Loops</h2>
+          </div>
+          <div id="loops" class="list"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-heading">
+            <h2>Runs</h2>
+          </div>
+          <div id="runs" class="timeline"></div>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

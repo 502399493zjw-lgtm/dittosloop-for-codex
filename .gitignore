@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.venv/
+.DS_Store
+.env
+*.log
+.dittosloop-data/
+plugins/dittosloop-for-codex/mcp/node_modules/
+plugins/dittosloop-for-codex/mcp/dist/
+plugins/dittosloop-for-codex/mcp/coverage/

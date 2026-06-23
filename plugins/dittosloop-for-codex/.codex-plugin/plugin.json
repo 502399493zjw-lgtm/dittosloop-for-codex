@@ -1,0 +1,35 @@
+{
+  "name": "dittosloop-for-codex",
+  "version": "0.1.0",
+  "description": "Turn Codex work into visible local Dittos loops with run history, verification, memory, and preview.",
+  "author": {
+    "name": "Dittos Loop"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "loop",
+    "automation",
+    "verification"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "DittosLoop For Codex",
+    "shortDescription": "Create and inspect local Dittos loops from Codex",
+    "longDescription": "DittosLoop For Codex helps turn delegated work into durable, visible local loops. It records loop contracts, runs, attempts, verification results, human requests, memory summaries, artifacts, and exposes a local preview URL for Codex's in-app browser.",
+    "developerName": "Dittos Loop",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Turn this responsibility into a loop",
+      "Show my Dittos loops",
+      "Trigger this loop and verify it"
+    ],
+    "brandColor": "#2563EB"
+  },
+  "mcpServers": "./.mcp.json"
+}

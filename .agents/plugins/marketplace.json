@@ -1,0 +1,20 @@
+{
+  "name": "dittosloop-local",
+  "interface": {
+    "displayName": "DittosLoop Local"
+  },
+  "plugins": [
+    {
+      "name": "dittosloop-for-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/dittosloop-for-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
