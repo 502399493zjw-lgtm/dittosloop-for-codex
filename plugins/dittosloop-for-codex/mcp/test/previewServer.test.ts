@@ -60,3 +60,35 @@ test("serves the loop snapshot api", async () => {
     loops: [{ id: "loop_1", title: "Daily code health check" }]
   });
 });
+
+test("serves composed run detail api", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
+  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const attempt = await service.startAttempt(run.id, { summary: "First pass" });
+  await service.recordVerification(run.id, { attemptId: attempt.id, status: "passed", summary: "Tests passed" });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/${run.id}`);
+  const detail = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(detail).toMatchObject({
+    run: { id: run.id },
+    attempts: [{ id: attempt.id }],
+    verificationResults: [{ attemptId: attempt.id }]
+  });
+});
+
+test("returns 404 for unknown run detail", async () => {
+  const service = await createService();
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/run_missing`);
+  const body = await response.json();
+
+  expect(response.status).toBe(404);
+  expect(body).toEqual({ error: "Run not found: run_missing" });
+});

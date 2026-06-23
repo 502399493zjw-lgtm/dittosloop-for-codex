@@ -36,8 +36,20 @@ export async function startPreviewServer(options: PreviewServerOptions): Promise
         return;
       }
 
+      const runDetailMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
+      if (runDetailMatch) {
+        await sendJson(response, await options.service.getRunDetail(decodeURIComponent(runDetailMatch[1])));
+        return;
+      }
+
       await sendStaticFile(response, options.staticDir, url.pathname);
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Run not found:")) {
+        response.writeHead(404, { "content-type": "application/json; charset=utf-8" });
+        response.end(`${JSON.stringify({ error: error.message })}\n`);
+        return;
+      }
+
       response.writeHead(500, { "content-type": "application/json; charset=utf-8" });
       response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Preview server error" }));
     }
