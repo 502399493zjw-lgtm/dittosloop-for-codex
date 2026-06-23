@@ -54,6 +54,38 @@ http://127.0.0.1:47888
 
 The plugin exposes `get_preview_url` so Codex can open the same view in the in-app browser or right-side preview surface.
 
+The preview has three compact panels: loop contracts, recent runs, and the selected run detail. Run detail shows attempts, timeline events, verification results, human requests, memory, and artifacts from the local JSON state.
+
+## Run Detail Flow
+
+1. `trigger_run` creates the run.
+2. `start_attempt` begins visible work under that run.
+3. `complete_attempt` records the attempt outcome.
+4. `record_verification` can attach results to `attemptId`.
+5. Failed verification with `repair: true` moves the run to `repairing`.
+6. `record_human_request` keeps user decisions visible when work pauses.
+7. `resolve_human_request` closes a user decision with the response.
+8. `get_run_detail` returns the composed view shown in the preview.
+
+## MCP Tools
+
+- `create_loop`
+- `list_loops`
+- `trigger_run`
+- `start_attempt`
+- `complete_attempt`
+- `append_event`
+- `record_verification`
+- `record_human_request`
+- `resolve_human_request`
+- `commit_memory`
+- `add_artifact`
+- `mark_run_repairing`
+- `complete_run`
+- `get_run_detail`
+- `get_snapshot`
+- `get_preview_url`
+
 ## Development
 
 From `plugins/dittosloop-for-codex/mcp`:
