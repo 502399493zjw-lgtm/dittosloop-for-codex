@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "loops": [
+    {
+      "id": "loop_sample_release_notes",
+      "title": "Release Readiness Loop",
+      "intent": "Keep the DittosLoop For Codex plugin ready to install, demo, and share.",
+      "trigger": {
+        "mode": "manual"
+      },
+      "verification": {
+        "checks": [
+          "Run repository validation",
+          "Run MCP tests",
+          "Open the preview detail panel"
+        ],
+        "notes": "The loop is manual in the MVP so every run remains visible."
+      },
+      "status": "active",
+      "createdAt": "2026-06-23T06:00:00.000Z",
+      "updatedAt": "2026-06-23T06:15:00.000Z"
+    }
+  ],
+  "runs": [
+    {
+      "id": "run_sample_release_notes",
+      "loopId": "loop_sample_release_notes",
+      "status": "waiting_for_human",
+      "goal": "Prepare the plugin for a local install demo and GitHub sharing pass.",
+      "trigger": "manual",
+      "createdAt": "2026-06-23T06:20:00.000Z",
+      "updatedAt": "2026-06-23T06:38:00.000Z"
+    }
+  ],
+  "attempts": [
+    {
+      "id": "attempt_sample_1",
+      "runId": "run_sample_release_notes",
+      "status": "completed",
+      "summary": "Added a validator, sample data, and clearer install documentation.",
+      "createdAt": "2026-06-23T06:21:00.000Z",
+      "completedAt": "2026-06-23T06:34:00.000Z"
+    }
+  ],
+  "events": [
+    {
+      "id": "event_sample_run_created",
+      "runId": "run_sample_release_notes",
+      "kind": "run_created",
+      "message": "Run created for release-readiness work.",
+      "createdAt": "2026-06-23T06:20:00.000Z"
+    },
+    {
+      "id": "event_sample_attempt_started",
+      "runId": "run_sample_release_notes",
+      "kind": "attempt_started",
+      "message": "Started installation and validation polish.",
+      "createdAt": "2026-06-23T06:21:00.000Z"
+    },
+    {
+      "id": "event_sample_verification",
+      "runId": "run_sample_release_notes",
+      "kind": "verification_recorded",
+      "message": "Validation passed locally; preview smoke remains visible for the user.",
+      "createdAt": "2026-06-23T06:35:00.000Z"
+    },
+    {
+      "id": "event_sample_human_request",
+      "runId": "run_sample_release_notes",
+      "kind": "human_request",
+      "message": "Confirm whether to publish the repo publicly or keep it workspace-local.",
+      "createdAt": "2026-06-23T06:38:00.000Z"
+    }
+  ],
+  "verificationResults": [
+    {
+      "id": "verification_sample_1",
+      "runId": "run_sample_release_notes",
+      "attemptId": "attempt_sample_1",
+      "status": "passed",
+      "summary": "Repository checks passed for the release-readiness attempt.",
+      "checks": [
+        {
+          "name": "Plugin manifest validation",
+          "status": "passed",
+          "output": "Manifest, marketplace, MCP config, skill, preview, and build entrypoint are present."
+        },
+        {
+          "name": "Runtime tests",
+          "status": "passed",
+          "output": "MCP runtime unit tests pass against temporary data."
+        },
+        {
+          "name": "Preview detail smoke",
+          "status": "passed",
+          "output": "The selected run shows attempts, verification, human request, memory, and artifacts."
+        }
+      ],
+      "createdAt": "2026-06-23T06:35:00.000Z"
+    }
+  ],
+  "humanRequests": [
+    {
+      "id": "human_sample_publish_scope",
+      "runId": "run_sample_release_notes",
+      "question": "Should this plugin be shared as a public GitHub marketplace source or kept workspace-local first?",
+      "status": "open",
+      "createdAt": "2026-06-23T06:38:00.000Z"
+    }
+  ],
+  "memoryCommits": [
+    {
+      "id": "memory_sample_release_readiness",
+      "loopId": "loop_sample_release_notes",
+      "runId": "run_sample_release_notes",
+      "summary": "Release-readiness means every install path should have a matching validation command and preview demo.",
+      "createdAt": "2026-06-23T06:36:00.000Z"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "artifact_sample_readme",
+      "runId": "run_sample_release_notes",
+      "title": "Install and preview guide",
+      "path": "README.md",
+      "kind": "markdown",
+      "createdAt": "2026-06-23T06:37:00.000Z"
+    }
+  ]
+}
+

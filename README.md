@@ -4,6 +4,17 @@
 
 This repo is shaped as a GitHub-ready Codex plugin marketplace source. The first milestone is local install and local preview.
 
+## Quick Check
+
+From the repo root:
+
+```bash
+npm --prefix plugins/dittosloop-for-codex/mcp install
+npm run check
+```
+
+`npm run check` builds the MCP runtime, runs the repository validator, and runs the runtime tests.
+
 ## What It Includes
 
 - `plugins/dittosloop-for-codex/.codex-plugin/plugin.json`: Codex plugin manifest
@@ -11,24 +22,46 @@ This repo is shaped as a GitHub-ready Codex plugin marketplace source. The first
 - `plugins/dittosloop-for-codex/skills/loop/SKILL.md`: installed loop workflow
 - `plugins/dittosloop-for-codex/mcp`: TypeScript MCP runtime
 - `plugins/dittosloop-for-codex/preview`: local preview UI
+- `scripts/validate-plugin.mjs`: local plugin/package validator
+- `examples/state.sample.json`: preview-ready sample loop state
 
 ## Local Setup
 
-Build the runtime before installing the plugin:
+Build and validate the runtime before installing the plugin:
 
 ```bash
-cd "plugins/dittosloop-for-codex/mcp"
-npm install
-npm run build
+npm --prefix plugins/dittosloop-for-codex/mcp install
+npm run check
 ```
 
 Add this repo as a Codex marketplace source:
 
 ```bash
-codex plugin marketplace add "/Users/edisonzhong/Documents/dittos loop/dittosloop-for-codex"
+codex plugin marketplace add "$(pwd)"
 ```
 
 Then open Codex plugin settings and install `DittosLoop For Codex` from the `DittosLoop Local` marketplace.
+
+After installing or reinstalling the plugin, restart Codex and start a new thread so the bundled skill and MCP tools are loaded fresh.
+
+## GitHub Setup
+
+After cloning a shared copy of this repo:
+
+```bash
+cd dittosloop-for-codex
+npm --prefix plugins/dittosloop-for-codex/mcp install
+npm run check
+codex plugin marketplace add "$(pwd)"
+```
+
+For a public or private GitHub marketplace source that Codex can access, add the repo source instead of the local path:
+
+```bash
+codex plugin marketplace add owner/dittosloop-for-codex --ref main
+```
+
+The marketplace entry points to `./plugins/dittosloop-for-codex`, so the same repository shape works locally and from GitHub.
 
 ## Runtime Data
 
@@ -55,6 +88,18 @@ http://127.0.0.1:47888
 The plugin exposes `get_preview_url` so Codex can open the same view in the in-app browser or right-side preview surface.
 
 The preview has three compact panels: loop contracts, recent runs, and the selected run detail. Run detail shows attempts, timeline events, verification results, human requests, memory, and artifacts from the local JSON state.
+
+To preview the sample state without installing the plugin:
+
+```bash
+npm run build
+tmpdir="$(mktemp -d)"
+cp examples/state.sample.json "$tmpdir/state.json"
+DITTOSLOOP_DATA_DIR="$tmpdir" DITTOSLOOP_PREVIEW_PORT=47888 \
+  npm --prefix plugins/dittosloop-for-codex/mcp start
+```
+
+Open `http://127.0.0.1:47888` and select `Release Readiness Loop`.
 
 ## Run Detail Flow
 
@@ -88,20 +133,25 @@ The preview has three compact panels: loop contracts, recent runs, and the selec
 
 ## Development
 
-From `plugins/dittosloop-for-codex/mcp`:
+Use the repo-level commands for day-to-day checks:
 
 ```bash
 npm test
-npm run build
+npm run validate
+npm run check
 ```
 
-To smoke-test the preview outside Codex:
+The MCP package can still be exercised directly:
 
 ```bash
-npm run build
-DITTOSLOOP_DATA_DIR="$(pwd)/../../.dittosloop-data" npm start
+npm --prefix plugins/dittosloop-for-codex/mcp test
+npm --prefix plugins/dittosloop-for-codex/mcp run build
 ```
+
+When manifest metadata or MCP tools change, rebuild, run `npm run check`, reinstall or refresh the plugin from the marketplace, restart Codex, and test in a new thread.
 
 ## Sharing
 
-For GitHub sharing, keep the marketplace file at `.agents/plugins/marketplace.json` and the plugin at `plugins/dittosloop-for-codex`. Users can add the cloned repo as a marketplace source, build the runtime, and install the plugin from Codex.
+For GitHub sharing, keep the marketplace file at `.agents/plugins/marketplace.json` and the plugin at `plugins/dittosloop-for-codex`. Users can add the cloned repo as a marketplace source, build the runtime, run `npm run check`, and install the plugin from Codex.
+
+This plugin is local-first. It does not upload runtime state, and committed examples are sample data only.

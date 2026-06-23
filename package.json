@@ -1,0 +1,12 @@
+{
+  "name": "dittosloop-for-codex-repo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix plugins/dittosloop-for-codex/mcp run build",
+    "test": "node --test test/*.test.mjs",
+    "validate": "node scripts/validate-plugin.mjs",
+    "check": "npm run build && npm run test && npm run validate && npm --prefix plugins/dittosloop-for-codex/mcp test"
+  }
+}
