@@ -50,6 +50,34 @@ test("exposes loop operations as MCP content", async () => {
   });
 });
 
+test("exposes attempt and run detail operations as MCP content", async () => {
+  const handlers = await createHandlers();
+  const loop = readResult(await handlers.create_loop({ title: "Code health", intent: "Keep checks visible" }));
+  const run = readResult(await handlers.trigger_run({ loopId: loop.id, goal: "Run checks" }));
+
+  const attempt = readResult(await handlers.start_attempt({ runId: run.id, summary: "First pass" }));
+  await handlers.complete_attempt({ attemptId: attempt.id, status: "failed", summary: "Build failed" });
+  await handlers.record_verification({
+    runId: run.id,
+    attemptId: attempt.id,
+    status: "failed",
+    summary: "Build failed",
+    repair: true
+  });
+  const request = readResult(await handlers.record_human_request({ runId: run.id, question: "Continue?" }));
+  await handlers.resolve_human_request({ requestId: request.id, response: "Continue." });
+  await handlers.mark_run_repairing({ runId: run.id, reason: "Repair after build failure" });
+
+  const detail = readResult(await handlers.get_run_detail({ runId: run.id }));
+
+  expect(detail).toMatchObject({
+    run: { id: run.id, status: "repairing" },
+    attempts: [{ id: attempt.id, status: "failed" }],
+    verificationResults: [{ attemptId: attempt.id }],
+    humanRequests: [{ id: request.id, status: "resolved", response: "Continue." }]
+  });
+});
+
 test("registers the DittosLoop tool surface", () => {
   const registeredTools: string[] = [];
   const fakeServer = {
@@ -64,12 +92,17 @@ test("registers the DittosLoop tool surface", () => {
     "create_loop",
     "list_loops",
     "trigger_run",
+    "start_attempt",
+    "complete_attempt",
     "append_event",
     "record_verification",
     "record_human_request",
+    "resolve_human_request",
     "commit_memory",
     "add_artifact",
+    "mark_run_repairing",
     "complete_run",
+    "get_run_detail",
     "get_snapshot",
     "get_preview_url"
   ]);

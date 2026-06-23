@@ -42,6 +42,17 @@ const triggerRunSchema = z.object({
   goal: z.string().optional()
 });
 
+const startAttemptSchema = z.object({
+  runId: z.string().min(1),
+  summary: z.string().optional()
+});
+
+const completeAttemptSchema = z.object({
+  attemptId: z.string().min(1),
+  status: z.enum(["completed", "failed"]).optional(),
+  summary: z.string().optional()
+});
+
 const appendEventSchema = z.object({
   runId: z.string().min(1),
   kind: eventKindSchema.optional(),
@@ -57,14 +68,21 @@ const verificationCheckSchema = z.object({
 
 const recordVerificationSchema = z.object({
   runId: z.string().min(1),
+  attemptId: z.string().min(1).optional(),
   status: verificationStatusSchema,
   summary: z.string().min(1),
-  checks: z.array(verificationCheckSchema).optional()
+  checks: z.array(verificationCheckSchema).optional(),
+  repair: z.boolean().optional()
 });
 
 const recordHumanRequestSchema = z.object({
   runId: z.string().min(1),
   question: z.string().min(1)
+});
+
+const resolveHumanRequestSchema = z.object({
+  requestId: z.string().min(1),
+  response: z.string().min(1)
 });
 
 const commitMemorySchema = z.object({
@@ -86,6 +104,15 @@ const completeRunSchema = z.object({
   status: z.enum(["completed", "failed"]).optional()
 });
 
+const markRunRepairingSchema = z.object({
+  runId: z.string().min(1),
+  reason: z.string().optional()
+});
+
+const getRunDetailSchema = z.object({
+  runId: z.string().min(1)
+});
+
 const emptySchema = z.object({});
 
 export function createToolHandlers(service: LoopService): ToolHandlerMap {
@@ -99,6 +126,19 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
       const args = triggerRunSchema.parse(input);
       return toToolResult(await service.triggerRun(args.loopId, { goal: args.goal }));
     },
+    start_attempt: async (input) => {
+      const args = startAttemptSchema.parse(input);
+      return toToolResult(await service.startAttempt(args.runId, { summary: args.summary }));
+    },
+    complete_attempt: async (input) => {
+      const args = completeAttemptSchema.parse(input);
+      return toToolResult(
+        await service.completeAttempt(args.attemptId, {
+          status: args.status,
+          summary: args.summary
+        })
+      );
+    },
     append_event: async (input) => {
       const args = appendEventSchema.parse(input);
       return toToolResult(await service.appendEvent(args.runId, args));
@@ -111,6 +151,10 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
       const args = recordHumanRequestSchema.parse(input);
       return toToolResult(await service.recordHumanRequest(args.runId, args));
     },
+    resolve_human_request: async (input) => {
+      const args = resolveHumanRequestSchema.parse(input);
+      return toToolResult(await service.resolveHumanRequest(args.requestId, { response: args.response }));
+    },
     commit_memory: async (input) => {
       const args = commitMemorySchema.parse(input);
       return toToolResult(await service.commitMemory(args.loopId, args));
@@ -122,6 +166,14 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     complete_run: async (input) => {
       const args = completeRunSchema.parse(input);
       return toToolResult(await service.completeRun(args.runId, { status: args.status }));
+    },
+    mark_run_repairing: async (input) => {
+      const args = markRunRepairingSchema.parse(input);
+      return toToolResult(await service.markRunRepairing(args.runId, { reason: args.reason }));
+    },
+    get_run_detail: async (input) => {
+      const args = getRunDetailSchema.parse(input);
+      return toToolResult(await service.getRunDetail(args.runId));
     },
     get_snapshot: async () => toToolResult(await service.getSnapshot()),
     get_preview_url: async () => toToolResult({ previewUrl: service.getPreviewUrl() })
@@ -184,6 +236,18 @@ const toolDefinitions = [
     schema: triggerRunSchema
   },
   {
+    name: "start_attempt",
+    title: "Start attempt",
+    description: "Start a visible work attempt under a run.",
+    schema: startAttemptSchema
+  },
+  {
+    name: "complete_attempt",
+    title: "Complete attempt",
+    description: "Mark a run attempt completed or failed.",
+    schema: completeAttemptSchema
+  },
+  {
     name: "append_event",
     title: "Append event",
     description: "Append a note or lifecycle event to a run.",
@@ -202,6 +266,12 @@ const toolDefinitions = [
     schema: recordHumanRequestSchema
   },
   {
+    name: "resolve_human_request",
+    title: "Resolve human request",
+    description: "Resolve a user question with the user's response.",
+    schema: resolveHumanRequestSchema
+  },
+  {
     name: "commit_memory",
     title: "Commit memory",
     description: "Attach a memory summary to a loop.",
@@ -214,10 +284,22 @@ const toolDefinitions = [
     schema: addArtifactSchema
   },
   {
+    name: "mark_run_repairing",
+    title: "Mark run repairing",
+    description: "Move a run into repair state.",
+    schema: markRunRepairingSchema
+  },
+  {
     name: "complete_run",
     title: "Complete run",
     description: "Mark a run completed or failed.",
     schema: completeRunSchema
+  },
+  {
+    name: "get_run_detail",
+    title: "Get run detail",
+    description: "Return the composed detail view for a run.",
+    schema: getRunDetailSchema
   },
   {
     name: "get_snapshot",
