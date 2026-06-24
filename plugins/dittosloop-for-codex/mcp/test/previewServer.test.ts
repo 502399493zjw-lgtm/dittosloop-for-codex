@@ -99,6 +99,9 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("codexProjectId");
   expect(app).toContain("deleteLoop");
   expect(app).toContain("danger-button");
+  expect(app).not.toContain("未连接 Codex 项目");
+  expect(app).not.toContain("本轮剧本");
+  expect(app).not.toContain("script-steps");
 });
 
 test("preview script keeps deep-linked run routes even before snapshot catches up", async () => {

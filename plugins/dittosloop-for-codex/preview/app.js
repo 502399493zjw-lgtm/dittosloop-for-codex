@@ -217,38 +217,21 @@ function renderLoopStage({ snapshot, detail }) {
         button("danger-button", () => {
           void deleteLoop(loop);
         }, "删除")
-      ])
+      ].filter(Boolean))
     ]),
     renderLoopTabs(),
     activeLoopTab === "directory"
       ? renderLoopDirectory({ snapshot, loop, loopRuns, checks })
-      : [
-          el("section", "execution-card", [
-            el("div", "execution-heading", [
-              inlineIcon("flow"),
-              el("span", "", "本轮剧本")
-            ]),
-            el("ol", "script-steps", [
-              el("li", "", "启动一次可见 run，并在 run 下创建 attempt"),
-              el("li", "", "记录进展、验证结果和需要人工处理的事项"),
-              el("li", "", "在预览中读取 run detail，确认历史可追溯")
-            ])
-          ]),
-          el("section", "history-panel", [
-            ...renderHistoryRows(loopRuns, verificationResults, humanRequests)
-          ])
-        ]
+      : el("section", "history-panel", [
+          ...renderHistoryRows(loopRuns, verificationResults, humanRequests)
+        ])
   ].flat().filter(Boolean));
 }
 
 function renderProjectPicker(snapshot, loop) {
   const projects = projectChoices(snapshot);
   if (!projects.length) {
-    const select = el("select", "project-picker", [
-      el("option", "", "未连接 Codex 项目")
-    ]);
-    select.disabled = true;
-    return select;
+    return null;
   }
 
   const loopProjectId = projects.some((project) => project.id === loop?.codexProjectId)
