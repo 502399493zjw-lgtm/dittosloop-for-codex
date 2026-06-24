@@ -4,6 +4,8 @@
 
 This repo is shaped as a GitHub-ready Codex plugin marketplace source. The first milestone is local install and local preview.
 
+The plugin owns its own formal Live Loop runtime. It copies the main Dittos Loop engine concepts into this repo instead of importing the main Dittos Loop project at runtime. Structured contracts can define a workflow body, verification rubrics, repair policy, stop policy, and Codex project binding; engine-backed runs execute that body through the plugin's local engine and expose engine events to the preview.
+
 ## Quick Check
 
 From the repo root:
@@ -89,6 +91,8 @@ The plugin exposes `get_preview_url` so Codex can open the same view in the in-a
 
 The preview has three compact panels: loop contracts, recent runs, and the selected run detail. Run detail shows attempts, timeline events, verification results, human requests, memory, and artifacts from the local JSON state.
 
+For engine-backed runs, `/api/runs/:id` also includes `engineEvents` and a grouped `timeline` derived from runtime events. The old fields remain in place so existing preview code and compatibility workflows keep working.
+
 To preview the sample state without installing the plugin:
 
 ```bash
@@ -103,6 +107,23 @@ Open `http://127.0.0.1:47888` and select `Release Readiness Loop`.
 
 ## Run Detail Flow
 
+1. `create_loop_contract` creates a formal contract when the loop should have a structured workflow body, rubrics, repair policy, and stop policy.
+2. `start_loop_run` starts an engine-backed run for a formal contract and records runtime events for the preview.
+3. `trigger_run` remains as a compatibility tool for legacy manual runs.
+4. `start_codex_session` requests a host-mediated Codex session when the user should inspect the worker session directly.
+5. `start_attempt` begins visible work under that run.
+6. `complete_attempt` records the attempt outcome.
+7. `record_verification` can attach results to `attemptId`.
+8. Failed verification with `repair: true` moves the run to `repairing`.
+9. `record_human_request` keeps user decisions visible when work pauses.
+10. `resolve_human_request` closes a user decision with the response.
+11. `commit_memory` stores durable lessons or preferences.
+12. `add_artifact` references useful local files, preview URLs, reports, or outputs.
+13. `complete_run` closes the run after verification or a clear blocker.
+14. `get_run_detail` returns the composed view shown in the preview.
+
+Legacy compatibility flow:
+
 1. `trigger_run` creates the run.
 2. `start_attempt` begins visible work under that run.
 3. `complete_attempt` records the attempt outcome.
@@ -115,8 +136,12 @@ Open `http://127.0.0.1:47888` and select `Release Readiness Loop`.
 ## MCP Tools
 
 - `create_loop`
+- `create_loop_contract`
 - `list_loops`
 - `trigger_run`
+- `start_loop_run`
+- `start_codex_session`
+- `record_codex_thread`
 - `start_attempt`
 - `complete_attempt`
 - `append_event`

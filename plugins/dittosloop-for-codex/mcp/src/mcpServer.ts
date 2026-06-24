@@ -34,12 +34,91 @@ const verificationStatusSchema = z.enum(["passed", "failed", "skipped"]);
 const createLoopSchema = z.object({
   title: z.string().min(1),
   intent: z.string().min(1),
-  verificationChecks: z.array(z.string().min(1)).optional()
+  verificationChecks: z.array(z.string().min(1)).optional(),
+  codexProjectId: z.string().optional(),
+  projectLabel: z.string().optional(),
+  projectPath: z.string().optional()
+});
+
+const agentStepSchema = z.object({
+  id: z.string().min(1),
+  kind: z.literal("agent"),
+  label: z.string().min(1),
+  prompt: z.string().min(1),
+  verifierRef: z.string().optional(),
+  sessionPolicy: z.enum(["new", "reuse-run", "reuse-step"]).optional()
+});
+
+type StepSchema = z.infer<typeof agentStepSchema> | {
+  id: string;
+  kind: "phase" | "parallel";
+  label: string;
+  children: StepSchema[];
+};
+
+const stepSchema: z.ZodType<StepSchema> = z.lazy(() =>
+  z.discriminatedUnion("kind", [
+    agentStepSchema,
+    z.object({
+      id: z.string().min(1),
+      kind: z.literal("phase"),
+      label: z.string().min(1),
+      children: z.array(stepSchema)
+    }),
+    z.object({
+      id: z.string().min(1),
+      kind: z.literal("parallel"),
+      label: z.string().min(1),
+      children: z.array(stepSchema)
+    })
+  ])
+);
+
+const createLoopContractSchema = z.object({
+  id: z.string().min(1).optional(),
+  title: z.string().min(1),
+  goal: z.string().min(1),
+  intent: z.string().optional(),
+  body: z.object({ steps: z.array(stepSchema).min(1) }),
+  verification: z.object({
+    mode: z.enum(["after_workflow", "after_each_agent"]),
+    rubrics: z.array(z.object({
+      id: z.string().min(1),
+      label: z.string().min(1),
+      requirement: z.string().min(1),
+      severity: z.enum(["must", "should"])
+    }))
+  }),
+  projectBinding: z.object({
+    codexProjectId: z.string().optional(),
+    projectLabel: z.string().optional(),
+    projectPath: z.string().optional()
+  }).optional()
 });
 
 const triggerRunSchema = z.object({
   loopId: z.string().min(1),
-  goal: z.string().optional()
+  goal: z.string().optional(),
+  codexProjectId: z.string().optional(),
+  projectLabel: z.string().optional(),
+  projectPath: z.string().optional()
+});
+
+const startLoopRunSchema = triggerRunSchema;
+
+const startCodexSessionSchema = z.object({
+  loopId: z.string().min(1),
+  goal: z.string().optional(),
+  codexProjectId: z.string().optional(),
+  projectLabel: z.string().optional(),
+  projectPath: z.string().optional()
+});
+
+const recordCodexThreadSchema = z.object({
+  runId: z.string().min(1),
+  threadId: z.string().min(1),
+  threadTitle: z.string().optional(),
+  threadUrl: z.string().optional()
 });
 
 const startAttemptSchema = z.object({
@@ -121,10 +200,47 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
       const args = createLoopSchema.parse(input);
       return toToolResult(await service.createLoop(args));
     },
+    create_loop_contract: async (input) => {
+      const args = createLoopContractSchema.parse(input);
+      return toToolResult(await service.createLoopContract(args));
+    },
     list_loops: async () => toToolResult(await service.listLoops()),
     trigger_run: async (input) => {
       const args = triggerRunSchema.parse(input);
-      return toToolResult(await service.triggerRun(args.loopId, { goal: args.goal }));
+      return toToolResult(await service.triggerRun(args.loopId, {
+        goal: args.goal,
+        codexProjectId: args.codexProjectId,
+        projectLabel: args.projectLabel,
+        projectPath: args.projectPath
+      }));
+    },
+    start_loop_run: async (input) => {
+      const args = startLoopRunSchema.parse(input);
+      return toToolResult(await service.startLoopRun(args.loopId, {
+        goal: args.goal,
+        codexProjectId: args.codexProjectId,
+        projectLabel: args.projectLabel,
+        projectPath: args.projectPath
+      }));
+    },
+    start_codex_session: async (input) => {
+      const args = startCodexSessionSchema.parse(input);
+      return toToolResult(await service.startCodexSessionRun(args.loopId, {
+        goal: args.goal,
+        codexProjectId: args.codexProjectId,
+        projectLabel: args.projectLabel,
+        projectPath: args.projectPath
+      }));
+    },
+    record_codex_thread: async (input) => {
+      const args = recordCodexThreadSchema.parse(input);
+      return toToolResult(
+        await service.recordCodexThread(args.runId, {
+          threadId: args.threadId,
+          threadTitle: args.threadTitle,
+          threadUrl: args.threadUrl
+        })
+      );
     },
     start_attempt: async (input) => {
       const args = startAttemptSchema.parse(input);
@@ -224,6 +340,12 @@ const toolDefinitions = [
     schema: createLoopSchema
   },
   {
+    name: "create_loop_contract",
+    title: "Create formal loop contract",
+    description: "Create a structured Live Loop contract with workflow body and verification rubrics.",
+    schema: createLoopContractSchema
+  },
+  {
     name: "list_loops",
     title: "List loops",
     description: "List local Dittos loop contracts.",
@@ -234,6 +356,24 @@ const toolDefinitions = [
     title: "Trigger run",
     description: "Start a manual run for a loop.",
     schema: triggerRunSchema
+  },
+  {
+    name: "start_loop_run",
+    title: "Start loop run",
+    description: "Start an engine-backed run for a structured Live Loop contract.",
+    schema: startLoopRunSchema
+  },
+  {
+    name: "start_codex_session",
+    title: "Start Codex session",
+    description: "Request a new Codex session for a loop run and record the launch intent.",
+    schema: startCodexSessionSchema
+  },
+  {
+    name: "record_codex_thread",
+    title: "Record Codex thread",
+    description: "Attach a Codex thread id after the Codex App host creates the visible session.",
+    schema: recordCodexThreadSchema
   },
   {
     name: "start_attempt",

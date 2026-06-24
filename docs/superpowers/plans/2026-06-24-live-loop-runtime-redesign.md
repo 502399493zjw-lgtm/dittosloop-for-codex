@@ -56,7 +56,7 @@
 - Produces: `FormalLoopContract`, `ExecutionBody`, `Step`, `VerificationPolicy`, `RepairPolicy`, `StopPolicy`, `compileContract(input, now)`, `validateContract(contract)`, `migrateLegacyContract(loop)`.
 - Consumes: current thin loop shape from `src/types.ts`.
 
-- [ ] **Step 1: Write the failing contract tests**
+- [x] **Step 1: Write the failing contract tests**
 
 ```ts
 import { describe, expect, test } from "vitest";
@@ -141,17 +141,17 @@ describe("formal loop contracts", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- contract.test.ts`
 
 Expected: FAIL because `src/contract/*` modules do not exist.
 
-- [ ] **Step 3: Implement minimal contract modules**
+- [x] **Step 3: Implement minimal contract modules**
 
 Create the four contract files with the exact exported names from the test. Keep validation small: required id/title/goal/body, non-empty body, unique step ids, agent prompts required, phase/parallel children required, stop rule required after compile.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- contract.test.ts`
 
@@ -170,7 +170,7 @@ Expected: PASS.
 - Consumes: `ExecutionBody` from Task 1.
 - Produces: `runBody(body, api)`, `runFlow(flow, deps)`, `EngineEvent`, `Executor`.
 
-- [ ] **Step 1: Write failing engine tests**
+- [x] **Step 1: Write failing engine tests**
 
 ```ts
 import { describe, expect, test } from "vitest";
@@ -265,17 +265,17 @@ describe("engine runtime", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- engine.test.ts`
 
 Expected: FAIL because `src/engine/*` modules do not exist.
 
-- [ ] **Step 3: Implement minimal engine core**
+- [x] **Step 3: Implement minimal engine core**
 
 Implement the interfaces from the tests. Use deterministic ids derived from a counter (`agent_1`, `phase_1`) unless callers inject ids later.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- engine.test.ts`
 
@@ -292,7 +292,7 @@ Expected: PASS.
 - Produces: `CodexSessionBridge`, `CodexSessionRef`, `HostMediatedSessionBridge`.
 - Consumes: engine agent requests from Task 2.
 
-- [ ] **Step 1: Write failing bridge test**
+- [x] **Step 1: Write failing bridge test**
 
 ```ts
 import { expect, test } from "vitest";
@@ -326,17 +326,17 @@ test("host-mediated bridge records session requests and accepts results", async 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- sessionBridge.test.ts`
 
 Expected: FAIL because bridge modules do not exist.
 
-- [ ] **Step 3: Implement bridge**
+- [x] **Step 3: Implement bridge**
 
 Use in-memory request/result storage first. Persisted integration belongs to Task 5.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- sessionBridge.test.ts`
 
@@ -353,7 +353,7 @@ Expected: PASS.
 - Produces: `createPassedDecision`, `createFailedDecision`, `shouldRepair(decision, policy, attemptNumber)`.
 - Consumes: `VerificationPolicy`, `RepairPolicy`.
 
-- [ ] **Step 1: Write failing verifier tests**
+- [x] **Step 1: Write failing verifier tests**
 
 ```ts
 import { expect, test } from "vitest";
@@ -383,17 +383,17 @@ test("repair policy retries only while attempts remain", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- verifier.test.ts`
 
 Expected: FAIL because runner verifier modules do not exist.
 
-- [ ] **Step 3: Implement verifier helpers**
+- [x] **Step 3: Implement verifier helpers**
 
 Keep this deterministic. Model-based verification can be added through the session bridge later.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- verifier.test.ts`
 
@@ -413,7 +413,7 @@ Expected: PASS.
 - Consumes: contract and engine modules from Tasks 1-4.
 - Produces: `createLoopContract(input)`, `startLoopRun(loopId, input)`, `recordSessionResult(runId, input)`.
 
-- [ ] **Step 1: Write failing service tests**
+- [x] **Step 1: Write failing service tests**
 
 Add tests proving:
 
@@ -436,17 +436,17 @@ await expect(service.getRunDetail(run.id)).resolves.toMatchObject({
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts mcpServer.test.ts`
 
 Expected: FAIL because service methods and MCP tools do not exist.
 
-- [ ] **Step 3: Implement minimal service integration**
+- [x] **Step 3: Implement minimal service integration**
 
 Add formal contracts alongside legacy fields, add `engineEvents` to state, and route `create_loop` legacy calls through formal compile/migration where possible without breaking existing tests.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts mcpServer.test.ts`
 
@@ -463,21 +463,21 @@ Expected: PASS.
 - Consumes: `EngineEvent[]`.
 - Produces: grouped run timeline sections for preview.
 
-- [ ] **Step 1: Write failing preview tests**
+- [x] **Step 1: Write failing preview tests**
 
 Add a test asserting `/api/runs/:id` returns engine event data and a grouped timeline containing phase, agent, verification, repair, and run status entries when those events exist.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- previewServer.test.ts`
 
 Expected: FAIL because event adapter data is absent.
 
-- [ ] **Step 3: Implement event adapter and endpoint shape**
+- [x] **Step 3: Implement event adapter and endpoint shape**
 
 Keep the existing response fields and add `engineEvents` plus `timeline`. Do not remove old attempts/events fields yet.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- previewServer.test.ts`
 
@@ -494,7 +494,7 @@ Expected: PASS.
 - Consumes: all implementation tasks.
 - Produces: updated user/developer docs describing formal runtime and compatibility wrappers.
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Document that:
 
@@ -503,7 +503,7 @@ Document that:
 - Engine-backed runs use formal contract body, verifier, repair, and Codex session bridge.
 - Existing tools remain compatibility tools.
 
-- [ ] **Step 2: Run full verification**
+- [x] **Step 2: Run full verification**
 
 Run:
 

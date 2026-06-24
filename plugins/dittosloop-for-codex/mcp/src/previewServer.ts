@@ -1,8 +1,9 @@
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, isAbsolute, join, relative } from "node:path";
 
 import type { LoopService } from "./service.js";
+import { enrichRunDetail } from "./preview/eventAdapter.js";
 
 export interface PreviewServerOptions {
   service: LoopService;
@@ -38,13 +39,60 @@ export async function startPreviewServer(options: PreviewServerOptions): Promise
 
       const runDetailMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
       if (runDetailMatch) {
-        await sendJson(response, await options.service.getRunDetail(decodeURIComponent(runDetailMatch[1])));
+        await sendJson(response, enrichRunDetail(await options.service.getRunDetail(decodeURIComponent(runDetailMatch[1]))));
+        return;
+      }
+
+      const codexThreadMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/codex-thread$/);
+      if (codexThreadMatch) {
+        if (request.method !== "POST") {
+          response.writeHead(405, { "content-type": "application/json; charset=utf-8" });
+          response.end(`${JSON.stringify({ error: "Method not allowed" })}\n`);
+          return;
+        }
+
+        const body = await readJsonBody(request);
+        if (typeof body.threadId !== "string") {
+          response.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+          response.end(`${JSON.stringify({ error: "threadId is required" })}\n`);
+          return;
+        }
+
+        await sendJson(
+          response,
+          await options.service.recordCodexThread(decodeURIComponent(codexThreadMatch[1]), {
+            threadId: body.threadId,
+            threadTitle: typeof body.threadTitle === "string" ? body.threadTitle : undefined,
+            threadUrl: typeof body.threadUrl === "string" ? body.threadUrl : undefined
+          })
+        );
+        return;
+      }
+
+      const sessionLaunchMatch = url.pathname.match(/^\/api\/loops\/([^/]+)\/codex-session$/);
+      if (sessionLaunchMatch) {
+        if (request.method !== "POST") {
+          response.writeHead(405, { "content-type": "application/json; charset=utf-8" });
+          response.end(`${JSON.stringify({ error: "Method not allowed" })}\n`);
+          return;
+        }
+
+        const body = await readJsonBody(request);
+        await sendJson(
+          response,
+          await options.service.startCodexSessionRun(decodeURIComponent(sessionLaunchMatch[1]), {
+            goal: typeof body.goal === "string" ? body.goal : undefined,
+            codexProjectId: typeof body.codexProjectId === "string" ? body.codexProjectId : undefined,
+            projectLabel: typeof body.projectLabel === "string" ? body.projectLabel : undefined,
+            projectPath: typeof body.projectPath === "string" ? body.projectPath : undefined
+          })
+        );
         return;
       }
 
       await sendStaticFile(response, options.staticDir, url.pathname);
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith("Run not found:")) {
+      if (error instanceof Error && /^(Run|Loop) not found:/.test(error.message)) {
         response.writeHead(404, { "content-type": "application/json; charset=utf-8" });
         response.end(`${JSON.stringify({ error: error.message })}\n`);
         return;
@@ -109,4 +157,16 @@ function listen(server: Server, port: number, host: string): Promise<void> {
       resolve();
     });
   });
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  if (chunks.length === 0) return {};
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return {};
+  const parsed = JSON.parse(raw);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 }

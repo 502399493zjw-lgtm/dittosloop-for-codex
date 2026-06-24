@@ -1,6 +1,11 @@
 import { createId, type IdPrefix } from "./id.js";
+import { compileContract } from "./contract/compileContract.js";
+import type { FormalLoopContract, FormalLoopContractInput } from "./contract/types.js";
+import { validateContract } from "./contract/validateContract.js";
+import type { EngineEvent } from "./engine/types.js";
 import type {
   ArtifactRef,
+  CodexProjectRef,
   EventKind,
   HumanRequest,
   LoopContract,
@@ -21,20 +26,57 @@ export interface LoopServiceOptions {
   now?: () => string;
   createId?: (prefix: IdPrefix) => string;
   previewBaseUrl?: string;
+  codexProjects?: CodexProjectRef[];
 }
 
 export interface CreateLoopInput {
   title: string;
   intent: string;
   verificationChecks?: string[];
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
 }
+
+export type CreateLoopContractInput = Omit<FormalLoopContractInput, "id"> & {
+  id?: string;
+};
 
 export interface TriggerRunInput {
   goal?: string;
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
+}
+
+export interface StartLoopRunInput {
+  goal?: string;
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
 }
 
 export interface StartAttemptInput {
   summary?: string;
+}
+
+export interface StartCodexSessionRunInput {
+  goal?: string;
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
+}
+
+export interface CodexSessionLaunch {
+  run: LoopRun;
+  attempt: RunAttempt;
+  prompt: string;
+}
+
+export interface RecordCodexThreadInput {
+  threadId: string;
+  threadTitle?: string;
+  threadUrl?: string;
 }
 
 export interface CompleteAttemptInput {
@@ -86,6 +128,7 @@ export interface CompleteRunInput {
 
 export type Snapshot = LoopState & {
   previewUrl: string;
+  codexProjects: CodexProjectRef[];
 };
 
 export class LoopService {
@@ -108,6 +151,9 @@ export class LoopService {
       trigger: { mode: "manual" },
       verification: { checks: input.verificationChecks ?? [] },
       status: "active",
+      codexProjectId: input.codexProjectId,
+      projectLabel: input.projectLabel,
+      projectPath: input.projectPath,
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -120,6 +166,27 @@ export class LoopService {
     return loop;
   }
 
+  async createLoopContract(input: CreateLoopContractInput): Promise<FormalLoopContract> {
+    const timestamp = this.now();
+    const contract = compileContract(
+      {
+        ...input,
+        id: input.id ?? this.nextId("loop")
+      },
+      timestamp
+    );
+
+    validateContract(contract);
+
+    await this.options.store.updateState((state) => ({
+      ...state,
+      formalContracts: [...(state.formalContracts ?? []), contract],
+      loops: [...state.loops.filter((loop) => loop.id !== contract.id), formalContractToLoop(contract)]
+    }));
+
+    return contract;
+  }
+
   async listLoops(): Promise<LoopContract[]> {
     const state = await this.options.store.readState();
 
@@ -128,18 +195,21 @@ export class LoopService {
 
   async triggerRun(loopId: string, input: TriggerRunInput = {}): Promise<LoopRun> {
     const timestamp = this.now();
-    const run: LoopRun = {
-      id: this.nextId("run"),
-      loopId,
-      status: "running",
-      goal: input.goal ?? "Manual loop run",
-      trigger: "manual",
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
+    let run: LoopRun | undefined;
 
     await this.options.store.updateState((state) => {
-      requireLoop(state, loopId);
+      const loop = requireLoop(state, loopId);
+      const project = runProjectBinding(input, loop);
+      run = {
+        id: this.nextId("run"),
+        loopId,
+        status: "running",
+        goal: input.goal ?? "Manual loop run",
+        trigger: "manual",
+        ...project,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
 
       return {
         ...state,
@@ -147,7 +217,107 @@ export class LoopService {
       };
     });
 
-    return run;
+    return run!;
+  }
+
+  async startLoopRun(loopId: string, input: StartLoopRunInput = {}): Promise<LoopRun> {
+    const timestamp = this.now();
+    let run: LoopRun | undefined;
+
+    await this.options.store.updateState((state) => {
+      const contract = requireFormalContract(state, loopId);
+      const loop = state.loops.find((candidate) => candidate.id === loopId) ?? formalContractToLoop(contract);
+      const project = runProjectBinding(input, loop);
+      run = {
+        id: this.nextId("run"),
+        loopId,
+        status: "running",
+        goal: input.goal ?? contract.goal,
+        trigger: "manual",
+        ...project,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      const engineEvent = createEngineEvent("run_started", run.id, timestamp, 1);
+
+      return {
+        ...state,
+        loops: state.loops.some((candidate) => candidate.id === loopId) ? state.loops : [...state.loops, loop],
+        runs: [...state.runs, run],
+        events: [
+          ...state.events,
+          lifecycleEvent(this.nextId("event"), run.id, "run_created", `Started ${contract.title}`, timestamp, {
+            engineEvent: { ...engineEvent, runId: run.id }
+          })
+        ]
+      };
+    });
+
+    return run!;
+  }
+
+  async startCodexSessionRun(loopId: string, input: StartCodexSessionRunInput = {}): Promise<CodexSessionLaunch> {
+    const timestamp = this.now();
+    let launch: CodexSessionLaunch | undefined;
+
+    await this.options.store.updateState((state) => {
+      const loop = requireLoop(state, loopId);
+      const goal = input.goal ?? `Run ${loop.title}`;
+      const prompt = buildCodexSessionPrompt(loop, goal);
+      const attemptSummary = `Run ${loop.title} in current Codex session with subagent`;
+      const project = runProjectBinding(input, loop);
+      const run: LoopRun = {
+        id: this.nextId("run"),
+        loopId,
+        status: "running",
+        goal,
+        trigger: "manual",
+        ...project,
+        codexSession: {
+          mode: "current_session",
+          status: "requested",
+          ...project,
+          subagents: [
+            {
+              role: "loop-runner",
+              status: "requested",
+              prompt
+            }
+          ],
+          prompt
+        },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      const attempt: RunAttempt = {
+        id: this.nextId("attempt"),
+        runId: run.id,
+        status: "running",
+        summary: attemptSummary,
+        createdAt: timestamp
+      };
+
+      launch = { run, attempt, prompt };
+
+      return {
+        ...state,
+        runs: [...state.runs, run],
+        attempts: [...state.attempts, attempt],
+        events: [
+          ...state.events,
+          lifecycleEvent(this.nextId("event"), run.id, "run_created", "Attached the current Codex session and requested a loop subagent", timestamp, {
+            codexSession: run.codexSession
+          }),
+          lifecycleEvent(this.nextId("event"), run.id, "attempt_started", attemptSummary, timestamp, {
+            attemptId: attempt.id,
+            ...project
+          })
+        ],
+        loops: bindLoopProject(state.loops, loopId, project, timestamp)
+      };
+    });
+
+    return launch!;
   }
 
   async startAttempt(runId: string, input: StartAttemptInput = {}): Promise<RunAttempt> {
@@ -174,6 +344,69 @@ export class LoopService {
     });
 
     return attempt;
+  }
+
+  async recordCodexThread(runId: string, input: RecordCodexThreadInput): Promise<LoopRun> {
+    const timestamp = this.now();
+    let updatedRun: LoopRun | undefined;
+
+    await this.options.store.updateState((state) => {
+      const run = requireRun(state, runId);
+      if (!run.codexSession) {
+        throw new Error(`Run has no Codex session request: ${runId}`);
+      }
+
+      const codexThread = {
+        threadId: input.threadId,
+        threadTitle: input.threadTitle,
+        threadUrl: input.threadUrl
+      };
+      updatedRun = {
+        ...run,
+        updatedAt: timestamp,
+        codexSession: {
+          ...run.codexSession,
+          status: "started",
+          ...codexThread,
+          subagents:
+            run.codexSession.subagents && run.codexSession.subagents.length > 0
+              ? run.codexSession.subagents.map((subagent) =>
+                  subagent.status === "requested"
+                    ? {
+                        ...subagent,
+                        status: "running",
+                        ...codexThread
+                      }
+                    : subagent
+                )
+              : [
+                  {
+                    role: "loop-runner",
+                    status: "running",
+                    ...codexThread
+                  }
+                ]
+        }
+      };
+
+      return {
+        ...state,
+        runs: state.runs.map((candidate) => (candidate.id === runId ? updatedRun! : candidate)),
+        events: [
+          ...state.events,
+          lifecycleEvent(
+            this.nextId("event"),
+            runId,
+            "note",
+            "Codex thread created and attached to this run",
+            timestamp,
+            { codexThread }
+          )
+        ]
+      };
+    });
+
+    return updatedRun!;
   }
 
   async completeAttempt(attemptId: string, input: CompleteAttemptInput = {}): Promise<RunAttempt> {
@@ -457,7 +690,8 @@ export class LoopService {
 
     return {
       ...state,
-      previewUrl: this.getPreviewUrl()
+      previewUrl: this.getPreviewUrl(),
+      codexProjects: this.options.codexProjects ?? []
     };
   }
 
@@ -473,6 +707,42 @@ function requireLoop(state: LoopState, loopId: string): LoopContract {
   }
 
   return loop;
+}
+
+function requireFormalContract(state: LoopState, loopId: string): FormalLoopContract {
+  const contract = (state.formalContracts ?? []).find((candidate) => candidate.id === loopId);
+  if (!contract) {
+    throw new Error(`Loop contract not found: ${loopId}`);
+  }
+
+  return contract;
+}
+
+function formalContractToLoop(contract: FormalLoopContract): LoopContract {
+  return {
+    id: contract.id,
+    title: contract.title,
+    intent: contract.intent ?? contract.goal,
+    trigger: contract.trigger,
+    verification: {
+      checks: contract.verification.rubrics.map((rubric) => rubric.requirement)
+    },
+    status: contract.status,
+    codexProjectId: contract.projectBinding?.codexProjectId,
+    projectLabel: contract.projectBinding?.projectLabel,
+    projectPath: contract.projectBinding?.projectPath,
+    createdAt: contract.createdAt,
+    updatedAt: contract.updatedAt
+  };
+}
+
+function createEngineEvent(type: "run_started", runId: string, createdAt: string, sequence: number): EngineEvent {
+  return {
+    type,
+    runId,
+    createdAt,
+    sequence
+  };
 }
 
 function requireRun(state: LoopState, runId: string): LoopRun {
@@ -511,13 +781,66 @@ function lifecycleEvent(
   runId: string,
   kind: EventKind,
   message: string,
-  createdAt: string
+  createdAt: string,
+  data?: Record<string, unknown>
 ): RunEvent {
   return {
     id,
     runId,
     kind,
     message,
-    createdAt
+    createdAt,
+    data
   };
+}
+
+function runProjectBinding(
+  input: { codexProjectId?: string; projectLabel?: string; projectPath?: string },
+  loop: LoopContract
+): Pick<LoopRun, "codexProjectId" | "projectLabel" | "projectPath"> {
+  return {
+    codexProjectId: input.codexProjectId ?? loop.codexProjectId,
+    projectLabel: input.projectLabel ?? loop.projectLabel,
+    projectPath: input.projectPath ?? loop.projectPath
+  };
+}
+
+function bindLoopProject(
+  loops: LoopContract[],
+  loopId: string,
+  project: Pick<LoopRun, "codexProjectId" | "projectLabel" | "projectPath">,
+  timestamp: string
+): LoopContract[] {
+  if (!project.codexProjectId && !project.projectLabel && !project.projectPath) return loops;
+
+  return loops.map((loop) => {
+    if (loop.id !== loopId) return loop;
+
+    return {
+      ...loop,
+      ...project,
+      updatedAt: timestamp
+    };
+  });
+}
+
+function buildCodexSessionPrompt(loop: LoopContract, goal: string): string {
+  const checks = loop.verification.checks.length
+    ? loop.verification.checks.map((check) => `- ${check}`).join("\n")
+    : "- Record what changed, what was verified, and any follow-up needed.";
+
+  return [
+    `You are starting a Dittos Live Loop run: ${loop.title}.`,
+    "",
+    `Loop intent: ${loop.intent}`,
+    `Run goal: ${goal}`,
+    "",
+    "Before finishing this session:",
+    "- Read the loop goal, recent history, and verification checks.",
+    "- Work inside the selected Codex project when one is provided.",
+    "- Write progress back to DittosLoop as attempt/events/verification records.",
+    "",
+    "Verification checks:",
+    checks
+  ].join("\n");
 }

@@ -1,3 +1,5 @@
+import type { FormalLoopContract } from "./contract/types.js";
+
 export type LoopStatus = "active" | "paused" | "archived";
 export type TriggerMode = "manual";
 export type RunStatus = "running" | "waiting_for_human" | "repairing" | "completed" | "failed";
@@ -32,6 +34,9 @@ export interface LoopContract {
   trigger: LoopTrigger;
   verification: VerificationPlan;
   status: LoopStatus;
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,6 +47,28 @@ export interface LoopRun {
   status: RunStatus;
   goal: string;
   trigger: TriggerMode;
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
+  codexSession?: {
+    mode: "current_session" | "new_session";
+    status: "requested" | "started" | "unavailable";
+    threadId?: string;
+    threadTitle?: string;
+    threadUrl?: string;
+    codexProjectId?: string;
+    projectLabel?: string;
+    projectPath?: string;
+    subagents?: Array<{
+      role: string;
+      status: "requested" | "running" | "completed" | "failed";
+      threadId?: string;
+      threadTitle?: string;
+      threadUrl?: string;
+      prompt?: string;
+    }>;
+    prompt: string;
+  };
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -110,6 +137,7 @@ export interface ArtifactRef {
 export interface LoopState {
   version: 1;
   loops: LoopContract[];
+  formalContracts?: FormalLoopContract[];
   runs: LoopRun[];
   attempts: RunAttempt[];
   events: RunEvent[];
@@ -128,4 +156,10 @@ export interface RunDetail {
   humanRequests: HumanRequest[];
   memoryCommits: MemoryCommit[];
   artifacts: ArtifactRef[];
+}
+
+export interface CodexProjectRef {
+  id: string;
+  name: string;
+  path: string;
 }

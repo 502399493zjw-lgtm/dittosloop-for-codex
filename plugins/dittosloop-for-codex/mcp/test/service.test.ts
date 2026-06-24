@@ -50,6 +50,44 @@ test("creates a loop contract with manual trigger defaults", async () => {
   expect(loop.id).toBe("loop_1");
 });
 
+test("creates a formal loop contract and starts an engine-backed run", async () => {
+  const service = await createService();
+
+  const formal = await service.createLoopContract({
+    title: "AI monitor",
+    goal: "Track AI tool updates",
+    body: { steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }] },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  });
+
+  expect(formal.body.steps[0]).toMatchObject({ id: "scan", kind: "agent" });
+
+  const run = await service.startLoopRun(formal.id, { goal: "Manual check" });
+
+  expect(run).toMatchObject({
+    id: "run_1",
+    loopId: formal.id,
+    status: "running",
+    goal: "Manual check"
+  });
+  await expect(service.getRunDetail(run.id)).resolves.toMatchObject({
+    events: [
+      {
+        data: {
+          engineEvent: {
+            type: "run_started",
+            runId: run.id,
+            sequence: 1
+          }
+        }
+      }
+    ]
+  });
+});
+
 test("records a run lifecycle in the snapshot", async () => {
   const service = await createService();
   const loop = await service.createLoop({
@@ -89,6 +127,25 @@ test("records a run lifecycle in the snapshot", async () => {
   expect(service.getPreviewUrl()).toBe("http://127.0.0.1:47888");
 });
 
+test("binds loop runs to the Codex project selected for the loop", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({
+    title: "Project monitor",
+    intent: "Watch a Codex project",
+    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+  });
+
+  const run = await service.triggerRun(loop.id, { goal: "Run scheduled check" });
+
+  expect(run).toMatchObject({
+    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+  });
+});
+
 test("starts and completes an attempt under a run", async () => {
   const service = await createService();
   const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
@@ -114,6 +171,169 @@ test("starts and completes an attempt under a run", async () => {
       { kind: "attempt_completed", runId: run.id, message: "Tests passed" }
     ]
   });
+});
+
+test("starts a current-session subagent run with project binding and prompt intent", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({
+    title: "AI Dev Tools Update Monitor",
+    intent: "Watch release updates and Twitter/X signals",
+    verificationChecks: ["official changelog checked"]
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "Check today updates",
+    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+  });
+
+  expect(launch.run).toMatchObject({
+    id: "run_1",
+    loopId: loop.id,
+    goal: "Check today updates",
+    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop",
+    codexSession: {
+      mode: "current_session",
+      status: "requested",
+      codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop",
+      subagents: [
+        {
+          role: "loop-runner",
+          status: "requested"
+        }
+      ]
+    }
+  });
+  expect(launch.attempt).toMatchObject({
+    id: "attempt_1",
+    runId: launch.run.id,
+    status: "running",
+    summary: "Run AI Dev Tools Update Monitor in current Codex session with subagent"
+  });
+  expect(launch.prompt).toContain("AI Dev Tools Update Monitor");
+  expect(launch.prompt).toContain("Check today updates");
+  expect(launch.prompt).toContain("official changelog checked");
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { codexSession: { status: "requested" } },
+    loop: {
+      codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    },
+    events: [
+      {
+        kind: "run_created",
+        data: {
+          codexSession: {
+            mode: "current_session",
+            status: "requested",
+            codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+            projectLabel: "dittos loop",
+            projectPath: "/Users/edisonzhong/Documents/dittos loop",
+            subagents: [{ role: "loop-runner", status: "requested" }]
+          }
+        }
+      },
+      { kind: "attempt_started" }
+    ]
+  });
+});
+
+test("records a real Codex thread against a requested session run", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({
+    title: "AI Dev Tools Update Monitor",
+    intent: "Watch release updates and Twitter/X signals"
+  });
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "Check today updates"
+  });
+
+  const updated = await service.recordCodexThread(launch.run.id, {
+    threadId: "019ef4c5-4a52-7653-a862-6f1372f88475",
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+    threadUrl: "codex://thread/019ef4c5-4a52-7653-a862-6f1372f88475"
+  });
+
+  expect(updated.codexSession).toMatchObject({
+    status: "started",
+    threadId: "019ef4c5-4a52-7653-a862-6f1372f88475",
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+    threadUrl: "codex://thread/019ef4c5-4a52-7653-a862-6f1372f88475",
+    subagents: [
+      {
+        role: "loop-runner",
+        status: "running",
+        threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
+      }
+    ]
+  });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: {
+      codexSession: {
+        status: "started",
+        threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
+      }
+    },
+    events: [
+      { kind: "run_created" },
+      { kind: "attempt_started" },
+      {
+        kind: "note",
+        message: "Codex thread created and attached to this run",
+        data: {
+          codexThread: {
+            threadId: "019ef4c5-4a52-7653-a862-6f1372f88475",
+            threadTitle: "DittosLoop: AI Dev Tools Update Monitor"
+          }
+        }
+      }
+    ]
+  });
+});
+
+test("records a default subagent when older session runs have none", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({
+    title: "Legacy Monitor",
+    intent: "Watch updates"
+  });
+  const run = await service.triggerRun(loop.id, { goal: "Check today updates" });
+  await service.appendEvent(run.id, { message: "legacy setup" });
+  await (service as any).options.store.updateState((state) => ({
+    ...state,
+    runs: state.runs.map((candidate) =>
+      candidate.id === run.id
+        ? {
+            ...candidate,
+            codexSession: {
+              mode: "new_session",
+              status: "requested",
+              prompt: "legacy prompt"
+            }
+          }
+        : candidate
+    )
+  }));
+
+  const updated = await service.recordCodexThread(run.id, {
+    threadId: "019ef4e5-21f0-7131-be8c-708f720e49de"
+  });
+
+  expect(updated.codexSession?.subagents).toEqual([
+    {
+      role: "loop-runner",
+      status: "running",
+      threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
+      threadTitle: undefined,
+      threadUrl: undefined
+    }
+  ]);
 });
 
 test("records failed verification against an attempt and marks run repairing when requested", async () => {

@@ -50,6 +50,43 @@ test("exposes loop operations as MCP content", async () => {
   });
 });
 
+test("exposes formal contract and engine run operations as MCP content", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "AI monitor",
+    goal: "Track AI tool updates",
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const run = readResult(await handlers.start_loop_run({ loopId: contract.id, goal: "Manual check" }));
+  const detail = readResult(await handlers.get_run_detail({ runId: run.id }));
+
+  expect(contract).toMatchObject({
+    id: "loop_1",
+    goal: "Track AI tool updates",
+    body: { steps: [{ id: "scan", kind: "agent" }] }
+  });
+  expect(detail).toMatchObject({
+    run: { id: "run_1", status: "running" },
+    events: [
+      {
+        data: {
+          engineEvent: {
+            type: "run_started",
+            runId: "run_1"
+          }
+        }
+      }
+    ]
+  });
+});
+
 test("exposes attempt and run detail operations as MCP content", async () => {
   const handlers = await createHandlers();
   const loop = readResult(await handlers.create_loop({ title: "Code health", intent: "Keep checks visible" }));
@@ -78,6 +115,63 @@ test("exposes attempt and run detail operations as MCP content", async () => {
   });
 });
 
+test("exposes codex session launch as MCP content", async () => {
+  const handlers = await createHandlers();
+  const loop = readResult(await handlers.create_loop({ title: "Monitor", intent: "Watch updates" }));
+
+  const launch = readResult(await handlers.start_codex_session({
+    loopId: loop.id,
+    goal: "Check today",
+    codexProjectId: "codex-project-1",
+    projectLabel: "Codex Project",
+    projectPath: "/tmp/project"
+  }));
+
+  expect(launch).toMatchObject({
+    run: {
+      loopId: loop.id,
+      goal: "Check today",
+      codexProjectId: "codex-project-1",
+      projectLabel: "Codex Project",
+      projectPath: "/tmp/project",
+      codexSession: {
+        status: "requested",
+        codexProjectId: "codex-project-1",
+        projectLabel: "Codex Project"
+      }
+    },
+    attempt: { status: "running" }
+  });
+  expect(launch.prompt).toContain("Monitor");
+});
+
+test("exposes codex thread writeback as MCP content", async () => {
+  const handlers = await createHandlers();
+  const loop = readResult(await handlers.create_loop({ title: "Monitor", intent: "Watch updates" }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Check today" }));
+
+  const run = readResult(await handlers.record_codex_thread({
+    runId: launch.run.id,
+    threadId: "019ef4c5-4a52-7653-a862-6f1372f88475",
+    threadTitle: "DittosLoop: Monitor"
+  }));
+
+  expect(run).toMatchObject({
+    id: launch.run.id,
+    codexSession: {
+      status: "started",
+      threadId: "019ef4c5-4a52-7653-a862-6f1372f88475",
+      threadTitle: "DittosLoop: Monitor",
+      subagents: [
+        {
+          status: "running",
+          threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
+        }
+      ]
+    }
+  });
+});
+
 test("registers the DittosLoop tool surface", () => {
   const registeredTools: string[] = [];
   const fakeServer = {
@@ -90,8 +184,12 @@ test("registers the DittosLoop tool surface", () => {
 
   expect(registeredTools).toEqual([
     "create_loop",
+    "create_loop_contract",
     "list_loops",
     "trigger_run",
+    "start_loop_run",
+    "start_codex_session",
+    "record_codex_thread",
     "start_attempt",
     "complete_attempt",
     "append_event",

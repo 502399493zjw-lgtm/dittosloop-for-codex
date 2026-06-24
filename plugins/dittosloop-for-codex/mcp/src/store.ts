@@ -63,6 +63,7 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
     ...value,
     version: 1,
     loops: value?.loops ?? [],
+    formalContracts: value?.formalContracts ?? [],
     runs: value?.runs ?? [],
     attempts: value?.attempts ?? [],
     events: value?.events ?? [],
