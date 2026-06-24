@@ -1,0 +1,86 @@
+import type { LoopStatus, LoopTrigger } from "../types.js";
+
+export type Step =
+  | AgentStep
+  | ParallelStep
+  | PhaseStep;
+
+export interface AgentStep {
+  id: string;
+  kind: "agent";
+  label: string;
+  prompt: string;
+  verifierRef?: string;
+  sessionPolicy?: "new" | "reuse-run" | "reuse-step";
+}
+
+export interface ParallelStep {
+  id: string;
+  kind: "parallel";
+  label: string;
+  children: Step[];
+}
+
+export interface PhaseStep {
+  id: string;
+  kind: "phase";
+  label: string;
+  children: Step[];
+}
+
+export interface ExecutionBody {
+  steps: Step[];
+}
+
+export interface VerificationRubric {
+  id: string;
+  label: string;
+  requirement: string;
+  severity: "must" | "should";
+}
+
+export interface VerificationPolicy {
+  mode: "after_workflow" | "after_each_agent";
+  rubrics: VerificationRubric[];
+}
+
+export interface RepairPolicy {
+  maxAttempts: number;
+  strategy: "repair_then_retry" | "ask_human" | "fail_run";
+}
+
+export interface StopPolicy {
+  rule: string;
+  maxConsecutiveFailures?: number;
+}
+
+export interface CodexProjectBinding {
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
+}
+
+export interface MemoryPolicy {
+  summary?: string;
+}
+
+export interface FormalLoopContract {
+  id: string;
+  title: string;
+  goal: string;
+  intent?: string;
+  body: ExecutionBody;
+  trigger: LoopTrigger;
+  verification: VerificationPolicy;
+  repairPolicy: RepairPolicy;
+  stopPolicy: StopPolicy;
+  projectBinding?: CodexProjectBinding;
+  memoryPolicy?: MemoryPolicy;
+  status: LoopStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FormalLoopContractInput =
+  & Pick<FormalLoopContract, "id" | "title" | "goal" | "body" | "verification">
+  & Partial<Omit<FormalLoopContract, "id" | "title" | "goal" | "body" | "verification">>;
