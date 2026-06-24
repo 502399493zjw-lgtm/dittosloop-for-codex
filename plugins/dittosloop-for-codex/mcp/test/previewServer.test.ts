@@ -122,7 +122,8 @@ test("preview script includes codex session launch controls", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
   expect(app).toContain("startCodexSession");
-  expect(app).toContain("startNewLoopSession");
+  expect(app).toContain("copyNewLoopPrompt");
+  expect(app).toContain("copyText");
   expect(app).toContain("projectForLoop");
   expect(app).toContain("project?.name || project?.label");
   expect(app).toContain("project.name ?? project.label");
@@ -137,6 +138,7 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("/api/new-loop-session");
   expect(app).toContain("/codex-thread");
   expect(app).toContain("record_codex_thread");
+  expect(app).toContain("已复制新建循环提示词");
   expect(app).toContain("创建 Codex 会话请求");
   expect(app).toContain("sessionActionForRun");
   expect(app).toContain("等待 Codex App 创建");

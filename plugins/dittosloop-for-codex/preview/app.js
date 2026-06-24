@@ -24,7 +24,7 @@ let loopSelectionClosed = false;
 let observedHash = window.location.hash;
 
 elements.newLoop.addEventListener("click", () => {
-  void startNewLoopSession();
+  void copyNewLoopPrompt();
 });
 
 window.addEventListener("hashchange", syncRouteFromLocation);
@@ -158,6 +158,7 @@ function renderLoopRows(loops, runs, verificationResults) {
       renderLoopStage({ snapshot: currentSnapshot });
     });
     if (selected) row.classList.add("selected");
+    if (latestRun?.status === "running") row.classList.add("running");
 
     row.replaceChildren(
       el("span", "state-dot", ""),
@@ -171,7 +172,7 @@ function renderLoopRows(loops, runs, verificationResults) {
           latestVerification ? statusChip(latestVerification.status) : null
         ])
       ]),
-      el("span", `row-toggle ${latestRun?.status === "running" ? "disabled" : "on"}`, ""),
+      el("span", `row-toggle ${latestRun?.status === "running" ? "on running" : "on"}`, ""),
       el("span", "chevron", "›")
     );
     return row;
@@ -321,7 +322,7 @@ function projectForLoop(snapshot, loop) {
   }) ?? null;
 }
 
-async function startNewLoopSession() {
+async function copyNewLoopPrompt() {
   const project = projectChoices(currentSnapshot)[0];
   const body = project
     ? {
@@ -337,15 +338,35 @@ async function startNewLoopSession() {
     body: JSON.stringify(body)
   });
   if (!response.ok) {
-    renderError(`New loop session request failed: ${response.status}`);
+    renderError(`New loop prompt request failed: ${response.status}`);
     return;
   }
 
   const launch = await response.json();
-  window.__dittosloopNewLoopLaunchRequest = launch.launchRequest;
-  window.dispatchEvent(new CustomEvent("dittosloop:create-codex-thread", { detail: launch.launchRequest }));
-  window.parent?.postMessage({ type: "dittosloop:create-codex-thread", launchRequest: launch.launchRequest }, "*");
-  renderNotice("已生成新建循环的 Codex 会话请求，等待 Codex App 打开新会话。");
+  window.__dittosloopNewLoopPrompt = launch.prompt;
+  await copyText(launch.prompt);
+  renderNotice("已复制新建循环提示词，请粘贴到 Codex 新会话中创建正式 workflow loop。");
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through to the legacy textarea path when the embedded browser denies clipboard access.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
 }
 
 async function startCodexSession(loop) {

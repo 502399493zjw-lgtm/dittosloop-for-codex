@@ -211,6 +211,14 @@ a:focus-visible {
   background: var(--dittos-50);
 }
 
+.loop-row.running {
+  background: linear-gradient(90deg, var(--dittos-50), var(--surface) 72%);
+}
+
+.loop-row.selected.running {
+  background: var(--dittos-100);
+}
+
 .loop-row.selected::before {
   position: absolute;
   inset: 0 auto 0 0;
@@ -324,8 +332,16 @@ a:focus-visible {
   content: "";
 }
 
-.row-toggle.disabled {
-  background: var(--ink-4);
+.row-toggle.running {
+  background: var(--dittos-700);
+}
+
+.row-toggle.running::before {
+  position: absolute;
+  inset: -3px;
+  border: 1px solid var(--dittos-200);
+  border-radius: inherit;
+  content: "";
 }
 
 .loop-workspace {

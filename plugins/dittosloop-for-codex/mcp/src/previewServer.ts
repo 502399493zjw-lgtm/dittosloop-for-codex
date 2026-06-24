@@ -179,7 +179,10 @@ async function sendStaticFile(response: ServerResponse, staticDir: string, pathn
 
   try {
     const body = await readFile(filePath);
-    response.writeHead(200, { "content-type": CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream" });
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream"
+    });
     response.end(body);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
