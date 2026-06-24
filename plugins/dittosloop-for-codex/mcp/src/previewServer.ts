@@ -100,6 +100,18 @@ export async function startPreviewServer(options: PreviewServerOptions): Promise
         return;
       }
 
+      const openSessionMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/open-codex-session$/);
+      if (openSessionMatch) {
+        if (request.method !== "POST") {
+          response.writeHead(405, { "content-type": "application/json; charset=utf-8" });
+          response.end(`${JSON.stringify({ error: "Method not allowed" })}\n`);
+          return;
+        }
+
+        await sendJson(response, await options.service.openCodexSession(decodeURIComponent(openSessionMatch[1])));
+        return;
+      }
+
       const sessionLaunchMatch = url.pathname.match(/^\/api\/loops\/([^/]+)\/codex-session$/);
       if (sessionLaunchMatch) {
         if (request.method !== "POST") {

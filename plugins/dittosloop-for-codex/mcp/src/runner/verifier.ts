@@ -14,6 +14,7 @@ export interface VerificationDecision {
   summary: string;
   checks: VerificationDecisionCheck[];
   repairInstructions?: string;
+  humanQuestion?: string;
 }
 
 export function createPassedDecision(
@@ -42,11 +43,13 @@ export function createFailedDecision(
 
 export function createNeedsHumanDecision(
   summary: string,
-  checks: VerificationDecisionCheckInput[] = []
+  checks: VerificationDecisionCheckInput[] = [],
+  humanQuestion?: string
 ): VerificationDecision {
   return {
     status: "needs_human",
     summary,
+    humanQuestion,
     checks: checks.map((check) => ({ ...check, status: "needs_human" }))
   };
 }

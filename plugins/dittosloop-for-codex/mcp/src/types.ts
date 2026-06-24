@@ -52,7 +52,7 @@ export interface LoopRun {
   projectPath?: string;
   codexSession?: {
     mode: "current_session" | "new_session";
-    status: "requested" | "started" | "unavailable";
+    status: "requested" | "started" | "completed" | "failed" | "unavailable";
     threadId?: string;
     threadTitle?: string;
     threadUrl?: string;

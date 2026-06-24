@@ -237,6 +237,10 @@ export interface FlowApi {
 }
 ```
 
+In production, `agent(...)` is not a fake local worker and should not be treated as a plain prompt-only shortcut. Its default executor is the configured `CodexSessionBridge`: the runner reaches an agent step, asks the bridge to create or reuse the appropriate Codex session, records the session reference, waits for or receives the step result, and then continues verifier, repair, and downstream workflow steps.
+
+Tests and local previews may use fake executors, but product behavior should treat session-backed execution as the primary adapter for agent steps.
+
 ### Engine Events
 
 Events are the canonical UI feed. Attempts and verification records should be derived from or linked to these events, not manually invented by the preview.
@@ -287,6 +291,8 @@ export interface CodexSessionBridge {
   openSession(sessionId: string): Promise<void>;
 }
 ```
+
+The bridge is the execution adapter for workflow agent steps, not an alternative workflow path. A run still belongs to the loop runner: the runner owns phases, retries, verifier calls, repair policy, stop policy, cursor updates, and final status. The Codex session owns the actual step work and returns a result that the runner records back into the run.
 
 ### Host-Mediated Bridge
 

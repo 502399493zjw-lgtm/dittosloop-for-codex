@@ -7,19 +7,21 @@ export interface PreviewRunDetail extends RunDetail {
 }
 
 export interface PreviewTimelineSection {
-  id: "workflow" | "verification" | "repair" | "run";
+  id: "workflow" | "verification" | "repair" | "human" | "run";
   title: string;
   items: PreviewTimelineItem[];
 }
 
 export interface PreviewTimelineItem {
-  kind: "run" | "phase" | "agent" | "parallel" | "verification" | "repair";
+  kind: "run" | "phase" | "agent" | "parallel" | "verification" | "repair" | "human";
   label: string;
   status: string;
   createdAt?: string;
   sequence?: number;
   stepId?: string;
+  phaseId?: string;
   message?: string;
+  session?: unknown;
 }
 
 export function enrichRunDetail(detail: RunDetail): PreviewRunDetail {
@@ -41,25 +43,45 @@ export function extractEngineEvents(detail: RunDetail): EngineEvent[] {
 
 export function buildTimeline(detail: RunDetail, engineEvents: EngineEvent[] = extractEngineEvents(detail)): PreviewTimelineSection[] {
   const sections: PreviewTimelineSection[] = [];
-  const workflow = engineEvents.map(engineEventToTimelineItem).filter((item): item is PreviewTimelineItem => Boolean(item));
+  const workflow = engineEvents.map(workflowEventToTimelineItem).filter((item): item is PreviewTimelineItem => Boolean(item));
   if (workflow.length > 0) {
-    sections.push({ id: "workflow", title: "Workflow", items: workflow });
+    sections.push({ id: "workflow", title: "工作流", items: workflow });
   }
 
-  const verification = detail.verificationResults.map(verificationToTimelineItem);
+  const verificationEvents = engineEvents
+    .map(verificationEventToTimelineItem)
+    .filter((item): item is PreviewTimelineItem => Boolean(item));
+  const verification = verificationEvents.length > 0 ? verificationEvents : detail.verificationResults.map(verificationToTimelineItem);
   if (verification.length > 0) {
-    sections.push({ id: "verification", title: "Verification", items: verification });
+    sections.push({ id: "verification", title: "验证", items: verification });
   }
 
-  const repair = repairItems(detail.run.status, detail.verificationResults);
+  const repairEvents = engineEvents
+    .map(repairEventToTimelineItem)
+    .filter((item): item is PreviewTimelineItem => Boolean(item));
+  const repair = repairEvents.length > 0 ? repairEvents : repairItems(detail.run.status, detail.verificationResults);
   if (repair.length > 0) {
-    sections.push({ id: "repair", title: "Repair", items: repair });
+    sections.push({ id: "repair", title: "修复", items: repair });
+  }
+
+  const human = engineEvents
+    .map(humanEventToTimelineItem)
+    .filter((item): item is PreviewTimelineItem => Boolean(item));
+  if (human.length > 0) {
+    sections.push({ id: "human", title: "人工处理", items: human });
+  }
+
+  const runDone = engineEvents
+    .map(runDoneEventToTimelineItem)
+    .filter((item): item is PreviewTimelineItem => Boolean(item));
+  if (runDone.length > 0) {
+    sections.push({ id: "run", title: "运行", items: runDone });
   }
 
   if (sections.length === 0) {
     sections.push({
       id: "run",
-      title: "Run",
+      title: "运行",
       items: [{ kind: "run", label: detail.run.goal, status: detail.run.status, createdAt: detail.run.createdAt }]
     });
   }
@@ -67,24 +89,25 @@ export function buildTimeline(detail: RunDetail, engineEvents: EngineEvent[] = e
   return sections;
 }
 
-function engineEventToTimelineItem(event: EngineEvent): PreviewTimelineItem | undefined {
+function workflowEventToTimelineItem(event: EngineEvent): PreviewTimelineItem | undefined {
   if (event.type === "run_started") {
-    return baseItem(event, "run", "Run started", "started");
-  }
-  if (event.type === "run_completed") {
-    return baseItem(event, "run", "Run completed", event.status);
+    return baseItem(event, "run", "开始运行", "started");
   }
   if (event.type === "run_failed") {
-    return baseItem(event, "run", "Run failed", event.status, event.error);
+    return baseItem(event, "run", "运行失败", event.status, event.error);
   }
   if (event.type === "phase_started") {
-    return baseItem(event, "phase", event.label, "started");
+    return baseItem(event, "phase", phaseLabel(event), "started");
+  }
+  if (event.type === "phase_done") {
+    return baseItem(event, "phase", event.title ?? event.phaseId, event.status === "ok" ? "completed" : "failed");
   }
   if (event.type === "agent_started") {
-    return baseItem(event, "agent", event.label ?? event.stepId ?? "Agent", "started");
+    return baseItem(event, "agent", event.label ?? event.stepId ?? event.nodeId ?? "Agent", "started");
   }
   if (event.type === "agent_done") {
-    return baseItem(event, "agent", event.label ?? event.stepId ?? "Agent", "completed", event.result);
+    const status = event.status === "failed" ? "failed" : "completed";
+    return baseItem(event, "agent", event.label ?? event.stepId ?? event.nodeId ?? "Agent", status, event.error ?? event.result);
   }
   if (event.type === "agent_failed") {
     return baseItem(event, "agent", event.label ?? event.stepId ?? "Agent", "failed", event.error);
@@ -94,6 +117,38 @@ function engineEventToTimelineItem(event: EngineEvent): PreviewTimelineItem | un
   }
   if (event.type === "parallel_completed") {
     return baseItem(event, "parallel", event.label ?? "Parallel", "completed");
+  }
+
+  return undefined;
+}
+
+function verificationEventToTimelineItem(event: EngineEvent): PreviewTimelineItem | undefined {
+  if (event.type === "verification_started") {
+    return baseItem(event, "verification", "开始验证", "started");
+  }
+  if (event.type === "verification_done") {
+    return baseItem(event, "verification", event.decision.summary, event.decision.status, verificationChecksMessage(event.decision.checks));
+  }
+
+  return undefined;
+}
+
+function repairEventToTimelineItem(event: EngineEvent): PreviewTimelineItem | undefined {
+  if (event.type !== "repair_started") return undefined;
+  return baseItem(event, "repair", event.reason, "repairing");
+}
+
+function humanEventToTimelineItem(event: EngineEvent): PreviewTimelineItem | undefined {
+  if (event.type !== "human_request") return undefined;
+  return baseItem(event, "human", event.question, "needs_human");
+}
+
+function runDoneEventToTimelineItem(event: EngineEvent): PreviewTimelineItem | undefined {
+  if (event.type === "run_completed") {
+    return baseItem(event, "run", "完成运行", event.status);
+  }
+  if (event.type === "run_done") {
+    return baseItem(event, "run", event.summary ?? "运行完成", event.status);
   }
 
   return undefined;
@@ -112,9 +167,28 @@ function baseItem(
     status,
     createdAt: event.createdAt,
     sequence: event.sequence,
-    stepId: "stepId" in event ? event.stepId : undefined,
-    message: typeof message === "string" ? message : undefined
+    stepId: "stepId" in event ? event.stepId : "nodeId" in event ? event.nodeId : "phaseId" in event ? event.phaseId : undefined,
+    phaseId: "phaseId" in event ? event.phaseId : undefined,
+    message: typeof message === "string" ? message : undefined,
+    session: "session" in event ? event.session : undefined
   };
+}
+
+function phaseLabel(event: Extract<EngineEvent, { type: "phase_started" }>): string {
+  return event.label ?? event.title ?? event.phaseId ?? "Phase";
+}
+
+function verificationChecksMessage(checks: Array<{ rubricId: string; status: string; evidence?: string }>): string | undefined {
+  if (!checks.length) return undefined;
+  return checks
+    .map((check) => `${humanizeCheckName(check.rubricId)}: ${check.status}${check.evidence ? ` - ${check.evidence}` : ""}`)
+    .join("\n");
+}
+
+function humanizeCheckName(value: string): string {
+  return value
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function verificationToTimelineItem(result: VerificationResult): PreviewTimelineItem {
@@ -134,7 +208,7 @@ function repairItems(runStatus: RunStatus, results: VerificationResult[]): Previ
   return [
     {
       kind: "repair",
-      label: failed?.summary ?? "Repair requested",
+      label: failed?.summary ?? "需要修复",
       status: runStatus === "repairing" ? "repairing" : "needed",
       createdAt: failed?.createdAt
     }

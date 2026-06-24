@@ -42,8 +42,18 @@ test("serves the preview shell", async () => {
 
   expect(response.status).toBe(200);
   expect(html).toContain("DittosLoop For Codex");
-  expect(html).toContain("Live Loop");
+  expect(html).toContain("Dittos.Loop");
+  expect(html).toContain("Caveat:wght@600;700");
+  expect(html).not.toContain("跟你一起");
   expect(html).toContain("id=\"loop-stage\"");
+});
+
+test("preview brand matches the Dittos.Loop wordmark treatment", async () => {
+  const styles = await readFile(join(previewDir, "styles.css"), "utf8");
+
+  expect(styles).toContain("--brand-pink: #e85a9e");
+  expect(styles).toContain("color: var(--brand-pink)");
+  expect(styles).toContain("font-family: Caveat");
 });
 
 test("preview script includes a real Live Loop directory view", async () => {
@@ -57,6 +67,12 @@ test("preview script includes a real Live Loop directory view", async () => {
   expect(app).toContain("memory.md");
   expect(app).toContain("contract.json");
   expect(app).toContain("session.json");
+  expect(app).toContain("formalWorkflowFlowFile");
+  expect(app).toContain("workflowContractId");
+  expect(app).toContain("runPhase");
+  expect(app).toContain("runParallel");
+  expect(app).toContain("runAgent");
+  expect(app).toContain("verifyRubrics");
 });
 
 test("preview script renders run detail as phase rail and agent cards", async () => {
@@ -70,18 +86,33 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("待 Codex App 创建");
   expect(app).toContain("threadId");
   expect(app).toContain("Codex 会话");
-  expect(app).toContain("workflowAgentCards");
-  expect(app).toContain("Workflow attempt");
-  expect(app).toContain("Workflow draft");
-  expect(app).toContain("workflowRevisions");
+  expect(app).toContain("timelineSectionAgents");
+  expect(app).toContain("workflowTimelinePhases");
+  expect(app).toContain("mergePhaseTimelineStatus");
+  expect(app).toContain("workflowGroupId");
+  expect(app).toContain("item.phaseId");
+  expect(app).toContain("sessionFromTimelineItem");
+  expect(app).toContain("session?.threadUrl");
+  expect(app).toContain("timelineSectionStatus");
   expect(app).toContain("工作流阶段");
+  expect(app).not.toContain("workflowRevisions ?? []).map");
+  expect(app).not.toContain("workflow-revisions");
+  expect(app).not.toContain("修订草稿");
+  expect(app).not.toContain("Workflow attempt");
+  expect(app).not.toContain("Workflow draft");
+  expect(app).not.toContain("工作流草稿");
+  expect(app).not.toContain("阶段暂无 agent 明细");
 });
 
-test("preview keeps verification internals out of the user-facing summary output", async () => {
+test("preview keeps run output out of the run detail board", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
+  const styles = await readFile(join(previewDir, "styles.css"), "utf8");
 
-  expect(app).toContain("renderSummaryOutput");
-  expect(app).not.toContain("latestVerification ? el(\"p\", \"summary-copy\", latestVerification.summary)");
+  expect(app).not.toContain("renderSummaryOutput");
+  expect(app).not.toContain("summary-output");
+  expect(app).not.toContain("汇总输出");
+  expect(styles).not.toContain("summary-output");
+  expect(styles).not.toContain("summary-copy");
   expect(app).not.toContain("run.codexSession.subagents ?? []).map");
   expect(app).not.toContain("Codex subagent attempt");
   expect(app).not.toContain("timelineAgents = detail.events.map");
@@ -92,20 +123,47 @@ test("preview script includes codex session launch controls", async () => {
 
   expect(app).toContain("startCodexSession");
   expect(app).toContain("startNewLoopSession");
-  expect(app).toContain("project-picker");
+  expect(app).toContain("projectForLoop");
+  expect(app).toContain("project?.name || project?.label");
+  expect(app).toContain("project.name ?? project.label");
+  expect(app).toContain("loop-project-group-title");
+  expect(app).toContain("UNASSIGNED_PROJECT_LABEL = \"无项目\"");
+  expect(app).toContain("closeCurrentLoopTab");
+  expect(app).toContain("inactive-tab-title");
+  expect(app).toContain("loopSelectionClosed = true");
+  expect(app).toContain("updateWorkspaceState");
+  expect(app).toContain("workspace-closed");
   expect(app).toContain("/codex-session");
   expect(app).toContain("/api/new-loop-session");
   expect(app).toContain("/codex-thread");
   expect(app).toContain("record_codex_thread");
   expect(app).toContain("创建 Codex 会话请求");
+  expect(app).toContain("sessionActionForRun");
+  expect(app).toContain("等待 Codex App 创建");
   expect(app).toContain("dittosloop:create-codex-thread");
   expect(app).toContain("launchRequest");
   expect(app).toContain("codexProjectId");
   expect(app).toContain("deleteLoop");
   expect(app).toContain("danger-button");
+  expect(app).toContain("window.confirm");
+  expect(app).not.toContain("再次点击删除");
   expect(app).not.toContain("未连接 Codex 项目");
+  expect(app).not.toContain("未关联会话");
+  expect(app).not.toContain("待创建会话");
   expect(app).not.toContain("本轮剧本");
   expect(app).not.toContain("script-steps");
+});
+
+test("preview closes the workspace when all loop tabs are closed", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+  const styles = await readFile(join(previewDir, "styles.css"), "utf8");
+
+  expect(app).toContain("const workspaceClosed = !selectedLoopId && !selectedRunId");
+  expect(app).toContain("elements.shell?.classList.toggle(\"workspace-closed\", workspaceClosed)");
+  expect(styles).toContain(".loop-shell.workspace-closed");
+  expect(styles).toContain("grid-template-columns: minmax(0, 1fr)");
+  expect(styles).toContain(".loop-shell.workspace-closed .loop-workspace");
+  expect(styles).toContain("display: none");
 });
 
 test("preview shell uses the new loop button as a session launch action", async () => {
@@ -114,7 +172,7 @@ test("preview shell uses the new loop button as a session launch action", async 
   expect(html).toContain("id=\"new-loop\"");
   expect(html).toContain("+ 新建循环");
   expect(html).not.toContain("id=\"refresh\"");
-  expect(html).toContain("id=\"loop-group-label\"");
+  expect(html).not.toContain("id=\"loop-group-label\"");
 });
 
 test("preview script keeps deep-linked run routes even before snapshot catches up", async () => {
@@ -177,6 +235,8 @@ test("creates a host-mediated new loop codex session request", async () => {
   expect(launch.prompt).toContain("create_loop_contract");
   expect(launch.prompt).toContain("workflow steps");
   expect(launch.prompt).toContain("verifier rubrics");
+  expect(launch.prompt).toContain("agent / phase / parallel");
+  expect(launch.prompt).not.toContain("agent / sequence / parallel");
 });
 
 test("deletes a loop from the preview api", async () => {
@@ -270,18 +330,168 @@ test("serves engine events and grouped runtime timeline in run detail api", asyn
   expect(detail.timeline).toEqual([
     expect.objectContaining({
       id: "workflow",
+      title: "工作流",
       items: expect.arrayContaining([
-        expect.objectContaining({ kind: "run", status: "started" }),
+        expect.objectContaining({ kind: "run", label: "开始运行", status: "started" }),
         expect.objectContaining({ kind: "agent", label: "Scan", status: "started" })
       ])
     }),
     expect.objectContaining({
       id: "verification",
+      title: "验证",
       items: [expect.objectContaining({ kind: "verification", status: "failed", label: "Missing source" })]
     }),
     expect.objectContaining({
       id: "repair",
-      items: [expect.objectContaining({ kind: "repair", status: "repairing" })]
+      title: "修复",
+      items: [expect.objectContaining({ kind: "repair", label: "Missing source", status: "repairing" })]
+    })
+  ]);
+});
+
+test("serves formal engine event sections without invented verification records", async () => {
+  const service = await createService();
+  const contract = await service.createLoopContract({
+    title: "Formal runtime",
+    goal: "Run a formal workflow",
+    body: {
+      steps: [
+        {
+          id: "collect",
+          kind: "phase",
+          label: "Collect",
+          children: [{ id: "agent-collect", kind: "agent", label: "Collector", prompt: "Collect facts" }]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "complete", label: "Complete", requirement: "Produce complete output", severity: "must" }]
+    }
+  });
+  const run = await service.startLoopRun(contract.id, { goal: "Manual formal run" });
+  const events = [
+    {
+      type: "phase_started",
+      runId: run.id,
+      sequence: 2,
+      createdAt: "2026-06-23T00:01:00.000Z",
+      phaseId: "collect",
+      title: "Collect"
+    },
+    {
+      type: "agent_done",
+      runId: run.id,
+      sequence: 3,
+      createdAt: "2026-06-23T00:02:00.000Z",
+      nodeId: "agent-collect",
+      phaseId: "collect",
+      label: "Collector",
+      status: "ok",
+      result: "Collected facts",
+      session: {
+        sessionId: "session_1",
+        threadId: "thread_1",
+        threadTitle: "DittosLoop: Collector",
+        threadUrl: "codex://thread/thread_1"
+      }
+    },
+    {
+      type: "verification_started",
+      runId: run.id,
+      sequence: 4,
+      createdAt: "2026-06-23T00:03:00.000Z",
+      attemptId: "attempt_1"
+    },
+    {
+      type: "verification_done",
+      runId: run.id,
+      sequence: 5,
+      createdAt: "2026-06-23T00:04:00.000Z",
+      attemptId: "attempt_1",
+      decision: {
+        status: "failed",
+        summary: "Need stronger sources",
+        checks: [{ rubricId: "complete", status: "failed", evidence: "No source links" }],
+        repairInstructions: "Add source links"
+      }
+    },
+    {
+      type: "repair_started",
+      runId: run.id,
+      sequence: 6,
+      createdAt: "2026-06-23T00:05:00.000Z",
+      attemptId: "attempt_2",
+      reason: "Add source links"
+    },
+    {
+      type: "human_request",
+      runId: run.id,
+      sequence: 7,
+      createdAt: "2026-06-23T00:06:00.000Z",
+      question: "Should the run continue?"
+    },
+    {
+      type: "run_done",
+      runId: run.id,
+      sequence: 8,
+      createdAt: "2026-06-23T00:07:00.000Z",
+      status: "waiting_for_human",
+      summary: "Waiting for user input"
+    }
+  ];
+  for (const event of events) {
+    await service.appendEvent(run.id, { message: event.type, data: { engineEvent: event } });
+  }
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/${run.id}`);
+  const detail = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(detail.verificationResults).toEqual([]);
+  expect(detail.timeline).toEqual([
+    expect.objectContaining({
+      id: "workflow",
+      title: "工作流",
+      items: expect.arrayContaining([
+        expect.objectContaining({ kind: "phase", label: "Collect", status: "started" }),
+        expect.objectContaining({
+          kind: "agent",
+          label: "Collector",
+          status: "completed",
+          phaseId: "collect",
+          message: "Collected facts",
+          session: expect.objectContaining({
+            sessionId: "session_1",
+            threadUrl: "codex://thread/thread_1"
+          })
+        })
+      ])
+    }),
+    expect.objectContaining({
+      id: "verification",
+      title: "验证",
+      items: expect.arrayContaining([
+        expect.objectContaining({ kind: "verification", label: "开始验证", status: "started" }),
+        expect.objectContaining({ kind: "verification", label: "Need stronger sources", status: "failed", message: "Complete: failed - No source links" })
+      ])
+    }),
+    expect.objectContaining({
+      id: "repair",
+      title: "修复",
+      items: [expect.objectContaining({ kind: "repair", label: "Add source links", status: "repairing" })]
+    }),
+    expect.objectContaining({
+      id: "human",
+      title: "人工处理",
+      items: [expect.objectContaining({ kind: "human", label: "Should the run continue?", status: "needs_human" })]
+    }),
+    expect.objectContaining({
+      id: "run",
+      title: "运行",
+      items: [expect.objectContaining({ kind: "run", label: "Waiting for user input", status: "waiting_for_human" })]
     })
   ]);
 });
@@ -364,11 +574,42 @@ test("records a codex thread from the preview api", async () => {
       threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
       subagents: [
         {
-          status: "completed",
+          status: "running",
           threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
         }
       ]
     }
+  });
+});
+
+test("opens a codex session from the preview api when the host thread is attached", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({
+    title: "AI Dev Tools Update Monitor",
+    intent: "Watch release updates"
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Check today updates" });
+  await service.recordCodexThread(launch.run.id, {
+    threadId: "019ef4c5-4a52-7653-a862-6f1372f88475",
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+    threadUrl: "codex://thread/019ef4c5-4a52-7653-a862-6f1372f88475"
+  });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/${launch.run.id}/open-codex-session`, {
+    method: "POST"
+  });
+  const opened = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(opened).toEqual({
+    runId: launch.run.id,
+    status: "ready",
+    message: "Codex session is ready to open.",
+    threadId: "019ef4c5-4a52-7653-a862-6f1372f88475",
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+    threadUrl: "codex://thread/019ef4c5-4a52-7653-a862-6f1372f88475"
   });
 });
 

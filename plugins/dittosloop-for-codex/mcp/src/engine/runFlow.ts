@@ -17,18 +17,43 @@ export async function runFlow<T>(
   };
 
   const api: FlowApi = {
-    phase(title) {
-      emit({ type: "phase_started", label: title });
+    phase(title, opts) {
+      const phaseId = opts?.phaseId ?? title;
+      let closed = false;
+      emit({ type: "phase_started", label: title, title, phaseId });
+
+      return {
+        done(status = "ok") {
+          if (closed) return;
+          closed = true;
+          emit({ type: "phase_done", phaseId, title, status });
+        }
+      };
     },
     async agent(prompt, opts) {
-      emit({ type: "agent_started", label: opts?.label, stepId: opts?.stepId, prompt });
+      emit({ type: "agent_started", label: opts?.label, stepId: opts?.stepId, phaseId: opts?.phaseId, prompt });
       try {
-        const result = await deps.executor.run({ prompt, label: opts?.label, stepId: opts?.stepId });
-        emit({ type: "agent_done", label: opts?.label, stepId: opts?.stepId, result: result.text });
+        const result = await deps.executor.run({
+          prompt,
+          label: opts?.label,
+          stepId: opts?.stepId,
+          phaseId: opts?.phaseId,
+          workflowRuntime: deps.workflow?.runtime,
+          workflowContractId: deps.workflow?.contractId,
+          workflowPlan: deps.workflow
+        });
+        emit({
+          type: "agent_done",
+          label: opts?.label,
+          stepId: opts?.stepId,
+          phaseId: opts?.phaseId,
+          result: result.text,
+          session: result.data?.session
+        });
         return result.text;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        emit({ type: "agent_failed", label: opts?.label, stepId: opts?.stepId, error: message });
+        emit({ type: "agent_failed", label: opts?.label, stepId: opts?.stepId, phaseId: opts?.phaseId, error: message });
         throw error;
       }
     },

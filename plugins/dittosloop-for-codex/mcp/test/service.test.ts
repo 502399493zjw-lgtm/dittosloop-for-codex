@@ -6,6 +6,12 @@ import { afterEach, expect, test } from "vitest";
 
 import { LoopService } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
+import type {
+  CodexSessionBridge,
+  CodexSessionRef,
+  CodexSessionRequest,
+  CodexSessionResult
+} from "../src/codex/sessionBridge.js";
 
 const tempDirs: string[] = [];
 const fixedTime = "2026-06-23T00:00:00.000Z";
@@ -41,6 +47,77 @@ async function createServiceWithSequentialIds() {
     },
     previewBaseUrl: "http://127.0.0.1:47888"
   });
+}
+
+function createCompletedSessionBridge(resultText: string) {
+  const requests: CodexSessionRequest[] = [];
+  const bridge: CodexSessionBridge = {
+    async createSession(request) {
+      requests.push(request);
+      return {
+        sessionId: `session_${requests.length}`,
+        runId: request.runId,
+        stepId: request.stepId,
+        phaseId: request.phaseId,
+        title: request.title,
+        status: "completed",
+        createdAt: fixedTime,
+        prompt: request.prompt,
+        workflowRuntime: request.workflowRuntime,
+        workflowContractId: request.workflowContractId,
+        workflowPlan: request.workflowPlan,
+        projectId: request.projectId,
+        projectLabel: request.projectLabel,
+        projectPath: request.projectPath
+      } satisfies CodexSessionRef;
+    },
+    async sendMessage() {},
+    async recordResult() {},
+    async readResult(): Promise<CodexSessionResult> {
+      return {
+        status: "completed",
+        text: resultText,
+        threadId: "thread_1",
+        threadTitle: "DittosLoop: Worker",
+        threadUrl: "codex://thread/thread_1",
+        createdAt: fixedTime
+      };
+    }
+  };
+
+  return { bridge, requests };
+}
+
+function createPendingSessionBridge() {
+  const requests: CodexSessionRequest[] = [];
+  const bridge: CodexSessionBridge = {
+    async createSession(request) {
+      requests.push(request);
+      return {
+        sessionId: `session_${requests.length}`,
+        runId: request.runId,
+        stepId: request.stepId,
+        phaseId: request.phaseId,
+        title: request.title,
+        status: "requested",
+        createdAt: fixedTime,
+        prompt: request.prompt,
+        workflowRuntime: request.workflowRuntime,
+        workflowContractId: request.workflowContractId,
+        workflowPlan: request.workflowPlan,
+        projectId: request.projectId,
+        projectLabel: request.projectLabel,
+        projectPath: request.projectPath
+      } satisfies CodexSessionRef;
+    },
+    async sendMessage() {},
+    async recordResult() {},
+    async readResult() {
+      return undefined;
+    }
+  };
+
+  return { bridge, requests };
 }
 
 test("creates a loop contract with manual trigger defaults", async () => {
@@ -99,6 +176,50 @@ test("creates a formal loop contract and starts an engine-backed run", async () 
             runId: run.id,
             sequence: 1
           }
+        }
+      }
+    ]
+  });
+});
+
+test("normalizes project fields on formal loop creation into the contract binding and preview loop", async () => {
+  const service = await createService();
+
+  const formal = await service.createLoopContract({
+    title: "AI 开发工具日报",
+    goal: "生成中文日报",
+    body: { steps: [{ id: "write", kind: "agent", label: "日报 worker", prompt: "生成中文日报" }] },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "zh", label: "中文日报", requirement: "输出中文日报", severity: "must" }]
+    },
+    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+  });
+
+  expect(formal.projectBinding).toEqual({
+    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+  });
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [
+      {
+        id: formal.id,
+        codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+        projectLabel: "dittos loop",
+        projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      }
+    ],
+    formalContracts: [
+      {
+        id: formal.id,
+        projectBinding: {
+          codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+          projectLabel: "dittos loop",
+          projectPath: "/Users/edisonzhong/Documents/dittos loop"
         }
       }
     ]
@@ -194,10 +315,16 @@ test("runs a formal workflow end to end with a draft workflow repair without rep
     "agent_started",
     "agent_done",
     "run_completed",
+    "verification_started",
+    "verification_done",
+    "repair_started",
     "run_started",
     "agent_started",
     "agent_done",
-    "run_completed"
+    "run_completed",
+    "verification_started",
+    "verification_done",
+    "run_done"
   ]);
   expect(detail.workflowRevisions).toHaveLength(1);
   expect(detail.workflowRevisions[0]).toMatchObject({
@@ -222,6 +349,267 @@ test("runs a formal workflow end to end with a draft workflow repair without rep
     kind: "agent",
     prompt: "Collect notable updates with official sources"
   });
+});
+
+test("uses the configured Codex session bridge as the default formal workflow executor", async () => {
+  const { bridge, requests } = createCompletedSessionBridge("完成中文日报，包含来源、风险和建议动作。");
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => `${prefix}_1`,
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const formal = await service.createLoopContract({
+    title: "AI 开发工具日报",
+    goal: "生成 AI 开发工具中文日报",
+    body: {
+      steps: [
+        {
+          id: "research",
+          kind: "phase",
+          label: "信息收集",
+          children: [
+            {
+              id: "write-report",
+              kind: "agent",
+              label: "日报 worker",
+              prompt: "生成 OpenClaw、Claude Code、Codex、Hermes 的中文日报。",
+              sessionPolicy: "new"
+            }
+          ]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "daily-report",
+          label: "中文日报",
+          requirement: "输出中文日报并包含来源、风险和建议动作。",
+          severity: "must"
+        }
+      ]
+    },
+    projectBinding: {
+      codexProjectId: "project-dittos-loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    }
+  });
+
+  const run = await service.runLoopWorkflow(formal.id, {
+    goal: "生成今天的中文日报",
+    verifier: ({ result }) => ({
+      status: JSON.stringify(result).includes("来源") ? "passed" : "failed",
+      summary: "日报通过验证。",
+      checks: [{ rubricId: "daily-report", status: "passed", evidence: "包含来源、风险和建议动作" }]
+    })
+  });
+
+  expect(run).toMatchObject({ loopId: formal.id, status: "completed" });
+  expect(requests).toMatchObject([
+    {
+      runId: run.id,
+      stepId: "write-report",
+      phaseId: "research",
+      title: "日报 worker",
+      prompt: "生成 OpenClaw、Claude Code、Codex、Hermes 的中文日报。",
+      workflowRuntime: "dittosloop-local-workflow",
+      workflowContractId: formal.id,
+      workflowPlan: {
+        contractId: formal.id,
+        steps: [
+          { id: "research", kind: "phase", label: "信息收集", depth: 0 },
+          {
+            id: "write-report",
+            kind: "agent",
+            label: "日报 worker",
+            phaseId: "research",
+            sessionPolicy: "new",
+            depth: 1
+          }
+        ]
+      },
+      projectId: "project-dittos-loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    }
+  ]);
+  const detail = await service.getRunDetail(run.id);
+  const engineEvents = detail.events.map((event) => event.data?.engineEvent).filter(Boolean);
+  expect(engineEvents).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ type: "phase_started", phaseId: "research" }),
+      expect.objectContaining({ type: "agent_started", stepId: "write-report" }),
+      expect.objectContaining({
+        type: "agent_done",
+        stepId: "write-report",
+        session: expect.objectContaining({
+          sessionId: "session_1",
+          threadId: "thread_1",
+          threadUrl: "codex://thread/thread_1"
+        })
+      }),
+      expect.objectContaining({ type: "verification_done" })
+    ])
+  );
+});
+
+test("keeps a bridge-backed formal workflow running while the Codex session result is pending", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => `${prefix}_1`,
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const formal = await service.createLoopContract({
+    title: "AI 开发工具日报",
+    goal: "生成 AI 开发工具中文日报",
+    body: {
+      steps: [
+        {
+          id: "write-report",
+          kind: "agent",
+          label: "日报 worker",
+          prompt: "生成中文日报。",
+          sessionPolicy: "new"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "daily-report",
+          label: "中文日报",
+          requirement: "输出中文日报。",
+          severity: "must"
+        }
+      ]
+    },
+    projectBinding: {
+      codexProjectId: "project-dittos-loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    }
+  });
+
+  const run = await service.runLoopWorkflow(formal.id, {
+    goal: "生成今天的中文日报"
+  });
+
+  expect(run).toMatchObject({
+    loopId: formal.id,
+    status: "running",
+    codexSession: {
+      mode: "new_session",
+      status: "requested",
+      codexProjectId: "project-dittos-loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop",
+      subagents: [
+        {
+          role: "日报 worker",
+          status: "requested",
+          prompt: "生成中文日报。"
+        }
+      ],
+      prompt: "生成中文日报。"
+    }
+  });
+  expect(requests).toHaveLength(1);
+  const detail = await service.getRunDetail(run.id);
+  expect(detail.attempts).toMatchObject([{ status: "running" }]);
+  const engineEventTypes = detail.events.map((event) => event.data?.engineEvent?.type).filter(Boolean);
+  expect(engineEventTypes).toContain("agent_started");
+  expect(engineEventTypes).not.toContain("agent_failed");
+  expect(engineEventTypes).not.toContain("run_failed");
+  expect(
+    detail.events.some((event) => event.data?.engineEvent?.type === "phase_done" && event.data.engineEvent.status !== "ok")
+  ).toBe(false);
+  expect(detail.events).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "note",
+        message: "Codex session requested; waiting for worker result",
+        data: expect.objectContaining({
+          codexSession: expect.objectContaining({
+            sessionId: "session_1",
+            stepId: "write-report"
+          })
+        })
+      })
+    ])
+  );
+});
+
+test("keeps a formal workflow waiting when verifier needs human input", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Ambiguous source monitor",
+    goal: "Decide whether community-only signals are acceptable",
+    body: {
+      steps: [
+        {
+          id: "collect",
+          kind: "agent",
+          label: "Collect signals",
+          prompt: "Collect release signals"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "source-policy",
+          label: "Source policy",
+          requirement: "Clarify whether unofficial sources are allowed",
+          severity: "must"
+        }
+      ]
+    },
+    repairPolicy: { maxAttempts: 1, strategy: "ask_human" }
+  });
+
+  const run = await service.runLoopWorkflow(formal.id, {
+    executor: {
+      async run() {
+        return { text: "Only community source found" };
+      }
+    },
+    verifier: () => ({
+      status: "needs_human",
+      summary: "Source policy is ambiguous.",
+      humanQuestion: "Should this loop include community-only signals when official sources are absent?",
+      checks: [{ rubricId: "source-policy", status: "needs_human" }]
+    })
+  });
+
+  expect(run).toMatchObject({
+    loopId: formal.id,
+    status: "waiting_for_human"
+  });
+
+  const detail = await service.getRunDetail(run.id);
+  expect(detail.attempts).toMatchObject([
+    { status: "completed", summary: "Source policy is ambiguous." }
+  ]);
+  expect(detail.humanRequests).toMatchObject([
+    {
+      status: "open",
+      question: "Should this loop include community-only signals when official sources are absent?"
+    }
+  ]);
+  expect(detail.events.map((event) => event.data?.engineEvent?.type).filter(Boolean)).toContain("human_request");
 });
 
 test("records a run lifecycle in the snapshot", async () => {
@@ -460,10 +848,18 @@ test("compiles Codex session prompt from formal workflow contract when available
     body: {
       steps: [
         {
-          id: "collect",
-          kind: "agent",
-          label: "Collect official updates",
-          prompt: "Collect Claude Code, OpenClaw, Hermes, Codex, and Twitter/X updates."
+          id: "research",
+          kind: "phase",
+          label: "Research updates",
+          children: [
+            {
+              id: "collect",
+              kind: "agent",
+              label: "Collect official updates",
+              prompt: "Collect Claude Code, OpenClaw, Hermes, Codex, and Twitter/X updates.",
+              sessionPolicy: "new"
+            }
+          ]
         }
       ]
     },
@@ -486,18 +882,53 @@ test("compiles Codex session prompt from formal workflow contract when available
   });
 
   expect(launch.prompt).toContain(`Contract id: ${formal.id}`);
-  expect(launch.prompt).toContain("Use the local DittosLoop workflow runtime");
-  expect(launch.prompt).toContain("Do not replace the active workflow contract");
+  expect(launch.prompt).toContain("使用本地 DittosLoop workflow runtime 执行这个 contract");
+  expect(launch.prompt).toContain("不要覆盖当前 active workflow contract");
+  expect(launch.prompt).toContain("不要把 run/attempt/verification id、调试说明或 cite turn 残留写进正文");
   expect(launch.prompt).toContain("Collect official updates");
   expect(launch.prompt).toContain("Every notable update cites an official source");
   expect(launch.launchRequest).toMatchObject({
     workflowRuntime: "dittosloop-local-workflow",
-    workflowContractId: formal.id
+    workflowContractId: formal.id,
+    workflowPlan: {
+      runtime: "dittosloop-local-workflow",
+      contractId: formal.id,
+      goal: formal.goal,
+      steps: [
+        {
+          id: "research",
+          kind: "phase",
+          label: "Research updates",
+          depth: 0
+        },
+        {
+          id: "collect",
+          kind: "agent",
+          label: "Collect official updates",
+          prompt: "Collect Claude Code, OpenClaw, Hermes, Codex, and Twitter/X updates.",
+          phaseId: "research",
+          sessionPolicy: "new",
+          depth: 1
+        }
+      ],
+      verification: {
+        mode: "after_workflow",
+        rubrics: [
+          {
+            id: "official-source",
+            label: "Official source",
+            requirement: "Every notable update cites an official source or explicitly says none was found",
+            severity: "must"
+          }
+        ]
+      },
+      repairPolicy: { maxAttempts: 3, strategy: "repair_then_retry" }
+    }
   });
   expect(launch.run.codexSession?.subagents?.[0].prompt).toBe(launch.prompt);
 });
 
-test("records a real Codex thread against a requested session run", async () => {
+test("records a real Codex thread without completing the session run", async () => {
   const service = await createService();
   const loop = await service.createLoop({
     title: "AI Dev Tools Update Monitor",
@@ -521,19 +952,18 @@ test("records a real Codex thread against a requested session run", async () => 
     subagents: [
       {
         role: "loop-runner",
-        status: "completed",
+        status: "running",
         threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
       }
     ]
   });
   expect(updated).toMatchObject({
-    status: "completed",
-    completedAt: fixedTime
+    status: "running"
   });
+  expect(updated.completedAt).toBeUndefined();
   await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
     run: {
-      status: "completed",
-      completedAt: fixedTime,
+      status: "running",
       codexSession: {
         status: "started",
         threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
@@ -541,8 +971,7 @@ test("records a real Codex thread against a requested session run", async () => 
     },
     attempts: [
       {
-        status: "completed",
-        completedAt: fixedTime,
+        status: "running",
         summary: "Request a new Codex session for AI Dev Tools Update Monitor"
       }
     ],
@@ -558,14 +987,6 @@ test("records a real Codex thread against a requested session run", async () => 
             threadTitle: "DittosLoop: AI Dev Tools Update Monitor"
           }
         }
-      },
-      {
-        kind: "attempt_completed",
-        message: "Codex thread created and attached to this run"
-      },
-      {
-        kind: "run_completed",
-        message: "Codex session launch completed"
       }
     ]
   });
@@ -580,7 +1001,7 @@ test("records a real Codex thread against a requested session run", async () => 
     threadId: "019ef7a0-bc04-72f1-8454-607c376eaaea",
     subagents: [
       {
-        status: "completed",
+        status: "running",
         threadId: "019ef7a0-bc04-72f1-8454-607c376eaaea",
         threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
         threadUrl: "codex://thread/019ef7a0-bc04-72f1-8454-607c376eaaea"
@@ -589,7 +1010,7 @@ test("records a real Codex thread against a requested session run", async () => 
   });
 });
 
-test("completing a Codex session run closes its subagent status", async () => {
+test("recording a session result closes its subagent status", async () => {
   const service = await createService();
   const loop = await service.createLoop({
     title: "Chinese Daily Report",
@@ -603,12 +1024,33 @@ test("completing a Codex session run closes its subagent status", async () => {
     threadTitle: "DittosLoop: AI 开发工具更新日报"
   });
 
-  expect(started.codexSession?.subagents?.[0]?.status).toBe("completed");
+  expect(started).toMatchObject({
+    status: "running",
+    codexSession: {
+      subagents: [
+        {
+          role: "loop-runner",
+          status: "running",
+          threadId: "019ef7b4-7a0d-74f2-b1a9-10502784e636"
+        }
+      ]
+    }
+  });
+
+  const completed = await service.recordSessionResult(launch.run.id, {
+    status: "passed",
+    summary: "日报已完成并通过验证。"
+  });
 
   const detail = await service.getRunDetail(launch.run.id);
+  expect(completed).toMatchObject({
+    status: "completed",
+    completedAt: fixedTime
+  });
   expect(detail.run).toMatchObject({
     status: "completed",
     codexSession: {
+      status: "completed",
       subagents: [
         {
           role: "loop-runner",
@@ -617,6 +1059,213 @@ test("completing a Codex session run closes its subagent status", async () => {
         }
       ]
     }
+  });
+});
+
+test("records a Codex session result and completes the session-backed run", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({
+    title: "AI 开发工具更新日报",
+    intent: "生成中文日报"
+  });
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "生成今天的中文日报"
+  });
+  await service.recordCodexThread(launch.run.id, {
+    threadId: "019ef8f0-7f39-775a-ad9c-63ad6bfe1832",
+    threadTitle: "DittosLoop: AI 开发工具更新日报"
+  });
+
+  const updated = await service.recordSessionResult(launch.run.id, {
+    status: "passed",
+    summary: "中文日报已生成并通过校验。",
+    result: "## AI 开发工具更新日报\n\n今日摘要...",
+    checks: [
+      {
+        name: "中文日报",
+        status: "passed",
+        output: "包含摘要、重点更新、风险和来源。"
+      }
+    ]
+  });
+
+  expect(updated).toMatchObject({
+    status: "completed",
+    completedAt: fixedTime,
+    codexSession: {
+      status: "completed",
+      subagents: [
+        {
+          role: "loop-runner",
+          status: "completed",
+          threadId: "019ef8f0-7f39-775a-ad9c-63ad6bfe1832"
+        }
+      ]
+    }
+  });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    attempts: [
+      {
+        status: "completed",
+        completedAt: fixedTime,
+        summary: "中文日报已生成并通过校验。"
+      }
+    ],
+    verificationResults: [
+      {
+        status: "passed",
+        summary: "中文日报已生成并通过校验。",
+        checks: [
+          {
+            name: "中文日报",
+            status: "passed",
+            output: "包含摘要、重点更新、风险和来源。"
+          }
+        ]
+      }
+    ],
+    events: [
+      { kind: "run_created" },
+      { kind: "attempt_started" },
+      { kind: "note", message: "Codex thread created and attached to this run" },
+      {
+        kind: "verification_recorded",
+        message: "中文日报已生成并通过校验。",
+        data: {
+          sessionResult: {
+            result: "## AI 开发工具更新日报\n\n今日摘要..."
+          }
+        }
+      },
+      { kind: "attempt_completed", message: "中文日报已生成并通过校验。" },
+      { kind: "run_completed", message: "Codex session result passed" }
+    ]
+  });
+});
+
+test("opens and resumes a Codex session backed run without creating a new run", async () => {
+  const service = await createService();
+  const formal = await service.createLoopContract({
+    title: "AI 开发工具更新日报",
+    goal: "生成中文 AI 开发工具日报",
+    body: {
+      steps: [
+        {
+          id: "write-report",
+          kind: "agent",
+          label: "撰写日报",
+          prompt: "整理 OpenClaw、Claude Code、Codex、Hermes 的中文日报。"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "zh-report",
+          label: "中文日报",
+          requirement: "输出中文日报并包含来源、风险和建议动作。",
+          severity: "must"
+        }
+      ]
+    },
+    projectBinding: {
+      codexProjectId: "project-dittos-loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, {
+    goal: "生成今天的中文日报"
+  });
+  await service.recordCodexThread(launch.run.id, {
+    threadId: "019ef91e-0f19-74d5-b14c-bac2f257d269",
+    threadTitle: "DittosLoop: AI 开发工具更新日报",
+    threadUrl: "codex://thread/019ef91e-0f19-74d5-b14c-bac2f257d269"
+  });
+
+  const opened = await service.openCodexSession(launch.run.id);
+  expect(opened).toEqual({
+    runId: launch.run.id,
+    status: "ready",
+    message: "Codex session is ready to open.",
+    threadId: "019ef91e-0f19-74d5-b14c-bac2f257d269",
+    threadTitle: "DittosLoop: AI 开发工具更新日报",
+    threadUrl: "codex://thread/019ef91e-0f19-74d5-b14c-bac2f257d269"
+  });
+
+  const resumed = await service.resumeLoopRun(launch.run.id, {
+    goal: "根据校验意见修复日报"
+  });
+
+  expect(resumed.run).toMatchObject({
+    id: launch.run.id,
+    loopId: formal.id,
+    status: "running",
+    goal: "根据校验意见修复日报",
+    codexProjectId: "project-dittos-loop",
+    projectLabel: "dittos loop",
+    codexSession: {
+      status: "requested",
+      codexProjectId: "project-dittos-loop",
+      projectLabel: "dittos loop",
+      subagents: [
+        {
+          status: "running",
+          threadId: "019ef91e-0f19-74d5-b14c-bac2f257d269"
+        },
+        {
+          role: "loop-runner",
+          status: "requested"
+        }
+      ]
+    }
+  });
+  expect(resumed.launchRequest).toMatchObject({
+    runId: launch.run.id,
+    loopId: formal.id,
+    workflowRuntime: "dittosloop-local-workflow",
+    workflowContractId: formal.id,
+    workflowPlan: {
+      contractId: formal.id,
+      steps: [
+        {
+          id: "write-report",
+          kind: "agent",
+          label: "撰写日报",
+          prompt: "整理 OpenClaw、Claude Code、Codex、Hermes 的中文日报。",
+          depth: 0
+        }
+      ]
+    },
+    codexProjectId: "project-dittos-loop",
+    projectLabel: "dittos loop"
+  });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    runs: [
+      {
+        id: launch.run.id,
+        status: "running"
+      }
+    ]
+  });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    attempts: [
+      {
+        status: "running"
+      },
+      {
+        status: "running",
+        summary: "Resume Codex session for AI 开发工具更新日报"
+      }
+    ],
+    events: [
+      { kind: "run_created" },
+      { kind: "attempt_started" },
+      { kind: "note", message: "Codex thread created and attached to this run" },
+      { kind: "note", message: "Codex session open requested" },
+      { kind: "attempt_started", message: "Resume Codex session for AI 开发工具更新日报" }
+    ]
   });
 });
 
@@ -651,12 +1300,37 @@ test("records a default subagent when older session runs have none", async () =>
   expect(updated.codexSession?.subagents).toEqual([
     {
       role: "loop-runner",
-      status: "completed",
+      status: "running",
       threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
       threadTitle: undefined,
       threadUrl: undefined
     }
   ]);
+});
+
+test("does not mark a Codex session ready without an openable thread URL", async () => {
+  const service = await createService();
+  const loop = await service.createLoopContract({
+    title: "Session Link Check",
+    goal: "Verify session linking",
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Start a worker session" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "linked", label: "Linked", requirement: "Session has an openable URL", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Start a worker session" });
+  await service.recordCodexThread(launch.run.id, {
+    threadId: "019ef4e5-21f0-7131-be8c-708f720e49de"
+  });
+
+  await expect(service.openCodexSession(launch.run.id)).resolves.toEqual({
+    runId: launch.run.id,
+    status: "unavailable",
+    message: "The Codex session has not been created by the host yet."
+  });
 });
 
 test("records failed verification against an attempt and marks run repairing when requested", async () => {

@@ -7,6 +7,11 @@ import { afterEach, expect, test } from "vitest";
 import { createToolHandlers, registerDittosLoopTools } from "../src/mcpServer.js";
 import { LoopService } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
+import type {
+  CodexSessionBridge,
+  CodexSessionRequest,
+  CodexSessionResult
+} from "../src/codex/sessionBridge.js";
 
 const tempDirs: string[] = [];
 
@@ -17,12 +22,40 @@ afterEach(async () => {
 async function createHandlers() {
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-mcp-"));
   tempDirs.push(dir);
+  const sessionRequests: CodexSessionRequest[] = [];
+  const sessionBridge: CodexSessionBridge = {
+    async createSession(request) {
+      sessionRequests.push(request);
+      return {
+        sessionId: `session_${sessionRequests.length}`,
+        runId: request.runId,
+        stepId: request.stepId,
+        phaseId: request.phaseId,
+        title: request.title,
+        status: "requested",
+        createdAt: "2026-06-23T00:00:00.000Z",
+        prompt: request.prompt,
+        workflowRuntime: request.workflowRuntime,
+        workflowContractId: request.workflowContractId,
+        workflowPlan: request.workflowPlan,
+        projectId: request.projectId,
+        projectLabel: request.projectLabel,
+        projectPath: request.projectPath
+      };
+    },
+    async sendMessage() {},
+    async recordResult() {},
+    async readResult(): Promise<CodexSessionResult | undefined> {
+      return undefined;
+    }
+  };
 
   const service = new LoopService({
     store: new LoopStore(dir),
     now: () => "2026-06-23T00:00:00.000Z",
     createId: (prefix) => `${prefix}_1`,
-    previewBaseUrl: "http://127.0.0.1:47888"
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge
   });
 
   return createToolHandlers(service);
@@ -62,7 +95,9 @@ test("exposes formal contract and engine run operations as MCP content", async (
     verification: {
       mode: "after_workflow",
       rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    },
+    repairPolicy: { maxAttempts: 3, strategy: "ask_human" },
+    stopPolicy: { rule: "Stop after a verified daily report", maxConsecutiveFailures: 2 }
   }));
   const run = readResult(await handlers.start_loop_run({ loopId: contract.id, goal: "Manual check" }));
   const detail = readResult(await handlers.get_run_detail({ runId: run.id }));
@@ -70,21 +105,47 @@ test("exposes formal contract and engine run operations as MCP content", async (
   expect(contract).toMatchObject({
     id: "loop_1",
     goal: "Track AI tool updates",
-    body: { steps: [{ id: "scan", kind: "agent" }] }
+    body: { steps: [{ id: "scan", kind: "agent" }] },
+    repairPolicy: { maxAttempts: 3, strategy: "ask_human" },
+    stopPolicy: { rule: "Stop after a verified daily report", maxConsecutiveFailures: 2 }
   });
   expect(detail).toMatchObject({
-    run: { id: "run_1", status: "running" },
-    events: [
-      {
-        data: {
-          engineEvent: {
-            type: "run_started",
-            runId: "run_1"
+    run: {
+      id: "run_1",
+      status: "running",
+      codexSession: {
+        status: "requested",
+        subagents: [
+          {
+            role: "Scan",
+            status: "requested"
           }
-        }
+        ]
       }
-    ]
+    }
   });
+  expect(detail.events).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      kind: "attempt_started",
+      message: "工作流执行第 1 次"
+    }),
+    expect.objectContaining({
+      data: expect.objectContaining({
+        engineEvent: expect.objectContaining({
+          type: "run_started",
+          runId: "run_1"
+        })
+      })
+    }),
+    expect.objectContaining({
+      data: expect.objectContaining({
+        codexSession: expect.objectContaining({
+          workflowRuntime: "dittosloop-local-workflow",
+          workflowContractId: "loop_1"
+        })
+      })
+    })
+  ]));
 });
 
 test("exposes attempt and run detail operations as MCP content", async () => {
@@ -164,10 +225,92 @@ test("exposes codex thread writeback as MCP content", async () => {
       threadTitle: "DittosLoop: Monitor",
       subagents: [
         {
-          status: "completed",
+          status: "running",
           threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
         }
       ]
+    }
+  });
+});
+
+test("exposes codex session result writeback as MCP content", async () => {
+  const handlers = await createHandlers();
+  const loop = readResult(await handlers.create_loop({ title: "Monitor", intent: "Watch updates" }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Check today" }));
+  await handlers.record_codex_thread({
+    runId: launch.run.id,
+    threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
+  });
+
+  const run = readResult(await handlers.record_session_result({
+    runId: launch.run.id,
+    status: "passed",
+    summary: "Worker result passed verification",
+    result: "Daily report body",
+    checks: [{ name: "Daily report", status: "passed", output: "Chinese report generated" }]
+  }));
+
+  expect(run).toMatchObject({
+    id: launch.run.id,
+    status: "completed",
+    codexSession: {
+      subagents: [{ status: "completed" }]
+    }
+  });
+});
+
+test("exposes codex session open and resume operations as MCP content", async () => {
+  const handlers = await createHandlers();
+  const loop = readResult(await handlers.create_loop_contract({
+    title: "AI Dev Tools Daily",
+    goal: "Write the daily report",
+    body: {
+      steps: [{ id: "write", kind: "agent", label: "Write report", prompt: "Write a Chinese daily report" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "zh", label: "Chinese", requirement: "Use Chinese", severity: "must" }]
+    },
+    projectBinding: {
+      codexProjectId: "project-1",
+      projectLabel: "dittos loop"
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Run once" }));
+  await handlers.record_codex_thread({
+    runId: launch.run.id,
+    threadId: "019ef91e-0f19-74d5-b14c-bac2f257d269",
+    threadTitle: "DittosLoop: AI Dev Tools Daily",
+    threadUrl: "codex://thread/019ef91e-0f19-74d5-b14c-bac2f257d269"
+  });
+
+  const opened = readResult(await handlers.open_codex_session({ runId: launch.run.id }));
+  const resumed = readResult(await handlers.resume_loop_run({ runId: launch.run.id, goal: "Repair the report" }));
+
+  expect(opened).toMatchObject({
+    status: "ready",
+    threadId: "019ef91e-0f19-74d5-b14c-bac2f257d269",
+    threadUrl: "codex://thread/019ef91e-0f19-74d5-b14c-bac2f257d269"
+  });
+  expect(resumed).toMatchObject({
+    run: {
+      id: launch.run.id,
+      status: "running",
+      goal: "Repair the report",
+      codexProjectId: "project-1",
+      projectLabel: "dittos loop"
+    },
+    attempt: {
+      runId: launch.run.id,
+      status: "running"
+    },
+    launchRequest: {
+      runId: launch.run.id,
+      loopId: loop.id,
+      workflowRuntime: "dittosloop-local-workflow",
+      workflowContractId: loop.id,
+      codexProjectId: "project-1",
+      projectLabel: "dittos loop"
     }
   });
 });
@@ -190,6 +333,9 @@ test("registers the DittosLoop tool surface", () => {
     "start_loop_run",
     "start_codex_session",
     "record_codex_thread",
+    "record_session_result",
+    "resume_loop_run",
+    "open_codex_session",
     "start_attempt",
     "complete_attempt",
     "append_event",

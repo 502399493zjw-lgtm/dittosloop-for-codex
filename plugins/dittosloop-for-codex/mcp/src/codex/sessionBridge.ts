@@ -1,7 +1,32 @@
+export interface CodexWorkflowLaunchPlanStep {
+  id: string;
+  kind: "agent" | "parallel" | "phase";
+  label: string;
+  depth: number;
+  phaseId?: string;
+  prompt?: string;
+  sessionPolicy?: "new" | "reuse-run" | "reuse-step";
+}
+
+export interface CodexWorkflowLaunchPlan {
+  runtime: "dittosloop-local-workflow";
+  contractId: string;
+  goal: string;
+  steps: CodexWorkflowLaunchPlanStep[];
+  verification: unknown;
+  repairPolicy: unknown;
+  stopPolicy: unknown;
+}
+
 export interface CodexSessionRequest {
   runId: string;
   stepId?: string;
+  phaseId?: string;
   title: string;
+  prompt?: string;
+  workflowRuntime?: "dittosloop-local-workflow";
+  workflowContractId?: string;
+  workflowPlan?: CodexWorkflowLaunchPlan;
   projectId?: string;
   projectLabel?: string;
   projectPath?: string;
@@ -11,9 +36,14 @@ export interface CodexSessionRef {
   sessionId: string;
   runId: string;
   stepId?: string;
+  phaseId?: string;
   title: string;
   status: "requested" | "started" | "completed" | "failed";
   createdAt: string;
+  prompt?: string;
+  workflowRuntime?: "dittosloop-local-workflow";
+  workflowContractId?: string;
+  workflowPlan?: CodexWorkflowLaunchPlan;
   projectId?: string;
   projectLabel?: string;
   projectPath?: string;

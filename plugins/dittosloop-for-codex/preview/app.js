@@ -5,11 +5,12 @@ const formatDate = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit"
 });
 
+const UNASSIGNED_PROJECT_LABEL = "无项目";
+
 const elements = {
+  shell: document.querySelector(".loop-shell"),
   newLoop: document.querySelector("#new-loop"),
   loops: document.querySelector("#loops"),
-  loopGroupLabel: document.querySelector("#loop-group-label"),
-  loopGroupCount: document.querySelector("#loop-group-count"),
   loopStage: document.querySelector("#loop-stage")
 };
 
@@ -18,8 +19,8 @@ let selectedRunId = null;
 let currentSnapshot = null;
 let activeLoopTab = "history";
 let selectedDirectoryPath = "flow.js";
-let selectedCodexProjectId = "";
 let selectedRunPhaseId = "attempts";
+let loopSelectionClosed = false;
 let observedHash = window.location.hash;
 
 elements.newLoop.addEventListener("click", () => {
@@ -60,7 +61,7 @@ async function loadSnapshot() {
 
     const loops = snapshot.loops ?? [];
     const runs = snapshot.runs ?? [];
-    if (!selectedLoopId || !loops.some((loop) => loop.id === selectedLoopId)) {
+    if ((!selectedLoopId || !loops.some((loop) => loop.id === selectedLoopId)) && !loopSelectionClosed) {
       selectedLoopId = newestLoopId(loops, runs);
     }
 
@@ -104,10 +105,10 @@ function render(snapshot) {
   const loops = snapshot.loops ?? [];
   const runs = snapshot.runs ?? [];
   const verificationResults = snapshot.verificationResults ?? [];
+  const loopGroups = groupedLoopsByProject(snapshot, loops);
 
-  elements.loopGroupLabel.textContent = currentLoopGroupLabel(snapshot, loops);
-  elements.loopGroupCount.textContent = String(loops.length);
-  elements.loops.replaceChildren(...renderLoopRows(loops, runs, verificationResults));
+  updateWorkspaceState();
+  elements.loops.replaceChildren(...renderLoopGroups(loopGroups, runs, verificationResults));
 }
 
 async function loadRunDetail(runId) {
@@ -120,15 +121,27 @@ async function loadRunDetail(runId) {
   const detail = await response.json();
   selectedRunId = detail.run.id;
   selectedLoopId = detail.loop.id;
+  loopSelectionClosed = false;
   render(currentSnapshot);
   renderLoopStage({ snapshot: currentSnapshot, detail });
 }
 
-function renderLoopRows(loops, runs, verificationResults) {
-  if (loops.length === 0) {
+function renderLoopGroups(groups, runs, verificationResults) {
+  if (groups.length === 0) {
     return [empty("还没有 Live Loop")];
   }
 
+  return groups.flatMap((group) => [
+    el("div", "loop-project-group-title", [
+      el("span", "loop-project-group-dot", ""),
+      el("span", "loop-project-group-name", group.label),
+      el("span", "group-count", String(group.loops.length))
+    ]),
+    ...renderLoopRows(group.loops, runs, verificationResults)
+  ]);
+}
+
+function renderLoopRows(loops, runs, verificationResults) {
   return loops.map((loop) => {
     const loopRuns = runsForLoop(loop.id, runs);
     const latestRun = loopRuns.at(-1);
@@ -139,6 +152,7 @@ function renderLoopRows(loops, runs, verificationResults) {
     const row = button("loop-row", () => {
       selectedLoopId = loop.id;
       selectedRunId = null;
+      loopSelectionClosed = false;
       activeLoopTab = "history";
       render(currentSnapshot);
       renderLoopStage({ snapshot: currentSnapshot });
@@ -151,7 +165,6 @@ function renderLoopRows(loops, runs, verificationResults) {
         el("span", "loop-name", loop.title),
         el("p", "loop-description", loop.intent),
         el("div", "loop-row-meta", [
-          loopProjectLabel(loop, currentSnapshot) ? el("span", "loop-project-pill", loopProjectLabel(loop, currentSnapshot)) : null,
           el("span", "mono", `${loopRuns.length} runs`),
           el("span", "divider", "·"),
           statusChip(latestRun?.status ?? loop.status),
@@ -165,8 +178,36 @@ function renderLoopRows(loops, runs, verificationResults) {
   });
 }
 
+function groupedLoopsByProject(snapshot, loops) {
+  const groups = new Map();
+  for (const loop of loops) {
+    const label = loopProjectLabel(loop, snapshot) ?? UNASSIGNED_PROJECT_LABEL;
+    if (!groups.has(label)) {
+      groups.set(label, []);
+    }
+    groups.get(label).push(loop);
+  }
+
+  const projectOrder = projectChoices(snapshot).map((project) => project.name);
+  return [...groups.entries()]
+    .sort(([left], [right]) => {
+      const leftIndex = projectOrder.indexOf(left);
+      const rightIndex = projectOrder.indexOf(right);
+      if (leftIndex !== -1 || rightIndex !== -1) {
+        if (leftIndex === -1) return 1;
+        if (rightIndex === -1) return -1;
+        return leftIndex - rightIndex;
+      }
+      if (left === UNASSIGNED_PROJECT_LABEL) return 1;
+      if (right === UNASSIGNED_PROJECT_LABEL) return -1;
+      return left.localeCompare(right);
+    })
+    .map(([label, groupLoops]) => ({ label, loops: groupLoops }));
+}
+
 function renderLoopStage({ snapshot, detail }) {
   if (!snapshot) return;
+  updateWorkspaceState();
 
   const loops = snapshot.loops ?? [];
   const runs = snapshot.runs ?? [];
@@ -192,7 +233,7 @@ function renderLoopStage({ snapshot, detail }) {
       el("div", "active-tab", [
         inlineIcon("gear"),
         el("span", "tab-title", loop.title),
-        el("span", "tab-close", "×")
+        button("tab-close-button", closeCurrentLoopTab, "×")
       ])
     ]),
     el("header", "stage-header", [
@@ -213,7 +254,6 @@ function renderLoopStage({ snapshot, detail }) {
         checks.length ? el("span", "trigger-note", ` · ${checks.length} 个验证点`) : null
       ]),
       el("span", "trigger-actions", [
-        renderProjectPicker(snapshot, loop),
         button("ghost-button launch-button", () => {
           void startCodexSession(loop);
         }, "生成启动请求"),
@@ -231,64 +271,58 @@ function renderLoopStage({ snapshot, detail }) {
   ].flat().filter(Boolean));
 }
 
-function renderProjectPicker(snapshot, loop) {
-  const projects = projectChoices(snapshot);
-  if (!projects.length) {
-    return null;
+function closeCurrentLoopTab() {
+  selectedLoopId = null;
+  selectedRunId = null;
+  loopSelectionClosed = true;
+  activeLoopTab = "history";
+  if (window.location.hash) {
+    window.history.replaceState(null, "", window.location.pathname);
+    observedHash = window.location.hash;
   }
+  render(currentSnapshot);
+  renderLoopStage({ snapshot: currentSnapshot });
+}
 
-  const loopProjectId = projects.some((project) => project.id === loop?.codexProjectId)
-    ? loop.codexProjectId
-    : null;
-  if (!selectedCodexProjectId || !projects.some((project) => project.id === selectedCodexProjectId)) {
-    selectedCodexProjectId = loopProjectId ?? projects[0].id;
-  }
-
-  const select = el("select", "project-picker", projects.map((project) => {
-    const option = el("option", "", project.name);
-    option.value = project.id;
-    return option;
-  }));
-  select.value = selectedCodexProjectId;
-  select.addEventListener("change", () => {
-    selectedCodexProjectId = select.value;
-  });
-  return select;
+function updateWorkspaceState() {
+  const workspaceClosed = !selectedLoopId && !selectedRunId;
+  elements.shell?.classList.toggle("workspace-closed", workspaceClosed);
 }
 
 function projectChoices(snapshot) {
   const projects = snapshot?.codexProjects ?? [];
   return projects
-    .filter((project) => project?.id && project?.name && project?.path)
+    .filter((project) => project?.id && (project?.name || project?.label) && project?.path)
     .map((project) => ({
       id: project.id,
-      name: project.name,
+      name: project.name ?? project.label,
       path: project.path
     }));
 }
 
-function currentLoopGroupLabel(snapshot, loops) {
-  const selectedLoop = loops.find((loop) => loop.id === selectedLoopId);
-  const loopLabel = selectedLoop ? loopProjectLabel(selectedLoop, snapshot) : null;
-  const selectedProject = projectChoices(snapshot).find((project) => project.id === selectedCodexProjectId);
-
-  return loopLabel ?? selectedProject?.name ?? "未归项目";
-}
-
 function loopProjectLabel(loop, snapshot) {
   if (!loop) return null;
-  if (loop.projectLabel) return loop.projectLabel;
-
-  const project = projectChoices(snapshot).find((candidate) => {
+  const projects = projectChoices(snapshot);
+  const project = projects.find((candidate) => {
     return candidate.id === loop.codexProjectId || candidate.path === loop.projectPath;
   });
+  if (project) return project.name;
 
-  return project?.name ?? null;
+  const labelOnlyProject = projects.find((candidate) => candidate.name === loop.projectLabel);
+  return labelOnlyProject?.name ?? null;
+}
+
+function projectForLoop(snapshot, loop) {
+  const projects = projectChoices(snapshot);
+  if (!loop) return projects[0] ?? null;
+
+  return projects.find((project) => {
+    return project.id === loop.codexProjectId || project.path === loop.projectPath || project.name === loop.projectLabel;
+  }) ?? null;
 }
 
 async function startNewLoopSession() {
-  const project = projectChoices(currentSnapshot).find((item) => item.id === selectedCodexProjectId)
-    ?? projectChoices(currentSnapshot)[0];
+  const project = projectChoices(currentSnapshot)[0];
   const body = project
     ? {
         codexProjectId: project.id,
@@ -315,7 +349,7 @@ async function startNewLoopSession() {
 }
 
 async function startCodexSession(loop) {
-  const project = projectChoices(currentSnapshot).find((item) => item.id === selectedCodexProjectId);
+  const project = projectForLoop(currentSnapshot, loop) ?? projectChoices(currentSnapshot)[0];
   if (!project) {
     renderError("没有可用的 Codex App 项目，无法创建 Codex 会话请求。");
     return;
@@ -338,15 +372,21 @@ async function startCodexSession(loop) {
 
   const launch = await response.json();
   window.__dittosloopLastLaunchRequest = launch.launchRequest;
+  window.dispatchEvent(new CustomEvent("dittosloop:create-codex-thread", { detail: launch.launchRequest }));
+  window.parent?.postMessage({ type: "dittosloop:create-codex-thread", launchRequest: launch.launchRequest }, "*");
   selectedRunId = launch.run.id;
   selectedLoopId = launch.run.loopId;
   activeLoopTab = "history";
   writeRouteState("run", selectedRunId);
+  renderNotice("已生成 Codex 会话请求，等待 Codex App 打开新会话。");
   await loadSnapshot();
 }
 
 async function deleteLoop(loop) {
-  if (!window.confirm(`删除「${loop.title}」？`)) {
+  const confirmed = typeof window.confirm === "function"
+    ? window.confirm(`删除「${loop.title}」及其所有运行记录？`)
+    : true;
+  if (!confirmed) {
     return;
   }
 
@@ -453,9 +493,7 @@ function renderHistoryRows(runs, verificationResults, humanRequests) {
         humanRequest ? el("b", "", "· 等待你") : null
       ]),
       el("span", "history-actions", [
-        run.codexSession?.threadUrl
-          ? openSessionButton(run.codexSession.threadUrl, "打开会话", "history-session-button")
-          : el("span", "history-session-state", run.codexSession ? "待创建会话" : "未关联会话"),
+        sessionActionForRun(run, "history-session-button", "history-session-state"),
         el("span", "open-run", "看 run ›")
       ])
     );
@@ -477,11 +515,14 @@ function renderRunBoard({ detail, loop, loopRuns }) {
 
   elements.loopStage.replaceChildren(...[
     el("div", "tab-strip run-tabs", [
-      button("inactive-tab", () => {
-        selectedRunId = null;
-        writeRouteState("history");
-        renderLoopStage({ snapshot: currentSnapshot });
-      }, [el("span", "tab-title", loop.title)]),
+      el("div", "inactive-tab", [
+        button("inactive-tab-title", () => {
+          selectedRunId = null;
+          writeRouteState("history");
+          renderLoopStage({ snapshot: currentSnapshot });
+        }, [el("span", "tab-title", loop.title)]),
+        button("tab-close-button", closeCurrentLoopTab, "×")
+      ]),
       el("div", "active-tab run-tab", [
         el("span", "", `第 ${runIndex} 轮`),
         el("span", "tab-time", formatClock(new Date(run.createdAt))),
@@ -502,8 +543,8 @@ function renderRunBoard({ detail, loop, loopRuns }) {
         el("span", "", `${statusText(run.status)} ${done}/${total}`)
       ]),
       run.codexSession?.threadUrl
-        ? openSessionButton(run.codexSession.threadUrl, "打开会话")
-        : el("span", "open-session-button disabled", run.codexSession ? "待创建会话" : "未关联会话")
+        ? openSessionButtonForRun(run.id, "打开会话")
+        : sessionActionForRun(run)
     ]),
     el("div", "run-meta-line", [
       inlineIcon("bolt"),
@@ -511,9 +552,7 @@ function renderRunBoard({ detail, loop, loopRuns }) {
       el("span", "divider", "·"),
       el("span", "", formatClock(new Date(run.createdAt))),
       run.goal ? el("span", "divider", "·") : null,
-      run.goal ? el("span", "run-input-label", run.goal) : null,
-      runProjectLabel(run) ? el("span", "divider", "·") : null,
-      runProjectLabel(run) ? el("span", "run-project-label", runProjectLabel(run)) : null
+      run.goal ? el("span", "run-input-label", run.goal) : null
     ]),
     activeHumanRequest
       ? el("section", "approval-band", [
@@ -534,14 +573,13 @@ function renderRunBoard({ detail, loop, loopRuns }) {
           ])
         )
       ]),
-      el("div", "phase-detail", activePhase ? [
+      el("div", "phase-detail", activePhase && activePhase.agents.length ? [
         el("section", "phase-agent-group", [
           el("div", "phase-group-label", activePhase.name),
-          ...(activePhase.agents.length ? activePhase.agents.map((agent) => renderAgentCard(agent)) : [el("p", "detail-empty", `「${activePhase.name}」阶段暂无 agent 明细。`)])
+          ...activePhase.agents.map((agent) => renderAgentCard(agent))
         ])
-      ] : [])
-    ]),
-    renderSummaryOutput(detail)
+      ] : [el("p", "detail-empty", "当前运行没有可展示的 agent 明细。")])
+    ])
   ].filter(Boolean));
 }
 
@@ -557,7 +595,7 @@ function buildRunPhases(detail) {
           description: run.codexSession.threadId
             ? "点击查看这次任务的实际运行结果。"
             : "等待 Codex App 创建任务会话。",
-          meta: runProjectLabel(run) || "当前项目",
+          meta: "Codex session",
           threadId: run.codexSession.threadId,
           threadTitle: run.codexSession.threadTitle,
           threadUrl: run.codexSession.threadUrl
@@ -568,61 +606,187 @@ function buildRunPhases(detail) {
     .filter(() => !run.codexSession)
     .map((attempt) => ({
     id: attempt.id,
-    avatar: run.codexSession ? "启" : "流",
-    name: run.codexSession ? "Codex session request" : "Workflow attempt",
+    avatar: "流",
+    name: "工作流执行",
     status: attempt.status,
     description: attempt.summary ?? attempt.id,
     meta: attempt.completedAt ? formatDate.format(new Date(attempt.completedAt)) : "运行中",
-    threadId: run.codexSession?.threadId,
-    threadTitle: run.codexSession?.threadTitle,
-    threadUrl: run.codexSession?.threadUrl,
-    showSessionLink: Boolean(run.codexSession)
-  }));
-  const workflowAgents = (detail.workflowRevisions ?? []).map((revision) => ({
-    id: revision.id,
-    avatar: "稿",
-    name: "Workflow draft",
-    status: revision.status,
-    description: revision.reason,
-    meta: revision.createdAt ? formatDate.format(new Date(revision.createdAt)) : "候选 workflow",
     showSessionLink: false
   }));
   const verificationAgents = detail.verificationResults.map((result) => ({
     id: result.id,
     avatar: result.status === "failed" ? "!" : "验",
-    name: "Verification",
+    name: "验证结果",
     status: result.status,
     description: result.summary,
     meta: result.attemptId ? `Attempt ${result.attemptId}` : "Run level"
   }));
-  const timelineAgents = buildPreviewTimelineAgents(detail);
+  const phases = [];
+  const startAgents = [...sessionAgents, ...attemptAgents];
 
-  return [
-    {
+  if (startAgents.length) {
+    phases.push({
       id: "attempts",
       name: "启动执行",
-      status: [...sessionAgents, ...attemptAgents].some((agent) => agent.status === "running" || agent.status === "requested") ? "running" : "completed",
-      agents: [...sessionAgents, ...attemptAgents]
-    },
-    {
+      status: startAgents.some((agent) => agent.status === "running" || agent.status === "requested") ? "running" : "completed",
+      agents: startAgents
+    });
+  }
+
+  for (const section of detail.timeline ?? []) {
+    const sectionPhases = section.id === "workflow"
+      ? workflowTimelinePhases(section, run.status)
+      : [timelineSectionPhase(section, run.status)].filter(Boolean);
+    phases.push(...sectionPhases);
+  }
+
+  if (!phases.some((phase) => phase.id === "verification") && verificationAgents.length) {
+    phases.push({
       id: "verification",
       name: "验证",
       status: verificationAgents.some((agent) => agent.status === "failed") ? "failed" : "passed",
       agents: verificationAgents
-    },
-    {
-      id: "workflow",
-      name: "工作流草稿",
-      status: workflowAgents.length ? "draft" : "completed",
-      agents: workflowAgents
-    },
-    {
+    });
+  }
+
+  if (!phases.length) {
+    phases.push({
       id: "timeline",
       name: "时间线",
       status: run.status,
-      agents: timelineAgents
+      agents: buildPreviewTimelineAgents(detail)
+    });
+  }
+
+  return phases;
+}
+
+function timelineSectionPhase(section, fallbackStatus) {
+  const agents = timelineSectionAgents(section);
+  if (!agents.length) return null;
+  return {
+    id: section.id,
+    name: section.title,
+    status: timelineSectionStatus(section, fallbackStatus),
+    agents
+  };
+}
+
+function workflowTimelinePhases(section, fallbackStatus) {
+  const items = compactTimelineItems(section.items ?? []);
+  const phaseOrder = [];
+  const phaseMap = new Map();
+  const looseAgents = [];
+  let currentPhaseId = null;
+
+  for (const item of items) {
+    if (item.kind === "phase" || item.kind === "parallel") {
+      const phaseId = workflowGroupId(item, phaseOrder.length);
+      const nextStatus = timelineStatus(item.status);
+      currentPhaseId = nextStatus === "completed" || nextStatus === "passed" || nextStatus === "failed" ? null : phaseId;
+      let phase = phaseMap.get(phaseId);
+      if (!phase) {
+        phase = {
+          id: `workflow-${phaseId}`,
+          name: item.label,
+          status: timelineStatus(item.status),
+          agents: []
+        };
+        phaseMap.set(phaseId, phase);
+        phaseOrder.push(phaseId);
+      } else {
+        phase.name = item.label || phase.name;
+        phase.status = mergePhaseTimelineStatus(phase.status, item.status);
+      }
+      continue;
     }
-  ];
+
+    if (item.kind !== "agent") continue;
+    const agent = timelineItemAgent(section, item, phaseMap.size + looseAgents.length);
+    const phaseId = item.phaseId ?? currentPhaseId;
+    if (!phaseId || !phaseMap.has(phaseId)) {
+      looseAgents.push(agent);
+      continue;
+    }
+    phaseMap.get(phaseId).agents.push(agent);
+  }
+
+  const phases = phaseOrder
+    .map((phaseId) => phaseMap.get(phaseId))
+    .filter((phase) => phase.agents.length);
+
+  if (looseAgents.length) {
+    phases.push({
+      id: "workflow-agents",
+      name: section.title,
+      status: agentsStatus(looseAgents, fallbackStatus),
+      agents: looseAgents
+    });
+  }
+
+  return phases;
+}
+
+function workflowGroupId(item, fallbackIndex) {
+  if (item.stepId) return item.stepId;
+  if (item.phaseId) return item.phaseId;
+  if (item.kind === "parallel" && item.label) return `parallel-${slugifyId(item.label)}`;
+  return `${item.kind}-${item.sequence ?? fallbackIndex}`;
+}
+
+function slugifyId(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "group";
+}
+
+function timelineSectionAgents(section) {
+  return compactTimelineItems(section.items ?? []).map((item, index) => timelineItemAgent(section, item, index));
+}
+
+function timelineItemAgent(section, item, index) {
+  const session = sessionFromTimelineItem(item);
+  return {
+    id: `${section.id}-${item.kind}-${item.stepId ?? item.sequence ?? index}`,
+    avatar: timelineAvatar(item.kind),
+    name: item.label,
+    status: timelineStatus(item.status),
+    description: item.message,
+    meta: item.createdAt ? `${section.title} · ${formatDate.format(new Date(item.createdAt))}` : section.title,
+    threadId: session?.threadId,
+    threadTitle: session?.threadTitle,
+    threadUrl: session?.threadUrl,
+    showSessionLink: item.kind === "agent" && session?.threadUrl ? undefined : false
+  };
+}
+
+function mergeTimelineStatus(current, next) {
+  return agentsStatus([{ status: current }, { status: next }], next);
+}
+
+function mergePhaseTimelineStatus(current, nextRaw) {
+  const next = timelineStatus(nextRaw);
+  if (["completed", "passed", "failed", "skipped"].includes(next)) return next;
+  return mergeTimelineStatus(current, next);
+}
+
+function agentsStatus(agents, fallbackStatus) {
+  const statuses = agents.map((agent) => timelineStatus(agent.status));
+  if (statuses.includes("failed")) return "failed";
+  if (statuses.includes("repairing")) return "repairing";
+  if (statuses.includes("running")) return "running";
+  if (statuses.includes("passed")) return "passed";
+  if (statuses.includes("completed")) return "completed";
+  return fallbackStatus;
+}
+
+function timelineSectionStatus(section, fallbackStatus) {
+  const items = compactTimelineItems(section.items ?? []);
+  const finalItem = [...items].reverse().find((item) => ["completed", "passed", "failed", "skipped"].includes(timelineStatus(item.status)));
+  if (finalItem) return timelineStatus(finalItem.status);
+  return agentsStatus(items, fallbackStatus);
 }
 
 function buildPreviewTimelineAgents(detail) {
@@ -708,14 +872,27 @@ function workflowAgentCards(detail) {
     .flatMap((section) => section.items)
     .filter((item) => item.kind === "agent");
 
-  return compactTimelineItems(items).map((item, index) => ({
-    id: `${item.stepId ?? "agent"}-${item.sequence ?? index}`,
-    avatar: "代",
-    name: item.label,
-    status: timelineStatus(item.status),
-    description: item.message,
-    meta: item.createdAt ? formatDate.format(new Date(item.createdAt)) : "workflow agent"
-  }));
+  return compactTimelineItems(items).map((item, index) => {
+    const session = sessionFromTimelineItem(item);
+    return {
+      id: `${item.stepId ?? "agent"}-${item.sequence ?? index}`,
+      avatar: "代",
+      name: item.label,
+      status: timelineStatus(item.status),
+      description: item.message,
+      meta: item.createdAt ? formatDate.format(new Date(item.createdAt)) : "workflow agent",
+      threadId: session?.threadId,
+      threadTitle: session?.threadTitle,
+      threadUrl: session?.threadUrl,
+      showSessionLink: session?.threadUrl ? undefined : false
+    };
+  });
+}
+
+function sessionFromTimelineItem(item) {
+  const session = item?.session;
+  if (!session || typeof session !== "object") return null;
+  return session;
 }
 
 function compactTimelineItems(items) {
@@ -740,7 +917,8 @@ function timelineAvatar(kind) {
     agent: "代",
     parallel: "并",
     verification: "验",
-    repair: "修"
+    repair: "修",
+    human: "问"
   };
   return avatars[kind] ?? "记";
 }
@@ -748,7 +926,8 @@ function timelineAvatar(kind) {
 function timelineStatus(status) {
   const aliases = {
     started: "running",
-    needed: "repairing"
+    needed: "repairing",
+    needs_human: "waiting_for_human"
   };
   return aliases[status] ?? status;
 }
@@ -792,28 +971,47 @@ function openSessionButton(threadUrl, label = "打开会话", className = "open-
   return action;
 }
 
-function shortThreadId(threadId) {
-  return threadId.length > 12 ? `${threadId.slice(0, 8)}...${threadId.slice(-4)}` : threadId;
+function openSessionButtonForRun(runId, label = "打开会话", className = "open-session-button") {
+  const action = button(className, async (event) => {
+    event.stopPropagation();
+    action.disabled = true;
+    try {
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/open-codex-session`, {
+        method: "POST"
+      });
+      const session = await response.json();
+      if (!response.ok || session.status !== "ready" || !session.threadUrl) {
+        action.textContent = session.message ?? "会话未就绪";
+        action.classList.add("disabled");
+        return;
+      }
+      window.location.href = session.threadUrl;
+    } catch (error) {
+      action.textContent = "会话未就绪";
+      action.classList.add("disabled");
+    } finally {
+      action.disabled = false;
+    }
+  }, [
+    el("span", "", label),
+    el("span", "open-session-arrow", "›")
+  ]);
+  action.title = "打开对应的 Codex session";
+  return action;
 }
 
-function renderSummaryOutput(detail) {
-  const memories = detail.memoryCommits ?? [];
-  const artifacts = detail.artifacts ?? [];
-  const latestOutput = [...(detail.events ?? [])].reverse().find((event) => event.data?.output)?.data?.output;
-  if (!latestOutput && memories.length === 0 && artifacts.length === 0) {
-    return null;
+function sessionActionForRun(run, className = "open-session-button", pendingClassName = "open-session-button disabled") {
+  if (run.codexSession?.threadUrl) {
+    return openSessionButtonForRun(run.id, "打开会话", className);
   }
+  if (run.codexSession) {
+    return el("span", pendingClassName, "等待 Codex App 创建");
+  }
+  return null;
+}
 
-  return el("section", "summary-output", [
-    el("div", "summary-kicker", "汇总输出"),
-    latestOutput ? el("p", "summary-copy", latestOutput) : null,
-    memories.length ? el("p", "summary-copy muted", memories.at(-1).summary) : null,
-    artifacts.length
-      ? el("div", "artifact-strip", artifacts.map((artifact) =>
-          el("span", "artifact-pill", artifact.title ?? artifact.url ?? artifact.path)
-        ))
-      : null
-  ]);
+function shortThreadId(threadId) {
+  return threadId.length > 12 ? `${threadId.slice(0, 8)}...${threadId.slice(-4)}` : threadId;
 }
 
 function newestLoopId(loops, runs) {
@@ -835,21 +1033,7 @@ function buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks }) {
       path: "flow.js",
       language: "javascript",
       meta: "JS",
-      content: [
-        `export const loop = ${JSON.stringify(loop.title)};`,
-        "",
-        "export async function run(context) {",
-        "  const launch = await context.dittosloop.startCodexSession({",
-        "    loopId: context.loop.id,",
-        "    project: context.project,",
-        "    prompt: context.userPrompt",
-        "  });",
-        "",
-        "  const thread = await context.codexApp.createThread(launch.launchRequest);",
-        "  await context.dittosloop.recordCodexThread({ runId: launch.run.id, ...thread });",
-        "  return thread;",
-        "}"
-      ].join("\n")
+      content: formalContract ? formalWorkflowFlowFile(formalContract) : compatibilityFlowFile(loop)
     },
     {
       path: "memory.md",
@@ -870,8 +1054,7 @@ function buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks }) {
         "- DittosLoop 只生成 launchRequest，不在预览页里伪造 session。",
         "- Codex App 宿主负责 create_thread，并把 threadId/threadUrl 写回 run。",
         "- 新 session 的输入作为 user prompt 注入，提醒 agent 读取 loop 目标、历史和验证点。",
-        "- session 执行结果在 Codex 原生会话里查看；DittosLoop 记录 run、attempt、verification 和链接。",
-        latestRun ? `- 最近关联项目：${runProjectLabel(latestRun) ?? "未关联 Codex 项目"}` : ""
+        "- session 执行结果在 Codex 原生会话里查看；DittosLoop 记录 run、attempt、verification 和链接。"
       ].join("\n")
     },
     ...workflowFiles,
@@ -907,8 +1090,6 @@ function buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks }) {
               runId: latestRun.id,
               loopId: latestRun.loopId,
               title: `DittosLoop: ${loop.title}`,
-              projectLabel: latestRun.projectLabel,
-              projectPath: latestRun.projectPath,
               prompt: latestRun.codexSession.prompt
             }
           : null,
@@ -924,6 +1105,99 @@ function buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks }) {
         }
       }, null, 2)
     }
+  ];
+}
+
+function compatibilityFlowFile(loop) {
+  return [
+    `export const loop = ${JSON.stringify(loop.title)};`,
+    "",
+    "export async function run(context) {",
+    "  const launch = await context.dittosloop.startCodexSession({",
+    "    loopId: context.loop.id,",
+    "    project: context.project,",
+    "    prompt: context.userPrompt",
+    "  });",
+    "",
+    "  const thread = await context.codexApp.createThread(launch.launchRequest);",
+    "  await context.dittosloop.recordCodexThread({ runId: launch.run.id, ...thread });",
+    "  return thread;",
+    "}"
+  ].join("\n");
+}
+
+function formalWorkflowFlowFile(contract) {
+  const lines = [
+    `export const loop = ${JSON.stringify(contract.title)};`,
+    `export const workflowContractId = ${JSON.stringify(contract.id)};`,
+    `export const goal = ${JSON.stringify(contract.goal)};`,
+    `export const rubrics = ${JSON.stringify(contract.verification?.rubrics ?? [], null, 2)};`,
+    "",
+    "export async function run(context) {",
+    "  const results = [];",
+    ...workflowStepLines(contract.body?.steps ?? [], "  "),
+    "  const verification = await verifyRubrics(context, results);",
+    "  return { results, verification };",
+    "}",
+    "",
+    "async function runPhase(context, label, body) {",
+    "  await context.dittosloop.phaseStarted(label);",
+    "  const result = await body();",
+    "  await context.dittosloop.phaseCompleted(label);",
+    "  return result;",
+    "}",
+    "",
+    "async function runParallel(context, label, tasks) {",
+    "  await context.dittosloop.parallelStarted(label);",
+    "  return Promise.all(tasks.map((task) => task()));",
+    "}",
+    "",
+    "async function runAgent(context, results, step) {",
+    "  const result = await context.codexSession.runAgent(step);",
+    "  results.push({ stepId: step.id, label: step.label, result });",
+    "  await context.dittosloop.agentCompleted(step.id, result);",
+    "  return result;",
+    "}",
+    "",
+    "async function verifyRubrics(context, results) {",
+    "  return context.verifier.check({ results, rubrics });",
+    "}"
+  ];
+  return lines.join("\n");
+}
+
+function workflowStepLines(steps, indent) {
+  return steps.flatMap((step) => workflowStepLine(step, indent));
+}
+
+function workflowStepLine(step, indent) {
+  if (step.kind === "phase") {
+    return [
+      `${indent}await runPhase(context, ${JSON.stringify(step.label)}, async () => {`,
+      ...workflowStepLines(step.children ?? [], `${indent}  `),
+      `${indent}});`
+    ];
+  }
+
+  if (step.kind === "parallel") {
+    return [
+      `${indent}await runParallel(context, ${JSON.stringify(step.label)}, [`,
+      ...(step.children ?? []).flatMap((child) => [
+        `${indent}  async () => {`,
+        ...workflowStepLine(child, `${indent}    `),
+        `${indent}  },`
+      ]),
+      `${indent}]);`
+    ];
+  }
+
+  return [
+    `${indent}await runAgent(context, results, ${JSON.stringify({
+      id: step.id,
+      label: step.label,
+      prompt: step.prompt ?? "",
+      inputs: step.inputs ?? []
+    }, null, 2).replaceAll("\n", `\n${indent}`)});`
   ];
 }
 
@@ -1008,8 +1282,6 @@ function formalLoopDirectoryFiles({ contract, snapshot, loopRuns }) {
               id: latestRun.id,
               status: latestRun.status,
               goal: latestRun.goal,
-              projectLabel: latestRun.projectLabel,
-              projectPath: latestRun.projectPath,
               createdAt: latestRun.createdAt,
               completedAt: latestRun.completedAt
             }
@@ -1089,12 +1361,6 @@ function flattenContractSteps(steps) {
     }
   }
   return result;
-}
-
-function runProjectLabel(run) {
-  if (!run) return "";
-  if (run.projectLabel && run.projectPath) return `${run.projectLabel} · ${run.projectPath}`;
-  return run.projectLabel ?? run.projectPath ?? "";
 }
 
 function readRouteState() {

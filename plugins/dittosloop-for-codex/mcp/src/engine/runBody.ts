@@ -11,22 +11,28 @@ export async function runBody(body: ExecutionBody, api: FlowApi): Promise<unknow
   return results;
 }
 
-async function runStep(step: Step, api: FlowApi): Promise<unknown> {
+async function runStep(step: Step, api: FlowApi, phaseId?: string): Promise<unknown> {
   if (step.kind === "agent") {
-    return api.agent(step.prompt, { label: step.label, stepId: step.id });
+    return api.agent(step.prompt, { label: step.label, stepId: step.id, phaseId });
   }
 
   if (step.kind === "phase") {
-    api.phase(step.label);
-    const results: unknown[] = [];
-    for (const child of step.children) {
-      results.push(await runStep(child, api));
+    const phase = api.phase(step.label, { phaseId: step.id });
+    try {
+      const results: unknown[] = [];
+      for (const child of step.children) {
+        results.push(await runStep(child, api, step.id));
+      }
+      phase.done("ok");
+      return results;
+    } catch (error) {
+      phase.done("failed");
+      throw error;
     }
-    return results;
   }
 
   return api.parallel(
-    step.children.map((child) => () => runStep(child, api)),
+    step.children.map((child) => () => runStep(child, api, phaseId)),
     { label: step.label, stepId: step.id }
   );
 }

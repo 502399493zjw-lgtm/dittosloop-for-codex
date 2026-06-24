@@ -89,6 +89,14 @@ const createLoopContractSchema = z.object({
       severity: z.enum(["must", "should"])
     }))
   }),
+  repairPolicy: z.object({
+    maxAttempts: z.number().int().nonnegative(),
+    strategy: z.enum(["repair_then_retry", "ask_human", "fail_run"])
+  }).optional(),
+  stopPolicy: z.object({
+    rule: z.string().min(1),
+    maxConsecutiveFailures: z.number().int().nonnegative().optional()
+  }).optional(),
   projectBinding: z.object({
     codexProjectId: z.string().optional(),
     projectLabel: z.string().optional(),
@@ -119,6 +127,28 @@ const recordCodexThreadSchema = z.object({
   threadId: z.string().min(1),
   threadTitle: z.string().optional(),
   threadUrl: z.string().optional()
+});
+
+const recordSessionResultSchema = z.object({
+  runId: z.string().min(1),
+  status: z.enum(["passed", "failed", "needs_human"]),
+  summary: z.string().min(1),
+  result: z.string().optional(),
+  checks: z.array(z.object({
+    name: z.string().min(1),
+    status: verificationStatusSchema,
+    output: z.string().optional()
+  })).optional(),
+  humanQuestion: z.string().optional()
+});
+
+const resumeLoopRunSchema = z.object({
+  runId: z.string().min(1),
+  goal: z.string().optional()
+});
+
+const openCodexSessionSchema = z.object({
+  runId: z.string().min(1)
 });
 
 const startAttemptSchema = z.object({
@@ -216,7 +246,7 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     start_loop_run: async (input) => {
       const args = startLoopRunSchema.parse(input);
-      return toToolResult(await service.startLoopRun(args.loopId, {
+      return toToolResult(await service.runLoopWorkflow(args.loopId, {
         goal: args.goal,
         codexProjectId: args.codexProjectId,
         projectLabel: args.projectLabel,
@@ -241,6 +271,24 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
           threadUrl: args.threadUrl
         })
       );
+    },
+    record_session_result: async (input) => {
+      const args = recordSessionResultSchema.parse(input);
+      return toToolResult(await service.recordSessionResult(args.runId, {
+        status: args.status,
+        summary: args.summary,
+        result: args.result,
+        checks: args.checks,
+        humanQuestion: args.humanQuestion
+      }));
+    },
+    resume_loop_run: async (input) => {
+      const args = resumeLoopRunSchema.parse(input);
+      return toToolResult(await service.resumeLoopRun(args.runId, { goal: args.goal }));
+    },
+    open_codex_session: async (input) => {
+      const args = openCodexSessionSchema.parse(input);
+      return toToolResult(await service.openCodexSession(args.runId));
     },
     start_attempt: async (input) => {
       const args = startAttemptSchema.parse(input);
@@ -374,6 +422,24 @@ const toolDefinitions = [
     title: "Record Codex thread",
     description: "Attach a Codex thread id after the Codex App host creates the visible session.",
     schema: recordCodexThreadSchema
+  },
+  {
+    name: "record_session_result",
+    title: "Record session result",
+    description: "Write a Codex session result back to the loop runner and close or pause the run.",
+    schema: recordSessionResultSchema
+  },
+  {
+    name: "resume_loop_run",
+    title: "Resume loop run",
+    description: "Resume an existing loop run by requesting another Codex session attempt.",
+    schema: resumeLoopRunSchema
+  },
+  {
+    name: "open_codex_session",
+    title: "Open Codex session",
+    description: "Return the real Codex thread reference for a run when the host has created it.",
+    schema: openCodexSessionSchema
   },
   {
     name: "start_attempt",
