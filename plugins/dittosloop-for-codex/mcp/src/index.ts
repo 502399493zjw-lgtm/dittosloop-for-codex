@@ -13,7 +13,8 @@ async function main(): Promise<void> {
   const store = new LoopStore(config.dataDir);
   const service = new LoopService({
     store,
-    previewBaseUrl: config.previewBaseUrl
+    previewBaseUrl: config.previewBaseUrl,
+    codexProjects: config.codexProjects
   });
 
   await startPreviewServer({

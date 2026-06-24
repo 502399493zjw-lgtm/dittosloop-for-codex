@@ -86,6 +86,12 @@ export interface StartCodexSessionRunInput {
   projectPath?: string;
 }
 
+export interface CreateNewLoopSessionInput {
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
+}
+
 export interface CodexSessionLaunch {
   run: LoopRun;
   attempt: RunAttempt;
@@ -100,6 +106,18 @@ export interface CodexSessionLaunch {
     codexProjectId?: string;
     projectLabel?: string;
     projectPath?: string;
+  };
+}
+
+export interface NewLoopSessionLaunch {
+  prompt: string;
+  launchRequest: {
+    title: string;
+    prompt: string;
+    codexProjectId?: string;
+    projectLabel?: string;
+    projectPath?: string;
+    workflowRuntime: "dittosloop-loop-creator";
   };
 }
 
@@ -215,6 +233,21 @@ export class LoopService {
     }));
 
     return contract;
+  }
+
+  createNewLoopSessionLaunch(input: CreateNewLoopSessionInput = {}): NewLoopSessionLaunch {
+    const project = normalizeProjectBinding(input);
+    const prompt = buildNewLoopSessionPrompt(project);
+
+    return {
+      prompt,
+      launchRequest: {
+        title: "DittosLoop: 新建 Live Loop",
+        prompt,
+        workflowRuntime: "dittosloop-loop-creator",
+        ...project
+      }
+    };
   }
 
   async listLoops(): Promise<LoopContract[]> {
@@ -1107,6 +1140,16 @@ function runProjectBinding(
   };
 }
 
+function normalizeProjectBinding(
+  input: { codexProjectId?: string; projectLabel?: string; projectPath?: string }
+): Pick<LoopRun, "codexProjectId" | "projectLabel" | "projectPath"> {
+  return {
+    codexProjectId: input.codexProjectId,
+    projectLabel: input.projectLabel,
+    projectPath: input.projectPath
+  };
+}
+
 function bindLoopProject(
   loops: LoopContract[],
   loopId: string,
@@ -1124,6 +1167,48 @@ function bindLoopProject(
       updatedAt: timestamp
     };
   });
+}
+
+function buildNewLoopSessionPrompt(project: Pick<LoopRun, "codexProjectId" | "projectLabel" | "projectPath">): string {
+  const projectLines =
+    project.codexProjectId || project.projectLabel || project.projectPath
+      ? [
+          "",
+          "已选择的 Codex 项目：",
+          project.projectLabel ? `- 项目名：${project.projectLabel}` : undefined,
+          project.projectPath ? `- 项目路径：${project.projectPath}` : undefined,
+          project.codexProjectId ? `- 项目 ID：${project.codexProjectId}` : undefined
+        ].filter(Boolean)
+      : [
+          "",
+          "当前还没有明确的 Codex 项目绑定；请先向用户确认要关联哪个 Codex 项目，再创建 loop。"
+        ];
+
+  return [
+    "你正在为 DittosLoop For Codex 创建一个新的 Live Loop。",
+    "",
+    "请根据用户意图创建正式 workflow 版 loop contract，不要使用兼容版 create_loop，除非用户明确要求简单记录型 loop。",
+    "创建正式 loop 时请调用 DittosLoop MCP 工具 create_loop_contract。",
+    ...projectLines,
+    "",
+    "创建前需要补齐或确认：",
+    "- loop 目标和触发方式",
+    "- 所属 Codex 项目",
+    "- workflow steps，每个 agent 的 label 与 prompt",
+    "- verifier rubrics，包括 must/should 级别要求",
+    "- repair policy：不通过时如何修复和重试",
+    "- stop policy：何时停止",
+    "- 用户最终想看的输出形式",
+    "",
+    "Contract 应至少表达这些结构：",
+    "- title / goal / intent",
+    "- body.steps：用 agent / sequence / parallel 组织实际工作流",
+    "- verification.rubrics：用于检查 candidate result",
+    "- repairPolicy 和 stopPolicy",
+    "- projectBinding：绑定所选 Codex 项目",
+    "",
+    "完成后请用中文简短返回：loop id、项目名、workflow agents、verifier rubrics、repair/stop 策略，以及下一步是否要立即启动一次 run。"
+  ].join("\n");
 }
 
 function buildCodexSessionPrompt(loop: LoopContract, goal: string, contract?: FormalLoopContract): string {

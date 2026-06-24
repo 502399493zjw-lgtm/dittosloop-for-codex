@@ -6,8 +6,9 @@ const formatDate = new Intl.DateTimeFormat(undefined, {
 });
 
 const elements = {
-  refresh: document.querySelector("#refresh"),
+  newLoop: document.querySelector("#new-loop"),
   loops: document.querySelector("#loops"),
+  loopGroupLabel: document.querySelector("#loop-group-label"),
   loopGroupCount: document.querySelector("#loop-group-count"),
   loopStage: document.querySelector("#loop-stage")
 };
@@ -21,8 +22,8 @@ let selectedCodexProjectId = "";
 let selectedRunPhaseId = "attempts";
 let observedHash = window.location.hash;
 
-elements.refresh.addEventListener("click", () => {
-  void loadSnapshot();
+elements.newLoop.addEventListener("click", () => {
+  void startNewLoopSession();
 });
 
 window.addEventListener("hashchange", syncRouteFromLocation);
@@ -104,6 +105,7 @@ function render(snapshot) {
   const runs = snapshot.runs ?? [];
   const verificationResults = snapshot.verificationResults ?? [];
 
+  elements.loopGroupLabel.textContent = currentLoopGroupLabel(snapshot, loops);
   elements.loopGroupCount.textContent = String(loops.length);
   elements.loops.replaceChildren(...renderLoopRows(loops, runs, verificationResults));
 }
@@ -149,6 +151,7 @@ function renderLoopRows(loops, runs, verificationResults) {
         el("span", "loop-name", loop.title),
         el("p", "loop-description", loop.intent),
         el("div", "loop-row-meta", [
+          loopProjectLabel(loop, currentSnapshot) ? el("span", "loop-project-pill", loopProjectLabel(loop, currentSnapshot)) : null,
           el("span", "mono", `${loopRuns.length} runs`),
           el("span", "divider", "·"),
           statusChip(latestRun?.status ?? loop.status),
@@ -262,6 +265,53 @@ function projectChoices(snapshot) {
       name: project.name,
       path: project.path
     }));
+}
+
+function currentLoopGroupLabel(snapshot, loops) {
+  const selectedLoop = loops.find((loop) => loop.id === selectedLoopId);
+  const loopLabel = selectedLoop ? loopProjectLabel(selectedLoop, snapshot) : null;
+  const selectedProject = projectChoices(snapshot).find((project) => project.id === selectedCodexProjectId);
+
+  return loopLabel ?? selectedProject?.name ?? "未归项目";
+}
+
+function loopProjectLabel(loop, snapshot) {
+  if (!loop) return null;
+  if (loop.projectLabel) return loop.projectLabel;
+
+  const project = projectChoices(snapshot).find((candidate) => {
+    return candidate.id === loop.codexProjectId || candidate.path === loop.projectPath;
+  });
+
+  return project?.name ?? null;
+}
+
+async function startNewLoopSession() {
+  const project = projectChoices(currentSnapshot).find((item) => item.id === selectedCodexProjectId)
+    ?? projectChoices(currentSnapshot)[0];
+  const body = project
+    ? {
+        codexProjectId: project.id,
+        projectLabel: project.name,
+        projectPath: project.path
+      }
+    : {};
+
+  const response = await fetch("/api/new-loop-session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    renderError(`New loop session request failed: ${response.status}`);
+    return;
+  }
+
+  const launch = await response.json();
+  window.__dittosloopNewLoopLaunchRequest = launch.launchRequest;
+  window.dispatchEvent(new CustomEvent("dittosloop:create-codex-thread", { detail: launch.launchRequest }));
+  window.parent?.postMessage({ type: "dittosloop:create-codex-thread", launchRequest: launch.launchRequest }, "*");
+  renderNotice("已生成新建循环的 Codex 会话请求，等待 Codex App 打开新会话。");
 }
 
 async function startCodexSession(loop) {
@@ -1123,6 +1173,10 @@ function renderLoading() {
 
 function renderError(message) {
   elements.loopStage.replaceChildren(el("div", "stage-error", message));
+}
+
+function renderNotice(message) {
+  elements.loopStage.replaceChildren(el("div", "stage-notice", message));
 }
 
 function button(className, onClick, content) {

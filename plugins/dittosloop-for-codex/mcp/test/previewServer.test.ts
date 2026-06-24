@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
 
 import { startPreviewServer, type PreviewServer } from "../src/previewServer.js";
-import { LoopService } from "../src/service.js";
+import { LoopService, type LoopServiceOptions } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
 
 const tempDirs: string[] = [];
@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function createService() {
+async function createService(options: Partial<Pick<LoopServiceOptions, "codexProjects">> = {}) {
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-preview-"));
   tempDirs.push(dir);
 
@@ -27,7 +27,8 @@ async function createService() {
     store: new LoopStore(dir),
     now: () => "2026-06-23T00:00:00.000Z",
     createId: (prefix) => `${prefix}_1`,
-    previewBaseUrl: "http://127.0.0.1:0"
+    previewBaseUrl: "http://127.0.0.1:0",
+    ...options
   });
 }
 
@@ -90,11 +91,14 @@ test("preview script includes codex session launch controls", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
   expect(app).toContain("startCodexSession");
+  expect(app).toContain("startNewLoopSession");
   expect(app).toContain("project-picker");
   expect(app).toContain("/codex-session");
+  expect(app).toContain("/api/new-loop-session");
   expect(app).toContain("/codex-thread");
   expect(app).toContain("record_codex_thread");
   expect(app).toContain("创建 Codex 会话请求");
+  expect(app).toContain("dittosloop:create-codex-thread");
   expect(app).toContain("launchRequest");
   expect(app).toContain("codexProjectId");
   expect(app).toContain("deleteLoop");
@@ -102,6 +106,15 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).not.toContain("未连接 Codex 项目");
   expect(app).not.toContain("本轮剧本");
   expect(app).not.toContain("script-steps");
+});
+
+test("preview shell uses the new loop button as a session launch action", async () => {
+  const html = await readFile(join(previewDir, "index.html"), "utf8");
+
+  expect(html).toContain("id=\"new-loop\"");
+  expect(html).toContain("+ 新建循环");
+  expect(html).not.toContain("id=\"refresh\"");
+  expect(html).toContain("id=\"loop-group-label\"");
 });
 
 test("preview script keeps deep-linked run routes even before snapshot catches up", async () => {
@@ -112,7 +125,15 @@ test("preview script keeps deep-linked run routes even before snapshot catches u
 });
 
 test("serves the loop snapshot api", async () => {
-  const service = await createService();
+  const service = await createService({
+    codexProjects: [
+      {
+        id: "/Users/edisonzhong/Documents/dittos loop",
+        name: "dittos loop",
+        path: "/Users/edisonzhong/Documents/dittos loop"
+      }
+    ]
+  });
   await service.createLoop({
     title: "Daily code health check",
     intent: "Keep the project healthy",
@@ -126,8 +147,36 @@ test("serves the loop snapshot api", async () => {
 
   expect(response.status).toBe(200);
   expect(snapshot).toMatchObject({
-    loops: [{ id: "loop_1", title: "Daily code health check" }]
+    loops: [{ id: "loop_1", title: "Daily code health check" }],
+    codexProjects: [{ name: "dittos loop" }]
   });
+});
+
+test("creates a host-mediated new loop codex session request", async () => {
+  const service = await createService();
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/new-loop-session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    })
+  });
+  const launch = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(launch.launchRequest).toMatchObject({
+    title: "DittosLoop: 新建 Live Loop",
+    workflowRuntime: "dittosloop-loop-creator",
+    projectLabel: "dittos loop"
+  });
+  expect(launch.prompt).toContain("create_loop_contract");
+  expect(launch.prompt).toContain("workflow steps");
+  expect(launch.prompt).toContain("verifier rubrics");
 });
 
 test("deletes a loop from the preview api", async () => {

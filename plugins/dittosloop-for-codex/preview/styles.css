@@ -259,6 +259,14 @@ a:focus-visible {
   margin-top: 6px;
 }
 
+.loop-project-pill {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--accent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mono,
 .history-time,
 .history-trigger,
@@ -1383,12 +1391,17 @@ a:focus-visible {
 }
 
 .stage-loading,
+.stage-notice,
 .stage-error,
 .empty {
   padding: 24px 20px;
   color: var(--ink-3);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.stage-notice {
+  color: var(--accent);
 }
 
 .stage-error {

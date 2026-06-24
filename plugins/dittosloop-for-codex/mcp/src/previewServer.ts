@@ -37,6 +37,25 @@ export async function startPreviewServer(options: PreviewServerOptions): Promise
         return;
       }
 
+      if (url.pathname === "/api/new-loop-session") {
+        if (request.method !== "POST") {
+          response.writeHead(405, { "content-type": "application/json; charset=utf-8" });
+          response.end(`${JSON.stringify({ error: "Method not allowed" })}\n`);
+          return;
+        }
+
+        const body = await readJsonBody(request);
+        await sendJson(
+          response,
+          options.service.createNewLoopSessionLaunch({
+            codexProjectId: typeof body.codexProjectId === "string" ? body.codexProjectId : undefined,
+            projectLabel: typeof body.projectLabel === "string" ? body.projectLabel : undefined,
+            projectPath: typeof body.projectPath === "string" ? body.projectPath : undefined
+          })
+        );
+        return;
+      }
+
       const loopMatch = url.pathname.match(/^\/api\/loops\/([^/]+)$/);
       if (loopMatch) {
         if (request.method !== "DELETE") {
