@@ -4,60 +4,33 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>DittosLoop For Codex</title>
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <main class="shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Local preview</p>
-          <h1>DittosLoop For Codex</h1>
-        </div>
-        <button id="refresh" type="button">Refresh</button>
-      </header>
-
-      <section class="metrics" aria-label="Loop metrics">
-        <div class="metric">
-          <span class="metric-value" id="loop-count">0</span>
-          <span class="metric-label">Loops</span>
-        </div>
-        <div class="metric">
-          <span class="metric-value" id="run-count">0</span>
-          <span class="metric-label">Runs</span>
-        </div>
-        <div class="metric">
-          <span class="metric-value" id="verify-count">0</span>
-          <span class="metric-label">Verifications</span>
-        </div>
-        <div class="metric">
-          <span class="metric-value" id="human-count">0</span>
-          <span class="metric-label">Human asks</span>
-        </div>
-      </section>
-
-      <section class="workspace">
-        <div class="panel">
-          <div class="panel-heading">
-            <h2>Loops</h2>
+    <main class="loop-shell">
+      <aside class="loop-list" aria-label="Live Loop list">
+        <header class="list-header">
+          <div class="brand-lockup">
+            <h1>Live Loop</h1>
+            <span>跟你一起，持续自我迭代</span>
           </div>
-          <div id="loops" class="list"></div>
-        </div>
+          <button id="refresh" class="new-loop-button" type="button">+ 新建循环</button>
+        </header>
 
-        <div class="panel">
-          <div class="panel-heading">
-            <h2>Runs</h2>
-          </div>
-          <div id="runs" class="timeline"></div>
-        </div>
+        <section class="loop-group">
+          <header class="group-title">
+            <span class="group-dot"></span>
+            <span>独立 · 未归项目</span>
+            <span id="loop-group-count" class="group-count">0</span>
+          </header>
+          <div id="loops" class="loop-rows"></div>
+        </section>
+      </aside>
 
-        <div class="panel detail-panel">
-          <div class="panel-heading">
-            <h2>Run detail</h2>
-          </div>
-          <div id="run-detail" class="run-detail"></div>
-        </div>
+      <section class="loop-workspace" aria-label="Selected Live Loop">
+        <div id="loop-stage" class="loop-stage"></div>
       </section>
     </main>
-    <script src="/app.js" type="module"></script>
+    <script src="app.js" type="module"></script>
   </body>
 </html>
