@@ -37,6 +37,18 @@ export async function startPreviewServer(options: PreviewServerOptions): Promise
         return;
       }
 
+      const loopMatch = url.pathname.match(/^\/api\/loops\/([^/]+)$/);
+      if (loopMatch) {
+        if (request.method !== "DELETE") {
+          response.writeHead(405, { "content-type": "application/json; charset=utf-8" });
+          response.end(`${JSON.stringify({ error: "Method not allowed" })}\n`);
+          return;
+        }
+
+        await sendJson(response, await options.service.deleteLoop(decodeURIComponent(loopMatch[1])));
+        return;
+      }
+
       const runDetailMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
       if (runDetailMatch) {
         await sendJson(response, enrichRunDetail(await options.service.getRunDetail(decodeURIComponent(runDetailMatch[1]))));

@@ -97,6 +97,8 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("创建 Codex 会话请求");
   expect(app).toContain("launchRequest");
   expect(app).toContain("codexProjectId");
+  expect(app).toContain("deleteLoop");
+  expect(app).toContain("danger-button");
 });
 
 test("preview script keeps deep-linked run routes even before snapshot catches up", async () => {
@@ -122,6 +124,31 @@ test("serves the loop snapshot api", async () => {
   expect(response.status).toBe(200);
   expect(snapshot).toMatchObject({
     loops: [{ id: "loop_1", title: "Daily code health check" }]
+  });
+});
+
+test("deletes a loop from the preview api", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({
+    title: "Daily code health check",
+    intent: "Keep the project healthy"
+  });
+  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const attempt = await service.startAttempt(run.id, { summary: "First pass" });
+  await service.recordVerification(run.id, { attemptId: attempt.id, status: "passed", summary: "Tests passed" });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/loops/${loop.id}`, { method: "DELETE" });
+  const deleted = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(deleted).toMatchObject({ id: loop.id, title: "Daily code health check" });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [],
+    runs: [],
+    attempts: [],
+    verificationResults: []
   });
 });
 

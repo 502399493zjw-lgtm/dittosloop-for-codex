@@ -223,6 +223,33 @@ export class LoopService {
     return state.loops;
   }
 
+  async deleteLoop(loopId: string): Promise<LoopContract> {
+    let deletedLoop: LoopContract | undefined;
+
+    await this.options.store.updateState((state) => {
+      deletedLoop = requireLoop(state, loopId);
+      const deletedRunIds = new Set(state.runs.filter((run) => run.loopId === loopId).map((run) => run.id));
+
+      return {
+        ...state,
+        loops: state.loops.filter((loop) => loop.id !== loopId),
+        formalContracts: state.formalContracts.filter((contract) => contract.id !== loopId),
+        workflowRevisions: state.workflowRevisions.filter((revision) => revision.loopId !== loopId),
+        runs: state.runs.filter((run) => run.loopId !== loopId),
+        attempts: state.attempts.filter((attempt) => !deletedRunIds.has(attempt.runId)),
+        events: state.events.filter((event) => !deletedRunIds.has(event.runId)),
+        verificationResults: state.verificationResults.filter((result) => !deletedRunIds.has(result.runId)),
+        humanRequests: state.humanRequests.filter((request) => !deletedRunIds.has(request.runId)),
+        memoryCommits: state.memoryCommits.filter(
+          (commit) => commit.loopId !== loopId && (!commit.runId || !deletedRunIds.has(commit.runId))
+        ),
+        artifacts: state.artifacts.filter((artifact) => !deletedRunIds.has(artifact.runId))
+      };
+    });
+
+    return deletedLoop!;
+  }
+
   async triggerRun(loopId: string, input: TriggerRunInput = {}): Promise<LoopRun> {
     const timestamp = this.now();
     let run: LoopRun | undefined;

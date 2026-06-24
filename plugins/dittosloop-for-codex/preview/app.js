@@ -214,7 +214,9 @@ function renderLoopStage({ snapshot, detail }) {
         button("ghost-button launch-button", () => {
           void startCodexSession(loop);
         }, "生成启动请求"),
-        el("button", "danger-button", "删除")
+        button("danger-button", () => {
+          void deleteLoop(loop);
+        }, "删除")
       ])
     ]),
     renderLoopTabs(),
@@ -307,6 +309,26 @@ async function startCodexSession(loop) {
   selectedLoopId = launch.run.loopId;
   activeLoopTab = "history";
   writeRouteState("run", selectedRunId);
+  await loadSnapshot();
+}
+
+async function deleteLoop(loop) {
+  if (!window.confirm(`删除「${loop.title}」？`)) {
+    return;
+  }
+
+  const response = await fetch(`/api/loops/${encodeURIComponent(loop.id)}`, { method: "DELETE" });
+  if (!response.ok) {
+    renderError(`Delete loop request failed: ${response.status}`);
+    return;
+  }
+
+  if (selectedLoopId === loop.id) {
+    selectedLoopId = null;
+    selectedRunId = null;
+    activeLoopTab = "history";
+    writeRouteState("history");
+  }
   await loadSnapshot();
 }
 

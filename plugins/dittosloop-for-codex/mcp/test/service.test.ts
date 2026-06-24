@@ -263,6 +263,69 @@ test("records a run lifecycle in the snapshot", async () => {
   expect(service.getPreviewUrl()).toBe("http://127.0.0.1:47888");
 });
 
+test("deletes a loop and its run history", async () => {
+  const service = await createService();
+  const formal = await service.createLoopContract({
+    title: "Daily code health check",
+    goal: "Keep the project healthy",
+    body: {
+      steps: [
+        {
+          id: "check",
+          kind: "agent",
+          label: "Run checks",
+          prompt: "Run the local health checks."
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "tests",
+          label: "Tests",
+          requirement: "Tests pass",
+          severity: "must"
+        }
+      ]
+    },
+    repairPolicy: { maxAttempts: 2, strategy: "repair_then_retry" }
+  });
+  const run = await service.runLoopWorkflow(formal.id, {
+    executor: {
+      async run() {
+        return { text: "Tests passed" };
+      }
+    },
+    verifier: () => ({
+      status: "failed",
+      summary: "Missing artifact.",
+      checks: [{ rubricId: "tests", status: "failed" }]
+    }),
+    repairWorkflow: ({ contract }) => contract
+  });
+  await service.appendEvent(run.id, { kind: "note", message: "Started local checks" });
+  await service.recordHumanRequest(run.id, { question: "Ship it?" });
+  await service.commitMemory(formal.id, { runId: run.id, summary: "Checks passed locally." });
+  await service.addArtifact(run.id, { title: "Preview", url: "http://127.0.0.1:47888" });
+
+  const deleted = await service.deleteLoop(formal.id);
+
+  expect(deleted).toMatchObject({ id: formal.id, title: "Daily code health check" });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [],
+    formalContracts: [],
+    workflowRevisions: [],
+    runs: [],
+    attempts: [],
+    events: [],
+    verificationResults: [],
+    humanRequests: [],
+    memoryCommits: [],
+    artifacts: []
+  });
+});
+
 test("binds loop runs to the Codex project selected for the loop", async () => {
   const service = await createService();
   const loop = await service.createLoop({
