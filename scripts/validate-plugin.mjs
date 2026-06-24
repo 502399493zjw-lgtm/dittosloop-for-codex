@@ -186,6 +186,47 @@ function validateMcpConfig(mcpConfig, errors, checks) {
   }
 }
 
+function validateHooksConfig(hooksConfig, errors, checks) {
+  if (!isObject(hooksConfig?.hooks)) {
+    errors.push("hooks config must define a hooks object");
+    return;
+  }
+
+  const sessionStart = hooksConfig.hooks.SessionStart;
+  const userPromptSubmit = hooksConfig.hooks.UserPromptSubmit;
+  if (!Array.isArray(sessionStart) || sessionStart.length === 0) {
+    errors.push("hooks config must define SessionStart hooks");
+  }
+  if (!Array.isArray(userPromptSubmit) || userPromptSubmit.length === 0) {
+    errors.push("hooks config must define UserPromptSubmit hooks");
+  }
+
+  const hookGroups = [
+    ...(Array.isArray(sessionStart) ? sessionStart : []),
+    ...(Array.isArray(userPromptSubmit) ? userPromptSubmit : [])
+  ];
+
+  for (const group of hookGroups) {
+    if (!Array.isArray(group?.hooks) || group.hooks.length === 0) {
+      errors.push("each hook group must include at least one command hook");
+      continue;
+    }
+    for (const hook of group.hooks) {
+      requireEqual(hook?.type, "command", "hook type", errors);
+      if (!isNonEmptyString(hook?.command)) {
+        errors.push("hook command must be present");
+      }
+      if (hook?.timeout !== undefined && (!Number.isInteger(hook.timeout) || hook.timeout <= 0)) {
+        errors.push("hook timeout must be a positive integer when present");
+      }
+    }
+  }
+
+  if (errors.length === 0) {
+    checks.push("loopable reminder hooks are valid");
+  }
+}
+
 export async function validatePlugin(rootDir = process.cwd()) {
   const root = path.resolve(rootDir);
   const checks = [];
@@ -203,16 +244,30 @@ export async function validatePlugin(rootDir = process.cwd()) {
   await requireFile(path.join(pluginRoot, "preview", "index.html"), "preview HTML", checks, errors);
   await requireFile(path.join(pluginRoot, "preview", "app.js"), "preview app", checks, errors);
   await requireFile(path.join(pluginRoot, "preview", "styles.css"), "preview styles", checks, errors);
+  await requireDirectory(path.join(pluginRoot, "hooks"), "hooks directory", checks, errors);
+  await requireFile(path.join(pluginRoot, "hooks", "hooks.json"), "hooks config", checks, errors);
+  await requireFile(
+    path.join(pluginRoot, "hooks", "loopable-reminder.mjs"),
+    "loopable reminder hook",
+    checks,
+    errors
+  );
   await requireFile(path.join(pluginRoot, "mcp", "package.json"), "MCP package", checks, errors);
   await requireFile(path.join(pluginRoot, "mcp", "dist", "index.js"), "built MCP entrypoint", checks, errors);
 
   const manifest = await readJson(manifestPath, errors, "plugin manifest");
   const marketplace = await readJson(marketplacePath, errors, "marketplace manifest");
   const mcpConfig = await readJson(mcpPath, errors, "MCP config");
+  const hooksConfig = await readJson(
+    path.join(pluginRoot, "hooks", "hooks.json"),
+    errors,
+    "hooks config"
+  );
 
   validateManifest(manifest, errors, checks);
   validateMarketplace(marketplace, errors, checks);
   validateMcpConfig(mcpConfig, errors, checks);
+  validateHooksConfig(hooksConfig, errors, checks);
 
   if (errors.length > 0) {
     return { ok: false, errors, checks };
@@ -243,4 +298,3 @@ if (directRunPath === fileURLToPath(import.meta.url)) {
     process.exitCode = 1;
   }
 }
-

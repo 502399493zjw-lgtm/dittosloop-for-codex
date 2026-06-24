@@ -83,6 +83,34 @@ async function createValidFixture() {
   await writeText(path.join(pluginRoot, "preview/index.html"), "<main id=\"app\"></main>\n");
   await writeText(path.join(pluginRoot, "preview/app.js"), "console.log('preview');\n");
   await writeText(path.join(pluginRoot, "preview/styles.css"), "body { margin: 0; }\n");
+  await writeJson(path.join(pluginRoot, "hooks/hooks.json"), {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "startup",
+          hooks: [
+            {
+              type: "command",
+              command: "node ./hooks/loopable-reminder.mjs session-start startup",
+              timeout: 5
+            }
+          ]
+        }
+      ],
+      UserPromptSubmit: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: "node ./hooks/loopable-reminder.mjs user-prompt-submit",
+              timeout: 5
+            }
+          ]
+        }
+      ]
+    }
+  });
+  await writeText(path.join(pluginRoot, "hooks/loopable-reminder.mjs"), "process.exit(0);\n");
   await writeText(path.join(pluginRoot, "mcp/dist/index.js"), "console.log('mcp');\n");
   await writeJson(path.join(pluginRoot, "mcp/package.json"), {
     scripts: {

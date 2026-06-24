@@ -1,0 +1,50 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./hooks/loopable-reminder.mjs session-start startup",
+            "timeout": 5,
+            "statusMessage": "Loading DittosLoop reminder"
+          }
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./hooks/loopable-reminder.mjs session-start resume",
+            "timeout": 5,
+            "statusMessage": "Loading DittosLoop reminder"
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./hooks/loopable-reminder.mjs session-start compact",
+            "timeout": 5,
+            "statusMessage": "Loading DittosLoop reminder"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./hooks/loopable-reminder.mjs user-prompt-submit",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
