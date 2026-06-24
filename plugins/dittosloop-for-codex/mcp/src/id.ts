@@ -1,4 +1,13 @@
-export type IdPrefix = "loop" | "run" | "attempt" | "event" | "verification" | "human" | "memory" | "artifact";
+export type IdPrefix =
+  | "loop"
+  | "run"
+  | "attempt"
+  | "event"
+  | "verification"
+  | "human"
+  | "memory"
+  | "artifact"
+  | "workflow";
 
 export function createId(prefix: IdPrefix): string {
   const timestamp = Date.now().toString(36);

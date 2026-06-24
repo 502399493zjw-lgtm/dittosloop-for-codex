@@ -115,7 +115,11 @@ async function loadRunDetail(runId) {
     return;
   }
 
-  renderLoopStage({ snapshot: currentSnapshot, detail: await response.json() });
+  const detail = await response.json();
+  selectedRunId = detail.run.id;
+  selectedLoopId = detail.loop.id;
+  render(currentSnapshot);
+  renderLoopStage({ snapshot: currentSnapshot, detail });
 }
 
 function renderLoopRows(loops, runs, verificationResults) {
@@ -215,7 +219,7 @@ function renderLoopStage({ snapshot, detail }) {
     ]),
     renderLoopTabs(),
     activeLoopTab === "directory"
-      ? renderLoopDirectory({ loop, loopRuns, checks })
+      ? renderLoopDirectory({ snapshot, loop, loopRuns, checks })
       : [
           el("section", "execution-card", [
             el("div", "execution-heading", [
@@ -278,7 +282,7 @@ function projectChoices(snapshot) {
 async function startCodexSession(loop) {
   const project = projectChoices(currentSnapshot).find((item) => item.id === selectedCodexProjectId);
   if (!project) {
-    renderError("没有可用的 Codex App 项目，无法生成启动请求。");
+    renderError("没有可用的 Codex App 项目，无法创建 Codex 会话请求。");
     return;
   }
 
@@ -298,6 +302,7 @@ async function startCodexSession(loop) {
   }
 
   const launch = await response.json();
+  window.__dittosloopLastLaunchRequest = launch.launchRequest;
   selectedRunId = launch.run.id;
   selectedLoopId = launch.run.loopId;
   activeLoopTab = "history";
@@ -322,9 +327,9 @@ function renderLoopTabs() {
   ]);
 }
 
-function renderLoopDirectory({ loop, loopRuns, checks }) {
+function renderLoopDirectory({ snapshot, loop, loopRuns, checks }) {
   const latestRun = loopRuns.at(0);
-  const files = buildLoopDirectoryFiles({ loop, loopRuns, checks });
+  const files = buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks });
   const selected = files.find((file) => file.path === selectedDirectoryPath) ?? files[0];
   selectedDirectoryPath = selected?.path ?? "flow.js";
 
@@ -367,10 +372,20 @@ function renderHistoryRows(runs, verificationResults, humanRequests) {
   return runs.map((run) => {
     const verification = [...verificationResults].reverse().find((result) => result.runId === run.id);
     const humanRequest = humanRequests.find((request) => request.runId === run.id && request.status !== "resolved");
-    const row = button("history-row", () => {
+    const openRun = () => {
       selectedRunId = run.id;
       writeRouteState("run", run.id);
       void loadRunDetail(run.id);
+    };
+    const row = el("div", "history-row");
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.addEventListener("click", openRun);
+    row.addEventListener("keydown", (event) => {
+      if (event.target !== row) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openRun();
     });
 
     row.replaceChildren(
@@ -382,7 +397,12 @@ function renderHistoryRows(runs, verificationResults, humanRequests) {
         verification ? el("b", "", `· ${statusText(verification.status)}`) : null,
         humanRequest ? el("b", "", "· 等待你") : null
       ]),
-      el("span", "open-run", "点开看 ›")
+      el("span", "history-actions", [
+        run.codexSession?.threadUrl
+          ? openSessionButton(run.codexSession.threadUrl, "打开会话", "history-session-button")
+          : el("span", "history-session-state", run.codexSession ? "待创建会话" : "未关联会话"),
+        el("span", "open-run", "看 run ›")
+      ])
     );
     return row;
   });
@@ -425,7 +445,10 @@ function renderRunBoard({ detail, loop, loopRuns }) {
       el("span", `run-status ${run.status}`, [
         el("span", `tiny-dot ${run.status}`, ""),
         el("span", "", `${statusText(run.status)} ${done}/${total}`)
-      ])
+      ]),
+      run.codexSession?.threadUrl
+        ? openSessionButton(run.codexSession.threadUrl, "打开会话")
+        : el("span", "open-session-button disabled", run.codexSession ? "待创建会话" : "未关联会话")
     ]),
     el("div", "run-meta-line", [
       inlineIcon("bolt"),
@@ -474,37 +497,40 @@ function buildRunPhases(detail) {
         {
           id: `${run.id}-current-session`,
           avatar: "主",
-          name: "当前 Codex session",
+          name: "Codex 会话",
           status: run.codexSession.status === "requested" ? run.status : run.codexSession.status,
-          description: "Loop 在当前 Codex 对话里继续推进，并把执行工作交给子 agent。",
+          description: run.codexSession.threadId
+            ? "点击查看这次任务的实际运行结果。"
+            : "等待 Codex App 创建任务会话。",
           meta: runProjectLabel(run) || "当前项目",
           threadId: run.codexSession.threadId,
           threadTitle: run.codexSession.threadTitle,
           threadUrl: run.codexSession.threadUrl
-        },
-        ...(run.codexSession.subagents ?? []).map((subagent, index) => ({
-          id: `${run.id}-subagent-${index}`,
-          avatar: "子",
-          name: "Codex subagent",
-          status: subagent.status,
-          description: subagent.prompt ?? "读取 loop 目标、历史和验证点并执行本轮任务。",
-          meta: subagent.role,
-          threadId: subagent.threadId ?? run.codexSession.threadId,
-          threadTitle: subagent.threadTitle ?? run.codexSession.threadTitle,
-          threadUrl: subagent.threadUrl ?? run.codexSession.threadUrl
-        }))
+        }
       ]
     : [];
-  const attemptAgents = detail.attempts.map((attempt) => ({
+  const attemptAgents = detail.attempts
+    .filter(() => !run.codexSession)
+    .map((attempt) => ({
     id: attempt.id,
-    avatar: "启",
-    name: "Codex subagent attempt",
+    avatar: run.codexSession ? "启" : "流",
+    name: run.codexSession ? "Codex session request" : "Workflow attempt",
     status: attempt.status,
     description: attempt.summary ?? attempt.id,
     meta: attempt.completedAt ? formatDate.format(new Date(attempt.completedAt)) : "运行中",
     threadId: run.codexSession?.threadId,
     threadTitle: run.codexSession?.threadTitle,
-    threadUrl: run.codexSession?.threadUrl
+    threadUrl: run.codexSession?.threadUrl,
+    showSessionLink: Boolean(run.codexSession)
+  }));
+  const workflowAgents = (detail.workflowRevisions ?? []).map((revision) => ({
+    id: revision.id,
+    avatar: "稿",
+    name: "Workflow draft",
+    status: revision.status,
+    description: revision.reason,
+    meta: revision.createdAt ? formatDate.format(new Date(revision.createdAt)) : "候选 workflow",
+    showSessionLink: false
   }));
   const verificationAgents = detail.verificationResults.map((result) => ({
     id: result.id,
@@ -514,14 +540,7 @@ function buildRunPhases(detail) {
     description: result.summary,
     meta: result.attemptId ? `Attempt ${result.attemptId}` : "Run level"
   }));
-  const timelineAgents = detail.events.map((event) => ({
-    id: event.id,
-    avatar: event.kind === "run_created" ? "启" : event.kind === "human_request" ? "问" : "记",
-    name: event.kind === "run_created" ? "当前 session 绑定" : statusText(event.kind),
-    status: event.kind === "attempt_started" ? "running" : event.kind === "verification_recorded" ? "passed" : run.status,
-    description: event.message,
-    meta: event.data?.projectPath ? `${event.data.projectPath}` : formatDate.format(new Date(event.createdAt))
-  }));
+  const timelineAgents = buildPreviewTimelineAgents(detail);
 
   return [
     {
@@ -537,6 +556,12 @@ function buildRunPhases(detail) {
       agents: verificationAgents
     },
     {
+      id: "workflow",
+      name: "工作流草稿",
+      status: workflowAgents.length ? "draft" : "completed",
+      agents: workflowAgents
+    },
+    {
       id: "timeline",
       name: "时间线",
       status: run.status,
@@ -545,13 +570,137 @@ function buildRunPhases(detail) {
   ];
 }
 
+function buildPreviewTimelineAgents(detail) {
+  const run = detail.run;
+  if (run.codexSession) {
+    return buildCodexSessionTimelineAgents(detail);
+  }
+
+  const sections = detail.timeline ?? [];
+  const items = sections.flatMap((section) => section.items.map((item) => ({ ...item, section: section.title })));
+  if (!items.length) {
+    return [{
+      id: `${run.id}-run`,
+      avatar: "流",
+      name: "Run",
+      status: run.status,
+      description: run.goal,
+      meta: formatDate.format(new Date(run.createdAt))
+    }];
+  }
+
+  return compactTimelineItems(items).map((item, index) => ({
+    id: `${item.section}-${item.kind}-${item.sequence ?? index}`,
+    avatar: timelineAvatar(item.kind),
+    name: item.label,
+    status: timelineStatus(item.status),
+    description: item.message,
+    meta: item.createdAt ? `${item.section} · ${formatDate.format(new Date(item.createdAt))}` : item.section
+  }));
+}
+
+function buildCodexSessionTimelineAgents(detail) {
+  const run = detail.run;
+  const agents = [
+    {
+      id: `${run.id}-session`,
+      avatar: "启",
+      name: "创建 Codex 会话",
+      status: run.codexSession.threadId ? "completed" : run.codexSession.status,
+      description: run.codexSession.threadId ? "真实 Codex worker session 已创建并关联。" : "等待 Codex App 创建真实会话。",
+      meta: formatDate.format(new Date(run.createdAt)),
+      threadId: run.codexSession.threadId,
+      threadTitle: run.codexSession.threadTitle,
+      threadUrl: run.codexSession.threadUrl
+    }
+  ];
+
+  const engineEvents = detail.engineEvents ?? [];
+  if (engineEvents.length) {
+    agents.push(...workflowAgentCards(detail));
+  }
+
+  const latestVerification = detail.verificationResults.at(-1);
+  if (latestVerification) {
+    agents.push({
+      id: latestVerification.id,
+      avatar: "验",
+      name: "验证结果",
+      status: latestVerification.status,
+      description: latestVerification.summary,
+      meta: latestVerification.createdAt ? formatDate.format(new Date(latestVerification.createdAt)) : "verification"
+    });
+  }
+
+  const userNotes = detail.events.filter(isUserFacingTimelineNote);
+  for (const note of userNotes.slice(-3)) {
+    agents.push({
+      id: note.id,
+      avatar: "记",
+      name: "记录",
+      status: run.status,
+      description: note.message,
+      meta: formatDate.format(new Date(note.createdAt))
+    });
+  }
+
+  return agents;
+}
+
+function workflowAgentCards(detail) {
+  const items = (detail.timeline ?? [])
+    .filter((section) => section.id === "workflow")
+    .flatMap((section) => section.items)
+    .filter((item) => item.kind === "agent");
+
+  return compactTimelineItems(items).map((item, index) => ({
+    id: `${item.stepId ?? "agent"}-${item.sequence ?? index}`,
+    avatar: "代",
+    name: item.label,
+    status: timelineStatus(item.status),
+    description: item.message,
+    meta: item.createdAt ? formatDate.format(new Date(item.createdAt)) : "workflow agent"
+  }));
+}
+
+function compactTimelineItems(items) {
+  const completedAgents = new Set(
+    items
+      .filter((item) => item.kind === "agent" && item.status === "completed" && item.stepId)
+      .map((item) => item.stepId)
+  );
+  return items.filter((item) => !(item.kind === "agent" && item.status === "started" && completedAgents.has(item.stepId)));
+}
+
+function isUserFacingTimelineNote(event) {
+  if (event.kind !== "note") return false;
+  if (event.data?.codexThread || event.data?.engineEvent || event.data?.output || event.data?.contractId) return false;
+  return !/^Workflow (run_|agent )/.test(event.message);
+}
+
+function timelineAvatar(kind) {
+  const avatars = {
+    run: "流",
+    phase: "段",
+    agent: "代",
+    parallel: "并",
+    verification: "验",
+    repair: "修"
+  };
+  return avatars[kind] ?? "记";
+}
+
+function timelineStatus(status) {
+  const aliases = {
+    started: "running",
+    needed: "repairing"
+  };
+  return aliases[status] ?? status;
+}
+
 function renderAgentCard(agent) {
   const sessionLabel = agent.threadTitle ?? (agent.threadId ? shortThreadId(agent.threadId) : "待 Codex App 创建");
-  const card = button("agent-card", () => {
-    if (agent.threadUrl) {
-      window.location.href = agent.threadUrl;
-    }
-  }, [
+  const card = el("div", `agent-card ${agent.threadUrl ? "has-session" : ""}`, [
     el("div", "agent-card-row", [
       el("span", "agent-avatar", agent.avatar),
       el("span", "agent-name", [
@@ -560,7 +709,11 @@ function renderAgentCard(agent) {
       ]),
       el("span", "agent-spacer", ""),
       statusChip(agent.status),
-      el("span", `agent-session-link ${agent.threadId ? "linked" : "pending"}`, sessionLabel)
+      agent.showSessionLink === false
+        ? null
+        : agent.threadUrl
+          ? openSessionButton(agent.threadUrl, sessionLabel, "agent-open-session")
+          : el("span", "agent-session-link pending", sessionLabel)
     ]),
     agent.description ? el("p", "agent-description", agent.description) : null,
     agent.meta ? el("span", "agent-meta", agent.meta) : null
@@ -572,21 +725,33 @@ function renderAgentCard(agent) {
   return card;
 }
 
+function openSessionButton(threadUrl, label = "打开会话", className = "open-session-button") {
+  const action = button(className, (event) => {
+    event.stopPropagation();
+    window.location.href = threadUrl;
+  }, [
+    el("span", "", label),
+    el("span", "open-session-arrow", "›")
+  ]);
+  action.title = "打开对应的 Codex session";
+  return action;
+}
+
 function shortThreadId(threadId) {
   return threadId.length > 12 ? `${threadId.slice(0, 8)}...${threadId.slice(-4)}` : threadId;
 }
 
 function renderSummaryOutput(detail) {
-  const latestVerification = detail.verificationResults.at(-1);
   const memories = detail.memoryCommits ?? [];
   const artifacts = detail.artifacts ?? [];
-  if (!latestVerification && memories.length === 0 && artifacts.length === 0) {
+  const latestOutput = [...(detail.events ?? [])].reverse().find((event) => event.data?.output)?.data?.output;
+  if (!latestOutput && memories.length === 0 && artifacts.length === 0) {
     return null;
   }
 
   return el("section", "summary-output", [
     el("div", "summary-kicker", "汇总输出"),
-    latestVerification ? el("p", "summary-copy", latestVerification.summary) : null,
+    latestOutput ? el("p", "summary-copy", latestOutput) : null,
     memories.length ? el("p", "summary-copy muted", memories.at(-1).summary) : null,
     artifacts.length
       ? el("div", "artifact-strip", artifacts.map((artifact) =>
@@ -606,8 +771,10 @@ function runsForLoop(loopId, runs) {
   return runs.filter((run) => run.loopId === loopId);
 }
 
-function buildLoopDirectoryFiles({ loop, loopRuns, checks }) {
+function buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks }) {
   const latestRun = loopRuns.at(0);
+  const formalContract = (snapshot?.formalContracts ?? []).find((contract) => contract.id === loop.id);
+  const workflowFiles = formalContract ? formalLoopDirectoryFiles({ contract: formalContract, snapshot, loopRuns }) : [];
   return [
     {
       path: "flow.js",
@@ -617,15 +784,15 @@ function buildLoopDirectoryFiles({ loop, loopRuns, checks }) {
         `export const loop = ${JSON.stringify(loop.title)};`,
         "",
         "export async function run(context) {",
-        "  const session = context.codex.currentSession;",
-        "  const subagent = await session.spawnSubagent({",
-        "    project: context.project ?? '当前 Codex 工作区',",
-        "    input: context.userPrompt",
+        "  const launch = await context.dittosloop.startCodexSession({",
+        "    loopId: context.loop.id,",
+        "    project: context.project,",
+        "    prompt: context.userPrompt",
         "  });",
         "",
-        "  await context.dittosloop.startAttempt({ sessionId: session.id, subagentId: subagent.id });",
-        "  await context.dittosloop.recordProgress('在当前 session 中派发子 agent 并回写 run 状态');",
-        "  return subagent;",
+        "  const thread = await context.codexApp.createThread(launch.launchRequest);",
+        "  await context.dittosloop.recordCodexThread({ runId: launch.run.id, ...thread });",
+        "  return thread;",
         "}"
       ].join("\n")
     },
@@ -644,14 +811,15 @@ function buildLoopDirectoryFiles({ loop, loopRuns, checks }) {
         `- 最近 run：${latestRun ? formatDate.format(new Date(latestRun.createdAt)) : "暂无"}`,
         "",
         "## Codex session policy",
-        "- Loop 触发时复用当前 Codex session。",
-        "- 当前 session 负责接收提醒、展示状态和协调回写。",
-        "- 实际执行交给当前 session 下的子 agent。",
-        "- session 输入作为 user prompt 注入，提醒 agent 读取 loop 目标、历史和验证点。",
-        "- session 结束后把 attempt、event、verification 回写到本地状态。",
+        "- Loop 触发时创建新的真实 Codex worker session。",
+        "- DittosLoop 只生成 launchRequest，不在预览页里伪造 session。",
+        "- Codex App 宿主负责 create_thread，并把 threadId/threadUrl 写回 run。",
+        "- 新 session 的输入作为 user prompt 注入，提醒 agent 读取 loop 目标、历史和验证点。",
+        "- session 执行结果在 Codex 原生会话里查看；DittosLoop 记录 run、attempt、verification 和链接。",
         latestRun ? `- 最近关联项目：${runProjectLabel(latestRun) ?? "未关联 Codex 项目"}` : ""
       ].join("\n")
     },
+    ...workflowFiles,
     {
       path: "contract.json",
       language: "json",
@@ -670,15 +838,25 @@ function buildLoopDirectoryFiles({ loop, loopRuns, checks }) {
       language: "json",
       meta: "JSON",
       content: JSON.stringify({
-        launch: "current-session-with-subagent",
+        launch: "host-mediated-new-codex-session",
         projectBinding: {
           mode: "select-codex-project",
           default: "current-workspace"
         },
         execution: {
-          mainAgent: "current-codex-session",
-          worker: "subagent"
+          host: "codex-app",
+          worker: "new-codex-session"
         },
+        launchRequest: latestRun?.codexSession
+          ? {
+              runId: latestRun.id,
+              loopId: latestRun.loopId,
+              title: `DittosLoop: ${loop.title}`,
+              projectLabel: latestRun.projectLabel,
+              projectPath: latestRun.projectPath,
+              prompt: latestRun.codexSession.prompt
+            }
+          : null,
         hostWriteback: {
           required: true,
           api: latestRun ? `/api/runs/${latestRun.id}/codex-thread` : "/api/runs/{runId}/codex-thread",
@@ -692,6 +870,170 @@ function buildLoopDirectoryFiles({ loop, loopRuns, checks }) {
       }, null, 2)
     }
   ];
+}
+
+function formalLoopDirectoryFiles({ contract, snapshot, loopRuns }) {
+  const agentSteps = flattenContractSteps(contract.body?.steps ?? []).filter((step) => step.kind === "agent");
+  const latestRun = loopRuns.at(0);
+  const latestAttempt = latestRun
+    ? [...(snapshot?.attempts ?? [])].reverse().find((attempt) => attempt.runId === latestRun.id)
+    : null;
+  const latestVerification = latestRun
+    ? [...(snapshot?.verificationResults ?? [])].reverse().find((result) => result.runId === latestRun.id)
+    : null;
+  const engineEvents = latestRun ? engineEventsForRun(snapshot, latestRun.id) : [];
+  const agentStatuses = agentStatusByStepId(engineEvents);
+  const rubricStatuses = rubricStatusByLabel(latestVerification);
+  return [
+    {
+      path: "workflow.json",
+      language: "json",
+      meta: "JSON",
+      content: JSON.stringify({
+        id: contract.id,
+        title: contract.title,
+        goal: contract.goal,
+        status: contract.status,
+        latestRunStatus: latestRun?.status ?? null,
+        latestAttemptStatus: latestAttempt?.status ?? null,
+        latestVerificationStatus: latestVerification?.status ?? null,
+        body: contract.body,
+        repairPolicy: contract.repairPolicy,
+        stopPolicy: contract.stopPolicy,
+        projectBinding: contract.projectBinding
+      }, null, 2)
+    },
+    {
+      path: "agents.md",
+      language: "markdown",
+      meta: "MD",
+      content: [
+        `# ${contract.title} agents`,
+        "",
+        ...agentSteps.flatMap((step, index) => [
+          `## ${index + 1}. ${step.label}`,
+          "",
+          `- id: \`${step.id}\``,
+          `- kind: \`${step.kind}\``,
+          `- status: ${statusText(agentStatuses.get(step.id) ?? "not-run")}`,
+          "",
+          step.prompt,
+          ""
+        ])
+      ].join("\n")
+    },
+    {
+      path: "rubrics.md",
+      language: "markdown",
+      meta: "MD",
+      content: [
+        `# ${contract.title} verifier`,
+        "",
+        `Mode: \`${contract.verification?.mode ?? "after_workflow"}\``,
+        "",
+        ...(contract.verification?.rubrics ?? []).flatMap((rubric) => [
+          `## ${rubric.label}`,
+          "",
+          `- id: \`${rubric.id}\``,
+          `- severity: \`${rubric.severity}\``,
+          `- status: ${statusText(rubricStatuses.get(rubric.label) ?? "not-run")}`,
+          `- requirement: ${rubric.requirement}`,
+          rubricStatuses.get(`${rubric.label}:output`) ? `- evidence: ${rubricStatuses.get(`${rubric.label}:output`)}` : "",
+          ""
+        ].filter(Boolean))
+      ].join("\n")
+    },
+    {
+      path: "runs.json",
+      language: "json",
+      meta: "JSON",
+      content: JSON.stringify({
+        latestRun: latestRun
+          ? {
+              id: latestRun.id,
+              status: latestRun.status,
+              goal: latestRun.goal,
+              projectLabel: latestRun.projectLabel,
+              projectPath: latestRun.projectPath,
+              createdAt: latestRun.createdAt,
+              completedAt: latestRun.completedAt
+            }
+          : null,
+        latestAttempt: latestAttempt
+          ? {
+              id: latestAttempt.id,
+              status: latestAttempt.status,
+              summary: latestAttempt.summary,
+              startedAt: latestAttempt.startedAt,
+              completedAt: latestAttempt.completedAt
+            }
+          : null,
+        latestVerification: latestVerification
+          ? {
+              id: latestVerification.id,
+              status: latestVerification.status,
+              summary: latestVerification.summary,
+              checks: latestVerification.checks ?? [],
+              createdAt: latestVerification.createdAt
+            }
+          : null,
+        runs: loopRuns.map((run) => ({
+          id: run.id,
+          status: run.status,
+          goal: run.goal,
+          createdAt: run.createdAt,
+          completedAt: run.completedAt
+        }))
+      }, null, 2)
+    }
+  ];
+}
+
+function engineEventsForRun(snapshot, runId) {
+  return (snapshot?.events ?? [])
+    .filter((event) => event.runId === runId)
+    .map((event) => event.data?.engineEvent)
+    .filter(Boolean)
+    .sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0));
+}
+
+function agentStatusByStepId(engineEvents) {
+  const statuses = new Map();
+  for (const event of engineEvents) {
+    if (!event.stepId) continue;
+    if (event.type === "agent_started") {
+      statuses.set(event.stepId, "running");
+    }
+    if (event.type === "agent_done") {
+      statuses.set(event.stepId, "completed");
+    }
+    if (event.type === "agent_failed") {
+      statuses.set(event.stepId, "failed");
+    }
+  }
+  return statuses;
+}
+
+function rubricStatusByLabel(verification) {
+  const statuses = new Map();
+  for (const check of verification?.checks ?? []) {
+    statuses.set(check.name, check.status);
+    if (check.output) {
+      statuses.set(`${check.name}:output`, check.output);
+    }
+  }
+  return statuses;
+}
+
+function flattenContractSteps(steps) {
+  const result = [];
+  for (const step of steps) {
+    result.push(step);
+    if (Array.isArray(step.children)) {
+      result.push(...flattenContractSteps(step.children));
+    }
+  }
+  return result;
 }
 
 function runProjectLabel(run) {
@@ -722,9 +1064,9 @@ function applyRouteState(snapshot) {
   const route = readRouteState();
   activeLoopTab = route.tab === "directory" ? "directory" : "history";
   if (route.runId) {
+    selectedRunId = route.runId;
     const run = (snapshot.runs ?? []).find((item) => item.id === route.runId);
     if (run) {
-      selectedRunId = run.id;
       selectedLoopId = run.loopId;
       activeLoopTab = "history";
     }
@@ -744,6 +1086,11 @@ function statusText(status) {
     requested: "待创建",
     started: "已创建",
     unavailable: "不可用",
+    draft: "候选",
+    promoted: "已采用",
+    rejected: "已拒绝",
+    skipped: "跳过",
+    "not-run": "未运行",
     waiting_for_human: "等待你",
     open: "等待你",
     resolved: "已解决",

@@ -68,8 +68,22 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("agent-avatar");
   expect(app).toContain("待 Codex App 创建");
   expect(app).toContain("threadId");
-  expect(app).toContain("Codex subagent");
+  expect(app).toContain("Codex 会话");
+  expect(app).toContain("workflowAgentCards");
+  expect(app).toContain("Workflow attempt");
+  expect(app).toContain("Workflow draft");
+  expect(app).toContain("workflowRevisions");
   expect(app).toContain("工作流阶段");
+});
+
+test("preview keeps verification internals out of the user-facing summary output", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("renderSummaryOutput");
+  expect(app).not.toContain("latestVerification ? el(\"p\", \"summary-copy\", latestVerification.summary)");
+  expect(app).not.toContain("run.codexSession.subagents ?? []).map");
+  expect(app).not.toContain("Codex subagent attempt");
+  expect(app).not.toContain("timelineAgents = detail.events.map");
 });
 
 test("preview script includes codex session launch controls", async () => {
@@ -80,8 +94,16 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("/codex-session");
   expect(app).toContain("/codex-thread");
   expect(app).toContain("record_codex_thread");
-  expect(app).toContain("生成启动请求");
+  expect(app).toContain("创建 Codex 会话请求");
+  expect(app).toContain("launchRequest");
   expect(app).toContain("codexProjectId");
+});
+
+test("preview script keeps deep-linked run routes even before snapshot catches up", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("selectedRunId = route.runId");
+  expect(app).toContain("selectedLoopId = detail.loop.id");
 });
 
 test("serves the loop snapshot api", async () => {
@@ -215,6 +237,7 @@ test("starts a codex session run from the preview api", async () => {
       projectLabel: "dittos loop",
       projectPath: "/Users/edisonzhong/Documents/dittos loop",
       codexSession: {
+        mode: "new_session",
         status: "requested",
         codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
         projectLabel: "dittos loop"
@@ -223,6 +246,12 @@ test("starts a codex session run from the preview api", async () => {
     attempt: {
       status: "running"
     }
+  });
+  expect(launch.launchRequest).toMatchObject({
+    runId: launch.run.id,
+    loopId: loop.id,
+    title: "DittosLoop: AI Dev Tools Update Monitor",
+    projectLabel: "dittos loop"
   });
   expect(launch.prompt).toContain("AI Dev Tools Update Monitor");
 });
@@ -256,7 +285,7 @@ test("records a codex thread from the preview api", async () => {
       threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
       subagents: [
         {
-          status: "running",
+          status: "completed",
           threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
         }
       ]

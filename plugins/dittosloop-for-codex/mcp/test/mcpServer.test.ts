@@ -164,7 +164,7 @@ test("exposes codex thread writeback as MCP content", async () => {
       threadTitle: "DittosLoop: Monitor",
       subagents: [
         {
-          status: "running",
+          status: "completed",
           threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
         }
       ]

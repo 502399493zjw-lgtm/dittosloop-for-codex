@@ -9,6 +9,8 @@ export function createEmptyState(): LoopState {
   return {
     version: 1,
     loops: [],
+    formalContracts: [],
+    workflowRevisions: [],
     runs: [],
     attempts: [],
     events: [],
@@ -64,6 +66,7 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
     version: 1,
     loops: value?.loops ?? [],
     formalContracts: value?.formalContracts ?? [],
+    workflowRevisions: value?.workflowRevisions ?? [],
     runs: value?.runs ?? [],
     attempts: value?.attempts ?? [],
     events: value?.events ?? [],

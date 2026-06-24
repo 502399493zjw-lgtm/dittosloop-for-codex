@@ -134,10 +134,22 @@ export interface ArtifactRef {
   createdAt: string;
 }
 
+export interface WorkflowRevision {
+  id: string;
+  loopId: string;
+  runId: string;
+  attemptId?: string;
+  status: "draft" | "promoted" | "rejected";
+  reason: string;
+  contract: FormalLoopContract;
+  createdAt: string;
+}
+
 export interface LoopState {
   version: 1;
   loops: LoopContract[];
-  formalContracts?: FormalLoopContract[];
+  formalContracts: FormalLoopContract[];
+  workflowRevisions: WorkflowRevision[];
   runs: LoopRun[];
   attempts: RunAttempt[];
   events: RunEvent[];
@@ -156,6 +168,7 @@ export interface RunDetail {
   humanRequests: HumanRequest[];
   memoryCommits: MemoryCommit[];
   artifacts: ArtifactRef[];
+  workflowRevisions: WorkflowRevision[];
 }
 
 export interface CodexProjectRef {

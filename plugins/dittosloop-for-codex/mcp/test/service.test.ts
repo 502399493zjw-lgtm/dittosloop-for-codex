@@ -26,6 +26,23 @@ async function createService() {
   });
 }
 
+async function createServiceWithSequentialIds() {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+
+  return new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888"
+  });
+}
+
 test("creates a loop contract with manual trigger defaults", async () => {
   const service = await createService();
 
@@ -85,6 +102,125 @@ test("creates a formal loop contract and starts an engine-backed run", async () 
         }
       }
     ]
+  });
+});
+
+test("runs a formal workflow end to end with a draft workflow repair without replacing the active contract", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "AI Dev Tools Update Monitor",
+    goal: "Monitor Claude Code, OpenClaw, Hermes, Codex, and Twitter/X updates",
+    body: {
+      steps: [
+        {
+          id: "collect",
+          kind: "agent",
+          label: "Collect updates",
+          prompt: "Collect notable updates without sources"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "sources",
+          label: "Sources",
+          requirement: "Every notable update includes an official source",
+          severity: "must"
+        }
+      ]
+    },
+    repairPolicy: { maxAttempts: 2, strategy: "repair_then_retry" },
+    stopPolicy: { rule: "stop after verification passes or attempts are exhausted" }
+  });
+
+  const run = await service.runLoopWorkflow(formal.id, {
+    executor: {
+      async run(request) {
+        return request.prompt.includes("with official sources")
+          ? { text: "Claude Code update with official changelog source" }
+          : { text: "Claude Code update" };
+      }
+    },
+    verifier: ({ result }) => {
+      const text = JSON.stringify(result);
+      return text.includes("official changelog source")
+        ? {
+            status: "passed",
+            summary: "All updates include official sources.",
+            checks: [{ rubricId: "sources", status: "passed", evidence: "official changelog source" }]
+          }
+        : {
+            status: "failed",
+            summary: "Missing official sources.",
+            repairInstructions: "Update the collect step to require official sources.",
+            checks: [{ rubricId: "sources", status: "failed" }]
+          };
+    },
+    repairWorkflow: ({ contract }) => ({
+      ...contract,
+      body: {
+        steps: contract.body.steps.map((step) =>
+          step.id === "collect" && step.kind === "agent"
+            ? { ...step, prompt: "Collect notable updates with official sources" }
+            : step
+        )
+      }
+    })
+  });
+
+  expect(run).toMatchObject({
+    loopId: formal.id,
+    status: "completed",
+    goal: formal.goal
+  });
+
+  const detail = await service.getRunDetail(run.id);
+  expect(detail.attempts).toMatchObject([
+    { status: "failed", summary: "Missing official sources." },
+    { status: "completed", summary: "All updates include official sources." }
+  ]);
+  expect(detail.verificationResults).toMatchObject([
+    { status: "failed", summary: "Missing official sources.", checks: [{ name: "Sources", status: "failed" }] },
+    {
+      status: "passed",
+      summary: "All updates include official sources.",
+      checks: [{ name: "Sources", status: "passed", output: "official changelog source" }]
+    }
+  ]);
+  expect(detail.events.map((event) => event.data?.engineEvent?.type).filter(Boolean)).toEqual([
+    "run_started",
+    "agent_started",
+    "agent_done",
+    "run_completed",
+    "run_started",
+    "agent_started",
+    "agent_done",
+    "run_completed"
+  ]);
+  expect(detail.workflowRevisions).toHaveLength(1);
+  expect(detail.workflowRevisions[0]).toMatchObject({
+    status: "draft",
+    reason: "Missing official sources.",
+    contract: {
+      id: formal.id,
+      body: {
+        steps: [{ id: "collect", kind: "agent", prompt: "Collect notable updates with official sources" }]
+      }
+    }
+  });
+
+  const snapshot = await service.getSnapshot();
+  expect(snapshot.formalContracts?.[0].body.steps[0]).toMatchObject({
+    id: "collect",
+    kind: "agent",
+    prompt: "Collect notable updates without sources"
+  });
+  expect(snapshot.workflowRevisions?.[0].contract.body.steps[0]).toMatchObject({
+    id: "collect",
+    kind: "agent",
+    prompt: "Collect notable updates with official sources"
   });
 });
 
@@ -173,7 +309,7 @@ test("starts and completes an attempt under a run", async () => {
   });
 });
 
-test("starts a current-session subagent run with project binding and prompt intent", async () => {
+test("starts a host-mediated Codex session launch request with project binding and prompt intent", async () => {
   const service = await createService();
   const loop = await service.createLoop({
     title: "AI Dev Tools Update Monitor",
@@ -196,7 +332,7 @@ test("starts a current-session subagent run with project binding and prompt inte
     projectLabel: "dittos loop",
     projectPath: "/Users/edisonzhong/Documents/dittos loop",
     codexSession: {
-      mode: "current_session",
+      mode: "new_session",
       status: "requested",
       codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
       projectLabel: "dittos loop",
@@ -213,7 +349,16 @@ test("starts a current-session subagent run with project binding and prompt inte
     id: "attempt_1",
     runId: launch.run.id,
     status: "running",
-    summary: "Run AI Dev Tools Update Monitor in current Codex session with subagent"
+    summary: "Request a new Codex session for AI Dev Tools Update Monitor"
+  });
+  expect(launch.launchRequest).toMatchObject({
+    runId: launch.run.id,
+    loopId: loop.id,
+    title: "DittosLoop: AI Dev Tools Update Monitor",
+    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop",
+    prompt: launch.prompt
   });
   expect(launch.prompt).toContain("AI Dev Tools Update Monitor");
   expect(launch.prompt).toContain("Check today updates");
@@ -230,7 +375,7 @@ test("starts a current-session subagent run with project binding and prompt inte
         kind: "run_created",
         data: {
           codexSession: {
-            mode: "current_session",
+            mode: "new_session",
             status: "requested",
             codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
             projectLabel: "dittos loop",
@@ -242,6 +387,51 @@ test("starts a current-session subagent run with project binding and prompt inte
       { kind: "attempt_started" }
     ]
   });
+});
+
+test("compiles Codex session prompt from formal workflow contract when available", async () => {
+  const service = await createService();
+  const formal = await service.createLoopContract({
+    title: "AI Dev Tools Workflow Runtime",
+    goal: "Monitor AI dev tool updates through the DittosLoop runtime",
+    body: {
+      steps: [
+        {
+          id: "collect",
+          kind: "agent",
+          label: "Collect official updates",
+          prompt: "Collect Claude Code, OpenClaw, Hermes, Codex, and Twitter/X updates."
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "official-source",
+          label: "Official source",
+          requirement: "Every notable update cites an official source or explicitly says none was found",
+          severity: "must"
+        }
+      ]
+    },
+    repairPolicy: { maxAttempts: 3, strategy: "repair_then_retry" }
+  });
+
+  const launch = await service.startCodexSessionRun(formal.id, {
+    goal: "Run the monitor using the local workflow runtime"
+  });
+
+  expect(launch.prompt).toContain(`Contract id: ${formal.id}`);
+  expect(launch.prompt).toContain("Use the local DittosLoop workflow runtime");
+  expect(launch.prompt).toContain("Do not replace the active workflow contract");
+  expect(launch.prompt).toContain("Collect official updates");
+  expect(launch.prompt).toContain("Every notable update cites an official source");
+  expect(launch.launchRequest).toMatchObject({
+    workflowRuntime: "dittosloop-local-workflow",
+    workflowContractId: formal.id
+  });
+  expect(launch.run.codexSession?.subagents?.[0].prompt).toBe(launch.prompt);
 });
 
 test("records a real Codex thread against a requested session run", async () => {
@@ -268,18 +458,31 @@ test("records a real Codex thread against a requested session run", async () => 
     subagents: [
       {
         role: "loop-runner",
-        status: "running",
+        status: "completed",
         threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
       }
     ]
   });
+  expect(updated).toMatchObject({
+    status: "completed",
+    completedAt: fixedTime
+  });
   await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
     run: {
+      status: "completed",
+      completedAt: fixedTime,
       codexSession: {
         status: "started",
         threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
       }
     },
+    attempts: [
+      {
+        status: "completed",
+        completedAt: fixedTime,
+        summary: "Request a new Codex session for AI Dev Tools Update Monitor"
+      }
+    ],
     events: [
       { kind: "run_created" },
       { kind: "attempt_started" },
@@ -292,8 +495,65 @@ test("records a real Codex thread against a requested session run", async () => 
             threadTitle: "DittosLoop: AI Dev Tools Update Monitor"
           }
         }
+      },
+      {
+        kind: "attempt_completed",
+        message: "Codex thread created and attached to this run"
+      },
+      {
+        kind: "run_completed",
+        message: "Codex session launch completed"
       }
     ]
+  });
+
+  const corrected = await service.recordCodexThread(launch.run.id, {
+    threadId: "019ef7a0-bc04-72f1-8454-607c376eaaea",
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+    threadUrl: "codex://thread/019ef7a0-bc04-72f1-8454-607c376eaaea"
+  });
+
+  expect(corrected.codexSession).toMatchObject({
+    threadId: "019ef7a0-bc04-72f1-8454-607c376eaaea",
+    subagents: [
+      {
+        status: "completed",
+        threadId: "019ef7a0-bc04-72f1-8454-607c376eaaea",
+        threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+        threadUrl: "codex://thread/019ef7a0-bc04-72f1-8454-607c376eaaea"
+      }
+    ]
+  });
+});
+
+test("completing a Codex session run closes its subagent status", async () => {
+  const service = await createService();
+  const loop = await service.createLoop({
+    title: "Chinese Daily Report",
+    intent: "Write a daily report"
+  });
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "Start worker session"
+  });
+  const started = await service.recordCodexThread(launch.run.id, {
+    threadId: "019ef7b4-7a0d-74f2-b1a9-10502784e636",
+    threadTitle: "DittosLoop: AI 开发工具更新日报"
+  });
+
+  expect(started.codexSession?.subagents?.[0]?.status).toBe("completed");
+
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.run).toMatchObject({
+    status: "completed",
+    codexSession: {
+      subagents: [
+        {
+          role: "loop-runner",
+          status: "completed",
+          threadId: "019ef7b4-7a0d-74f2-b1a9-10502784e636"
+        }
+      ]
+    }
   });
 });
 
@@ -328,7 +588,7 @@ test("records a default subagent when older session runs have none", async () =>
   expect(updated.codexSession?.subagents).toEqual([
     {
       role: "loop-runner",
-      status: "running",
+      status: "completed",
       threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
       threadTitle: undefined,
       threadUrl: undefined

@@ -665,6 +665,41 @@ a:focus-visible {
   font-weight: 500;
 }
 
+.history-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.history-session-button {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--dittos-200);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--dittos-700);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 750;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.history-session-button:hover {
+  border-color: var(--dittos-400);
+  background: var(--dittos-50);
+}
+
+.history-session-state {
+  color: var(--ink-4);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .tiny-dot {
   width: 7px;
   height: 7px;
@@ -901,6 +936,42 @@ a:focus-visible {
   color: var(--fail);
 }
 
+.open-session-button,
+.agent-open-session {
+  display: inline-flex;
+  min-height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--dittos-200);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--dittos-700);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 0 11px;
+  white-space: nowrap;
+}
+
+.open-session-button:hover,
+.agent-open-session:hover {
+  border-color: var(--dittos-400);
+  background: var(--dittos-50);
+}
+
+.open-session-button.disabled {
+  border-color: var(--hair);
+  background: var(--surface-2);
+  color: var(--ink-4);
+  cursor: default;
+}
+
+.open-session-arrow {
+  font-size: 15px;
+  line-height: 1;
+}
+
 .run-meta-line {
   display: flex;
   min-width: 0;
@@ -1041,6 +1112,10 @@ a:focus-visible {
   background: #fdfcff;
 }
 
+.agent-card.has-session {
+  cursor: default;
+}
+
 .agent-card-row {
   display: flex;
   min-width: 0;
@@ -1100,6 +1175,21 @@ a:focus-visible {
 
 .agent-session-link.linked {
   color: var(--dittos-700);
+}
+
+.agent-open-session {
+  min-height: 24px;
+  max-width: 220px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+}
+
+.agent-open-session span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .agent-description {
@@ -1274,7 +1364,8 @@ a:focus-visible {
 }
 
 .status.running,
-.status.attempt_started {
+.status.attempt_started,
+.status.draft {
   background: var(--info-bg);
   color: var(--info);
 }
@@ -1359,7 +1450,8 @@ a:focus-visible {
 
   .history-time,
   .history-trigger,
-  .history-status {
+  .history-status,
+  .history-actions {
     width: auto;
     flex-basis: auto;
   }
