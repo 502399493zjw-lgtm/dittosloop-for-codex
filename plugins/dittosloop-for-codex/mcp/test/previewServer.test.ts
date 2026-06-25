@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -6,7 +6,13 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, expect, test } from "vitest";
 
-import { startPreviewServer, type PreviewServer } from "../src/previewServer.js";
+import {
+  asAppleScriptString,
+  buildTemplateLaunchShellCommand,
+  shellQuote,
+  startPreviewServer,
+  type PreviewServer
+} from "../src/previewServer.js";
 import { LoopService, type LoopServiceOptions } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
 import type { CodexSessionBridge, CodexSessionRef, CodexSessionRequest } from "../src/codex/sessionBridge.js";
@@ -300,6 +306,97 @@ test("new loop prompt copy uses a centered toast without changing the workspace"
   expect(styles).toContain("left: 50%");
 });
 
+test("preview script includes templates gallery launch controls", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+  const html = await readFile(join(previewDir, "index.html"), "utf8");
+  const styles = await readFile(join(previewDir, "styles.css"), "utf8");
+
+  expect(html).toContain("id=\"templates\"");
+  expect(html).toContain("id=\"show-projects\"");
+  expect(html).toContain("id=\"show-templates\"");
+  expect(html).toContain("id=\"project-view\"");
+  expect(html).toContain("id=\"template-view\"");
+  expect(html).toContain("项目");
+  expect(html).toContain("模版");
+  expect(app).toContain("renderTemplates");
+  expect(app).toContain("setListView");
+  expect(app).toContain("activeListView");
+  expect(app).toContain("loopShell");
+  expect(app).toContain("loopWorkspace");
+  expect(app).toContain("classList.toggle(\"template-mode\", templatesActive)");
+  expect(app).toContain("elements.loopWorkspace.hidden = templatesActive");
+  expect(app).toContain("aria-hidden");
+  expect(app).toContain("templateFilters");
+  expect(app).toContain("activeTemplateCategory");
+  expect(app).toContain("activeTemplateCadence");
+  expect(app).toContain("filteredTemplates");
+  expect(app).toContain("templateCategoryCounts");
+  expect(app).toContain("template-filter-count");
+  expect(app).toContain("data-template-category");
+  expect(app).toContain("data-template-cadence");
+  expect(app).toContain("/api/templates");
+  expect(app).toContain("useTemplate");
+  expect(app).toContain("用模版");
+  expect(app).toContain("templateToast");
+  expect(app).toContain("renderTemplateNotice");
+  expect(app).toContain("renderTemplateToast");
+  expect(app).toContain("renderTemplateSource");
+  expect(app).toContain("template-source-link");
+  expect(app).toContain("window.setTimeout");
+  expect(app).not.toContain("renderTemplateFeedback");
+  expect(app).not.toContain("template-feedback");
+  expect(styles).toContain(".template-toast");
+  expect(styles).toContain(".template-source-link");
+  expect(styles).toContain("top: 50%");
+  expect(styles).toContain("left: 50%");
+  expect(styles).toContain("translate(-50%, -50%)");
+  expect(styles).toContain(".template-filter-count");
+  expect(styles).not.toContain(".template-feedback");
+  expect(app).toContain("正在生成模版 prompt...");
+  expect(app).toContain("/api/templates/${encodeURIComponent(template.id)}/prompt");
+  expect(app).toContain("copyTemplatePrompt");
+  expect(app).toContain("copyTemplatePromptWithSelection");
+  expect(app).toContain("document.execCommand(\"copy\")");
+  expect(app).toContain("navigator.clipboard.writeText");
+  expect(app).not.toContain("template-prompt-copy");
+  expect(app).not.toContain("templateToast.prompt");
+  expect(app).not.toContain("launchMode: \"host\"");
+  expect(app).not.toContain("__dittosloopTemplateLaunchRequest");
+  expect(app).toContain("各种模版");
+  expect(app).toContain("全部类型");
+  expect(app).toContain("内容");
+  expect(app).toContain("评估");
+  expect(app).toContain("设计");
+  expect(app).toContain("手动触发");
+  expect(app).toContain("周期循环");
+  expect(app).not.toContain("templateCadenceLabel");
+  expect(app).not.toContain("el(\"span\", \"template-cadence\"");
+  expect(app).toContain("已复制 prompt，可新开 Codex 会话粘贴。");
+  expect(app).toContain("复制失败，请允许浏览器剪贴板权限后再试。");
+  expect(app).not.toContain("请手动复制下面内容");
+  expect(app).not.toContain("已在 Terminal 打开 Codex CLI 会话，建好后点刷新");
+  expect(app).toContain("Template prompt request failed");
+  expect(app).not.toContain("templates-header .project-picker");
+});
+
+test("preview templates view hides the right workspace panel", async () => {
+  const styles = await readFile(join(previewDir, "styles.css"), "utf8");
+
+  expect(styles).toContain(".loop-shell.template-mode");
+  expect(styles).toContain("grid-template-columns: minmax(0, 1fr)");
+  expect(styles).toContain(".loop-shell.template-mode .loop-workspace");
+  expect(styles).toContain("display: none");
+  expect(styles).toContain(".loop-shell.template-mode .template-grid");
+});
+
+test("preview file fallback explains templates need the local preview server", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("window.location.protocol === \"file:\"");
+  expect(app).toContain("renderTemplates([], \"当前是离线文件预览，请从 DittosLoop 预览链接打开后读取模版库。\")");
+  expect(app).not.toContain("renderTemplates([]);");
+});
+
 test("preview shell uses the new loop button as a session launch action", async () => {
   const html = await readFile(join(previewDir, "index.html"), "utf8");
 
@@ -383,6 +480,409 @@ test("serves backend-rendered loop directory files api", async () => {
   expect(files.find((file: { path: string }) => file.path === "flow.js")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "agents.md")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "session.json")).toBeUndefined();
+});
+
+test("serves the templates gallery api", async () => {
+  const service = await createService();
+  const templatesFile = await writeTemplatesFile([
+    {
+      id: "tests-green",
+      title: "测试修绿",
+      category: "engineering",
+      cadence: "manual",
+      desc: "把测试一路修到全过、lint 干净",
+      trigger: "手动",
+      checks: ["全部测试通过"],
+      buildPrompt: "请用 DittosLoop For Codex 创建一个 loop。Title: 测试修绿。Trigger: manual。Verification checks: (1) 全部测试通过。请调用 create_loop。",
+      source: {
+        label: "awesome-agent-loops",
+        url: "https://github.com/serenakeyitan/awesome-agent-loops"
+      }
+    }
+  ]);
+  const server = await startPreviewServer({ service, staticDir: previewDir, templatesFile, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/templates`);
+  const templates = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(templates).toEqual([
+    expect.objectContaining({
+      id: "tests-green",
+      title: "测试修绿",
+      category: "engineering",
+      cadence: "manual",
+      checks: ["全部测试通过"],
+      buildPrompt: expect.stringContaining("create_loop"),
+      source: {
+        label: "awesome-agent-loops",
+        url: "https://github.com/serenakeyitan/awesome-agent-loops"
+      }
+    })
+  ]);
+});
+
+test("serves a template prompt api without launching a session", async () => {
+  const service = await createService();
+  const templatesFile = await writeTemplatesFile([
+    {
+      id: "tests-green",
+      title: "测试修绿",
+      category: "engineering",
+      cadence: "manual",
+      desc: "把测试一路修到全过、lint 干净",
+      trigger: "手动",
+      checks: ["全部测试通过"],
+      buildPrompt: "请用 DittosLoop For Codex 创建一个 loop。Title: 测试修绿。Trigger: manual。Verification checks: (1) 全部测试通过。请调用 create_loop。"
+    }
+  ]);
+  const server = await startPreviewServer({
+    service,
+    staticDir: previewDir,
+    templatesFile,
+    spawnProcess: () => {
+      throw new Error("spawn should not be called for prompt generation");
+    },
+    port: 0
+  });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/templates/tests-green/prompt`);
+  const prompt = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(prompt).toEqual({
+    prompt: expect.stringContaining("Title: 测试修绿")
+  });
+});
+
+test("bundled templates cover common categories and cadence modes", async () => {
+  const templates = JSON.parse(await readFile(join(previewDir, "../templates/templates.json"), "utf8")) as Array<{
+    id?: string;
+    category?: string;
+    cadence?: string;
+  }>;
+
+  expect(templates.length).toBeGreaterThanOrEqual(107);
+  expect(new Set(templates.map((template) => template.category))).toEqual(
+    new Set(["engineering", "product", "documentation", "operations", "research", "content", "evaluation", "design"])
+  );
+  expect(new Set(templates.map((template) => template.cadence))).toEqual(new Set(["manual", "recurring"]));
+  expect(templates.filter((template) => template.id?.startsWith("awesome-"))).toHaveLength(18);
+  expect(templates.filter((template) => template.id?.startsWith("ff-"))).toHaveLength(64);
+  expect(templates.map((template) => template.id)).toEqual(
+    expect.arrayContaining([
+      "awesome-kill-flaky-tests",
+      "awesome-keep-docs-in-sync",
+      "ff-overnight-docs-sweep",
+      "ff-full-product-evaluation-loop"
+    ])
+  );
+});
+
+test("bundled templates include lightweight source metadata", async () => {
+  const templates = JSON.parse(await readFile(join(previewDir, "../templates/templates.json"), "utf8")) as Array<{
+    id?: string;
+    source?: {
+      label?: string;
+      url?: string;
+    };
+  }>;
+
+  const sourceById = new Map(templates.map((template) => [template.id, template.source]));
+
+  expect(templates.every((template) => template.source?.label)).toBe(true);
+  expect(sourceById.get("awesome-kill-flaky-tests")).toEqual({
+    label: "awesome-agent-loops",
+    url: "https://github.com/serenakeyitan/awesome-agent-loops"
+  });
+  expect(sourceById.get("ff-overnight-docs-sweep")).toEqual({
+    label: "Forward-Future/loop-library",
+    url: "https://github.com/Forward-Future/loop-library"
+  });
+  expect(sourceById.get("tests-green")).toEqual({
+    label: "DittosLoop 内置"
+  });
+});
+
+test("bundled template categories keep engineering workflows in engineering", async () => {
+  const templates = JSON.parse(await readFile(join(previewDir, "../templates/templates.json"), "utf8")) as Array<{
+    id?: string;
+    category?: string;
+  }>;
+  const categoryById = new Map(templates.map((template) => [template.id, template.category]));
+  const expectedCategories = new Map([
+    ["pr-babysitter", "engineering"],
+    ["release-readiness", "engineering"],
+    ["awesome-babysit-a-pr", "engineering"],
+    ["awesome-babysit-many-prs", "engineering"],
+    ["awesome-wait-for-ci", "engineering"],
+    ["awesome-ship-a-pr-until-green", "engineering"],
+    ["awesome-keep-docs-in-sync", "engineering"],
+    ["awesome-morning-issue-triage", "product"],
+    ["ff-stale-safe-batch-release-loop", "engineering"],
+    ["ff-production-data-cleanup-loop", "engineering"],
+    ["ff-post-release-baseline-loop", "engineering"],
+    ["ff-customer-ai-deployment-loop", "engineering"],
+    ["ff-seo-geo-visibility-loop", "engineering"],
+    ["ff-quality-streak-loop", "engineering"],
+    ["ff-full-product-evaluation-loop", "engineering"],
+    ["ff-boeing-747-benchmark", "engineering"],
+    ["ff-war-loops-frontend-designer", "engineering"],
+    ["ff-revolve-self-improvement-loop", "engineering"],
+    ["ff-pixel-safe-css-trim-loop", "engineering"],
+    ["ff-accessibility-repair-loop", "engineering"],
+    ["ff-living-story-loop", "documentation"],
+    ["ff-recovery-proof-loop", "engineering"]
+  ]);
+
+  const offenders = [...expectedCategories].flatMap(([id, expected]) => {
+    const actual = categoryById.get(id);
+    return actual === expected ? [] : [{ id, expected, actual }];
+  });
+
+  expect(offenders).toEqual([]);
+});
+
+test("bundled template cadence matches visible trigger copy", async () => {
+  const templates = JSON.parse(await readFile(join(previewDir, "../templates/templates.json"), "utf8")) as Array<{
+    id?: string;
+    cadence?: string;
+    trigger?: string;
+  }>;
+
+  const offenders = templates.filter(
+    (template) =>
+      (template.cadence === "manual" && template.trigger !== "手动") ||
+      (template.cadence === "recurring" && template.trigger === "手动")
+  );
+
+  expect(offenders).toEqual([]);
+});
+
+test("bundled templates keep user-facing copy localized in Chinese", async () => {
+  const templates = JSON.parse(await readFile(join(previewDir, "../templates/templates.json"), "utf8")) as Array<{
+    id?: string;
+    title?: string;
+    desc?: string;
+    trigger?: string;
+    checks?: string[];
+    buildPrompt?: string;
+  }>;
+  const englishStructurePattern =
+    /\b(?:Title|Intent|Trigger|Verification checks|Original prompt|Use when):|^The .+ loop$|\b(?:A reusable|A bounded|A scheduled|A performance|A goal-based|A repeatable|A repository|A release|A production|A triggered|A supervised|A Claude|A vision|A prompt|A critic|A disposable|A thumbnail|A planning workflow|A browser-based|A web performance|A stylesheet|A first-time-user|An accessibility|A conservative|A controlled|A flaky-test|An evidence-driven|A recurring|A read-only|A disaster|A persistent|A safe Dependabot)\b|\b(?:Use this when|Use this for|Every |No |The final |Finish with |Return |Stop when|Never |Ask before|If |Do not )\b/;
+
+  const offenders = templates
+    .flatMap((template) => [
+      ["title", template.title ?? ""],
+      ["desc", template.desc ?? ""],
+      ["trigger", template.trigger ?? ""],
+      ...((template.checks ?? []).map((check, index) => [`checks[${index}]`, check] as const)),
+      ["buildPrompt", template.buildPrompt ?? ""]
+    ].map(([field, value]) => ({ id: template.id, field, value })))
+    .filter(({ value }) => englishStructurePattern.test(value));
+
+  expect(offenders).toEqual([]);
+});
+
+test("bundled templates do not expose generic fallback evidence checks", async () => {
+  const templates = JSON.parse(await readFile(join(previewDir, "../templates/templates.json"), "utf8")) as Array<{
+    id?: string;
+    checks?: string[];
+    buildPrompt?: string;
+  }>;
+  const fallbackChecks = [
+    "按原始步骤记录证据；需要越权或高风险操作时暂停确认。",
+    "高风险、生产、付费或权限动作前暂停确认",
+    "按原始节奏完成一次检查或行动",
+    "输出包含可复查的结果和下一步",
+    "原始目标条件已经满足",
+    "相关测试或检查已通过",
+    "达到停止条件前不提前结束",
+    "若信息不全，只追问安全关键缺项。"
+  ];
+
+  const offenders = templates
+    .flatMap((template) => [
+      ...((template.checks ?? []).map((check, index) => [`checks[${index}]`, check] as const)),
+      ["buildPrompt", template.buildPrompt ?? ""]
+    ].map(([field, value]) => ({ id: template.id, field, value })))
+    .filter(({ value }) => fallbackChecks.some((fallbackCheck) => value.includes(fallbackCheck)));
+
+  expect(offenders).toEqual([]);
+});
+
+test("bundled template prompts do not expose joined sentence punctuation", async () => {
+  const templates = JSON.parse(await readFile(join(previewDir, "../templates/templates.json"), "utf8")) as Array<{
+    id?: string;
+    buildPrompt?: string;
+  }>;
+
+  const offenders = templates
+    .map((template) => ({ id: template.id, value: template.buildPrompt ?? "" }))
+    .filter(({ value }) => /。{2,}/.test(value));
+
+  expect(offenders).toEqual([]);
+});
+
+test("launches a template as a visible codex terminal session on macOS", async () => {
+  const service = await createService();
+  const templatesFile = await writeTemplatesFile([
+    {
+      id: "quote-heavy",
+      title: "带引号任务",
+      category: "engineering",
+      cadence: "manual",
+      desc: "测试命令转义",
+      trigger: "手动",
+      checks: ["prompt 保持完整"],
+      buildPrompt: "Title: 带引号任务。Intent: 处理 \"quote\" 和 \\ slash。Trigger: manual。Verification checks: (1) prompt 保持完整。请调用 create_loop。"
+    }
+  ]);
+  const spawns: Array<{ command: string; args: string[]; options: unknown }> = [];
+  const server = await startPreviewServer({
+    service,
+    staticDir: previewDir,
+    templatesFile,
+    platform: "darwin",
+    spawnProcess: (command, args, options) => {
+      spawns.push({ command, args, options });
+      return { unref: () => undefined };
+    },
+    port: 0
+  });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/templates/quote-heavy/launch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectPath: "/tmp/it works" })
+  });
+  const launch = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(launch).toEqual({ launched: true });
+  expect(spawns).toHaveLength(1);
+  expect(spawns[0]).toMatchObject({
+    command: "osascript",
+    args: [
+      "-e",
+      expect.stringContaining("tell application \"Terminal\" to do script")
+    ]
+  });
+  expect(spawns[0].args[1]).toContain("cd '/tmp/it works' && codex");
+  expect(spawns[0].args[1]).toContain("Title: 带引号任务");
+  expect(spawns[0].args[1]).toContain("quote");
+  expect(spawns[0].args[1]).toContain("slash");
+});
+
+test("returns a host-mediated template codex session request without opening Terminal", async () => {
+  const service = await createService();
+  const templatesFile = await writeTemplatesFile([
+    {
+      id: "host-open",
+      title: "宿主打开",
+      category: "engineering",
+      cadence: "manual",
+      desc: "交给 Codex App 打开",
+      trigger: "手动",
+      checks: ["返回 launchRequest"],
+      buildPrompt: "Title: 宿主打开。Trigger: manual。Verification checks: (1) 返回 launchRequest。请调用 create_loop。"
+    }
+  ]);
+  const server = await startPreviewServer({
+    service,
+    staticDir: previewDir,
+    templatesFile,
+    platform: "darwin",
+    spawnProcess: () => {
+      throw new Error("spawn should not be called for host launches");
+    },
+    port: 0
+  });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/templates/host-open/launch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      launchMode: "host",
+      codexProjectId: "/tmp/project",
+      projectLabel: "project",
+      projectPath: "/tmp/project"
+    })
+  });
+  const launch = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(launch).toMatchObject({
+    launched: false,
+    prompt: expect.stringContaining("Title: 宿主打开"),
+    launchRequest: {
+      title: "DittosLoop: 宿主打开",
+      prompt: expect.stringContaining("Title: 宿主打开"),
+      workflowRuntime: "dittosloop-loop-creator",
+      codexProjectId: "/tmp/project",
+      projectLabel: "project",
+      projectPath: "/tmp/project"
+    }
+  });
+});
+
+test("returns a copyable template prompt outside macOS", async () => {
+  const service = await createService();
+  const templatesFile = await writeTemplatesFile([
+    {
+      id: "manual-copy",
+      title: "手动复制",
+      category: "operations",
+      cadence: "manual",
+      desc: "非 macOS 降级",
+      trigger: "手动",
+      checks: ["返回 prompt"],
+      buildPrompt: "Title: 手动复制。Trigger: manual。Verification checks: (1) 返回 prompt。请调用 create_loop。"
+    }
+  ]);
+  const server = await startPreviewServer({
+    service,
+    staticDir: previewDir,
+    templatesFile,
+    platform: "linux",
+    spawnProcess: () => {
+      throw new Error("spawn should not be called");
+    },
+    port: 0
+  });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/templates/manual-copy/launch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectPath: "/tmp/project" })
+  });
+  const launch = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(launch).toEqual({
+    launched: false,
+    prompt: expect.stringContaining("Title: 手动复制")
+  });
+});
+
+test("escapes template launch commands for Terminal", () => {
+  const shellCommand = buildTemplateLaunchShellCommand(
+    "/tmp/it's here",
+    'Title: "quoted" \\ path $HOME `whoami`'
+  );
+
+  expect(shellCommand).toContain("cd '/tmp/it'\"'\"'s here' && codex");
+  expect(shellCommand).toContain('Title: \\"quoted\\"');
+  expect(shellCommand).toContain("\\\\ path");
+  expect(shellCommand).toContain("\\$HOME");
+  expect(shellCommand).toContain("\\`whoami\\`");
+  expect(shellQuote("a'b")).toBe("'a'\"'\"'b'");
+  expect(asAppleScriptString('say "hi" \\ ok')).toBe('"say \\"hi\\" \\\\ ok"');
 });
 
 test("creates a host-mediated new loop codex session request", async () => {
@@ -952,3 +1452,11 @@ test("returns 404 for unknown run detail", async () => {
   expect(response.status).toBe(404);
   expect(body).toEqual({ error: "Run not found: run_missing" });
 });
+
+async function writeTemplatesFile(templates: unknown[]): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-templates-"));
+  tempDirs.push(dir);
+  const file = join(dir, "templates.json");
+  await writeFile(file, `${JSON.stringify(templates, null, 2)}\n`, "utf8");
+  return file;
+}

@@ -19,8 +19,19 @@
           <button id="new-loop" class="new-loop-button" type="button">+ 新建循环</button>
         </header>
 
-        <section class="loop-group">
-          <div id="loops" class="loop-rows"></div>
+        <nav class="list-view-switch" aria-label="Live Loop views">
+          <button id="show-projects" class="list-view-button active" type="button" aria-pressed="true" aria-controls="project-view">项目</button>
+          <button id="show-templates" class="list-view-button" type="button" aria-pressed="false" aria-controls="template-view">模版</button>
+        </nav>
+
+        <section id="project-view" class="list-pane active" aria-label="Project loops">
+          <section class="loop-group">
+            <div id="loops" class="loop-rows"></div>
+          </section>
+        </section>
+
+        <section id="template-view" class="list-pane" aria-label="Loop templates" hidden>
+          <section id="templates" class="template-gallery"></section>
         </section>
       </aside>
 

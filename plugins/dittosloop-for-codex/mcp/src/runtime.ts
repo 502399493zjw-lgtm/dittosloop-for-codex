@@ -7,6 +7,7 @@ export interface RuntimeConfig {
   previewPort: number;
   previewBaseUrl: string;
   staticDir: string;
+  templatesFile: string;
   codexProjects: CodexProjectRef[];
 }
 
@@ -18,6 +19,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv, pluginRoot: string,
     previewPort,
     previewBaseUrl: `http://127.0.0.1:${previewPort}`,
     staticDir: join(pluginRoot, "preview"),
+    templatesFile: join(pluginRoot, "templates", "templates.json"),
     codexProjects: parseCodexProjects(env)
   };
 }

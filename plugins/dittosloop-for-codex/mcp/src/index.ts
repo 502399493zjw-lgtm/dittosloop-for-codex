@@ -25,6 +25,7 @@ async function main(): Promise<void> {
   await startPreviewServer({
     service,
     staticDir: config.staticDir,
+    templatesFile: config.templatesFile,
     port: config.previewPort
   });
 

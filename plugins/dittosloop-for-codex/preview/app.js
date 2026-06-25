@@ -9,7 +9,14 @@ const UNASSIGNED_PROJECT_LABEL = "无项目";
 
 const elements = {
   shell: document.querySelector(".loop-shell"),
+  loopShell: document.querySelector(".loop-shell"),
   newLoop: document.querySelector("#new-loop"),
+  showProjects: document.querySelector("#show-projects"),
+  showTemplates: document.querySelector("#show-templates"),
+  projectView: document.querySelector("#project-view"),
+  templateView: document.querySelector("#template-view"),
+  loopWorkspace: document.querySelector(".loop-workspace"),
+  templates: document.querySelector("#templates"),
   loops: document.querySelector("#loops"),
   loopStage: document.querySelector("#loop-stage")
 };
@@ -25,9 +32,42 @@ const loopFilesErrors = new Map();
 let selectedRunPhaseId = "attempts";
 let loopSelectionClosed = false;
 let observedHash = window.location.hash;
+let currentTemplates = [];
+let activeListView = "projects";
+let activeTemplateCategory = "all";
+let activeTemplateCadence = "all";
+let templateToast = null;
+let templateToastTimer = null;
+
+const templateFilters = {
+  categories: [
+    { id: "all", label: "全部类型" },
+    { id: "engineering", label: "工程" },
+    { id: "product", label: "产品" },
+    { id: "documentation", label: "文档" },
+    { id: "operations", label: "运营" },
+    { id: "research", label: "研究" },
+    { id: "content", label: "内容" },
+    { id: "evaluation", label: "评估" },
+    { id: "design", label: "设计" }
+  ],
+  cadences: [
+    { id: "all", label: "全部循环" },
+    { id: "manual", label: "手动触发" },
+    { id: "recurring", label: "周期循环" }
+  ]
+};
 
 elements.newLoop.addEventListener("click", () => {
   void copyNewLoopPrompt();
+});
+
+elements.showProjects.addEventListener("click", () => {
+  setListView("projects");
+});
+
+elements.showTemplates.addEventListener("click", () => {
+  setListView("templates");
 });
 
 window.addEventListener("hashchange", syncRouteFromLocation);
@@ -37,6 +77,25 @@ window.setInterval(() => {
     syncRouteFromLocation();
   }
 }, 200);
+
+setListView(activeListView);
+
+function setListView(view) {
+  activeListView = view === "templates" ? "templates" : "projects";
+  const templatesActive = activeListView === "templates";
+
+  elements.loopShell.classList.toggle("template-mode", templatesActive);
+  elements.loopWorkspace.hidden = templatesActive;
+  elements.loopWorkspace.setAttribute("aria-hidden", String(templatesActive));
+  elements.projectView.hidden = templatesActive;
+  elements.templateView.hidden = !templatesActive;
+  elements.projectView.classList.toggle("active", !templatesActive);
+  elements.templateView.classList.toggle("active", templatesActive);
+  elements.showProjects.classList.toggle("active", !templatesActive);
+  elements.showTemplates.classList.toggle("active", templatesActive);
+  elements.showProjects.setAttribute("aria-pressed", String(!templatesActive));
+  elements.showTemplates.setAttribute("aria-pressed", String(templatesActive));
+}
 
 function syncRouteFromLocation() {
   observedHash = window.location.hash;
@@ -78,6 +137,7 @@ async function loadSnapshot() {
     applyRouteState(snapshot);
 
     render(snapshot);
+    await loadTemplates();
 
     if (selectedRunId) {
       await loadRunDetail(selectedRunId);
@@ -100,6 +160,7 @@ async function loadSnapshot() {
       selectedLoopId = null;
       selectedRunId = null;
       render(emptySnapshot);
+      renderTemplates([], "当前是离线文件预览，请从 DittosLoop 预览链接打开后读取模版库。");
       renderLoopStage({ snapshot: emptySnapshot });
       return;
     }
@@ -115,6 +176,302 @@ function render(snapshot) {
 
   updateWorkspaceState();
   elements.loops.replaceChildren(...renderLoopGroups(loopGroups, runs, verificationResults));
+}
+
+async function loadTemplates() {
+  if (!elements.templates) return;
+
+  try {
+    const response = await fetch("/api/templates", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Templates request failed: ${response.status}`);
+    }
+
+    currentTemplates = await response.json();
+    renderTemplates(currentTemplates);
+  } catch (error) {
+    currentTemplates = [];
+    renderTemplates([], error instanceof Error ? error.message : "模版库暂不可用。");
+  }
+}
+
+function renderTemplates(templates = currentTemplates, errorMessage = "") {
+  if (!elements.templates) return;
+
+  if (!templates.some((template) => template.category === activeTemplateCategory)) {
+    activeTemplateCategory = "all";
+  }
+  if (!templates.some((template) => template.cadence === activeTemplateCadence)) {
+    activeTemplateCadence = "all";
+  }
+
+  const visibleTemplates = filteredTemplates(templates);
+  const header = el("header", "templates-header", [
+    el("div", "templates-title-block", [
+      el("span", "templates-kicker", "模版库"),
+      el("strong", "", "各种模版")
+    ]),
+    el("span", "templates-count", `${visibleTemplates.length}/${templates.length}`)
+  ]);
+  const filters = renderTemplateFilters(templates);
+
+  if (errorMessage) {
+    elements.templates.replaceChildren(
+      header,
+      el("div", "template-empty", errorMessage)
+    );
+    return;
+  }
+
+  if (!templates.length) {
+    elements.templates.replaceChildren(
+      header,
+      el("div", "template-empty", "正在读取模版库...")
+    );
+    return;
+  }
+
+  elements.templates.replaceChildren(
+    ...[
+      header,
+      filters,
+      visibleTemplates.length
+        ? el("div", "template-grid", visibleTemplates.map((template) => renderTemplateCard(template)))
+        : el("div", "template-empty", "没有符合当前筛选的模版。")
+    ].filter(Boolean)
+  );
+}
+
+function renderTemplateNotice(message, options = {}) {
+  renderTemplateToast(message, options);
+}
+
+function renderTemplateToast(message, options = {}) {
+  const kind = options.kind ?? "info";
+  const duration = options.duration ?? (kind === "info" ? 1800 : 2800);
+  const toast = ensureTemplateToast();
+
+  window.clearTimeout(templateToastTimer);
+  toast.hidden = false;
+  toast.className = `template-toast ${kind}`;
+  toast.setAttribute("role", kind === "error" || kind === "warning" ? "alert" : "status");
+  toast.textContent = message;
+  toast.getBoundingClientRect();
+  toast.classList.add("visible");
+
+  if (duration > 0) {
+    templateToastTimer = window.setTimeout(() => {
+      toast.classList.remove("visible");
+      templateToastTimer = window.setTimeout(() => {
+        toast.hidden = true;
+      }, 180);
+    }, duration);
+  }
+}
+
+function ensureTemplateToast() {
+  if (templateToast) return templateToast;
+
+  templateToast = el("div", "template-toast");
+  templateToast.hidden = true;
+  document.body.appendChild(templateToast);
+  return templateToast;
+}
+
+function filteredTemplates(templates = currentTemplates) {
+  return templates.filter((template) => {
+    const categoryMatched = activeTemplateCategory === "all" || template.category === activeTemplateCategory;
+    const cadenceMatched = activeTemplateCadence === "all" || template.cadence === activeTemplateCadence;
+    return categoryMatched && cadenceMatched;
+  });
+}
+
+function renderTemplateFilters(templates = currentTemplates) {
+  const categoryCounts = templateCategoryCounts(templates);
+  const categoryFilters = templateFilters.categories.filter((filter) => {
+    return filter.id === "all" || categoryCounts.has(filter.id);
+  });
+
+  return el("div", "template-filters", [
+    el("div", "template-filter-row", [
+      el("span", "template-filter-label", "类型"),
+      ...categoryFilters.map((filter) => renderTemplateFilterButton("category", filter, categoryCounts))
+    ]),
+    el("div", "template-filter-row", [
+      el("span", "template-filter-label", "循环"),
+      ...templateFilters.cadences.map((filter) => renderTemplateFilterButton("cadence", filter))
+    ])
+  ]);
+}
+
+function templateCategoryCounts(templates = currentTemplates) {
+  const counts = new Map([["all", templates.length]]);
+  for (const template of templates) {
+    counts.set(template.category, (counts.get(template.category) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function renderTemplateFilterButton(kind, filter, counts = null) {
+  const active = kind === "category"
+    ? activeTemplateCategory === filter.id
+    : activeTemplateCadence === filter.id;
+  const count = counts?.get(filter.id);
+  const content = count === undefined
+    ? filter.label
+    : [
+      el("span", "template-filter-text", filter.label),
+      el("span", "template-filter-count", String(count))
+    ];
+  const filterButton = button(`template-filter-button ${active ? "active" : ""}`, () => {
+    if (kind === "category") {
+      activeTemplateCategory = filter.id;
+    } else {
+      activeTemplateCadence = filter.id;
+    }
+    renderTemplates();
+  }, content);
+
+  filterButton.setAttribute("aria-pressed", String(active));
+  if (kind === "category") {
+    filterButton.setAttribute("data-template-category", filter.id);
+    filterButton.setAttribute("aria-label", `${filter.label}，${count ?? 0} 个模版`);
+  } else {
+    filterButton.setAttribute("data-template-cadence", filter.id);
+  }
+
+  return filterButton;
+}
+
+function renderTemplateCard(template) {
+  const card = el("article", "template-card", [
+    el("div", "template-card-head", [
+      el("span", "template-category", templateCategoryLabel(template.category)),
+      el("span", "template-trigger", template.trigger)
+    ]),
+    el("div", "template-card-body", [
+      el("h3", "", template.title),
+      el("p", "template-card-desc", template.desc)
+    ]),
+    el("div", "template-card-foot", [
+      renderTemplateSource(template),
+      button("template-use-button", () => {
+        void useTemplate(template);
+      }, "用模版")
+    ])
+  ]);
+  card.setAttribute("data-template-category", template.category);
+  card.setAttribute("data-template-cadence", template.cadence);
+  return card;
+}
+
+function renderTemplateSource(template) {
+  const label = template.source?.label;
+  if (!label) return null;
+
+  const sourceLabel = `来源 ${label}`;
+  if (!template.source?.url) {
+    return el("span", "template-source-text", sourceLabel);
+  }
+
+  const source = el("a", "template-source-link", sourceLabel);
+  source.href = template.source.url;
+  source.target = "_blank";
+  source.rel = "noreferrer";
+  source.setAttribute("aria-label", `打开来源 ${label}`);
+  return source;
+}
+
+function templateCategoryLabel(category) {
+  const labels = {
+    engineering: "工程",
+    operations: "运营",
+    documentation: "文档",
+    product: "产品",
+    research: "研究",
+    content: "内容",
+    evaluation: "评估",
+    design: "设计"
+  };
+  return labels[category] ?? category;
+}
+
+async function useTemplate(template) {
+  renderTemplateNotice("正在生成模版 prompt...", { kind: "info" });
+
+  try {
+    const response = await fetch(`/api/templates/${encodeURIComponent(template.id)}/prompt`, { cache: "no-store" });
+    if (!response.ok) {
+      console.error(`Template prompt request failed: ${response.status}`);
+      renderTemplateNotice("模版 prompt 生成失败，请刷新后再试。", { kind: "error" });
+      return;
+    }
+
+    const { prompt } = await response.json();
+    if (typeof prompt !== "string" || !prompt.trim()) {
+      renderTemplateNotice("模版 prompt 生成失败，请刷新后再试。", { kind: "error" });
+      return;
+    }
+
+    if (await copyTemplatePrompt(prompt)) {
+      renderTemplateNotice("已复制 prompt，可新开 Codex 会话粘贴。", { kind: "success" });
+      return;
+    }
+
+    renderTemplateNotice("复制失败，请允许浏览器剪贴板权限后再试。", { kind: "warning" });
+  } catch (error) {
+    console.error(error);
+    renderTemplateNotice("模版 prompt 生成失败，请确认预览服务仍在运行。", { kind: "error" });
+  }
+}
+
+async function copyTemplatePrompt(prompt) {
+  if (!prompt) {
+    return false;
+  }
+
+  if (copyTemplatePromptWithSelection(prompt)) {
+    return true;
+  }
+
+  if (!navigator.clipboard?.writeText) {
+    return false;
+  }
+
+  try {
+    await navigator.clipboard.writeText(prompt);
+    return true;
+  } catch (error) {
+    console.warn("Template prompt copy failed", error);
+    return false;
+  }
+}
+
+function copyTemplatePromptWithSelection(prompt) {
+  if (!document.execCommand) {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = prompt;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.left = "-1000px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, prompt.length);
+
+  try {
+    return document.execCommand("copy");
+  } catch (error) {
+    console.warn("Template prompt selection copy failed", error);
+    return false;
+  } finally {
+    textarea.remove();
+  }
 }
 
 async function loadRunDetail(runId) {
@@ -1490,6 +1847,13 @@ function showToast(message) {
     toast.classList.add("leaving");
     window.setTimeout(() => toast.remove(), 180);
   }, 2400);
+}
+
+function renderPromptNotice(message, prompt) {
+  elements.loopStage.replaceChildren(el("div", "stage-notice prompt-notice", [
+    el("p", "", message),
+    el("pre", "prompt-copy", prompt)
+  ]));
 }
 
 function button(className, onClick, content) {

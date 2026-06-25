@@ -26,6 +26,7 @@ test("uses explicit runtime environment settings", () => {
     previewPort: 49999,
     previewBaseUrl: "http://127.0.0.1:49999",
     staticDir: join("/plugin/root", "preview"),
+    templatesFile: join("/plugin/root", "templates", "templates.json"),
     codexProjects: [
       {
         id: "/Users/tester/project",
@@ -44,6 +45,7 @@ test("defaults to local Codex data and preview paths", () => {
     previewPort: 47888,
     previewBaseUrl: "http://127.0.0.1:47888",
     staticDir: join("/plugin/root", "preview"),
+    templatesFile: join("/plugin/root", "templates", "templates.json"),
     codexProjects: []
   });
 });
