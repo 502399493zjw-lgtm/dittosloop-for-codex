@@ -204,6 +204,14 @@ test("preview closes the workspace when all loop tabs are closed", async () => {
   expect(styles).toContain("display: none");
 });
 
+test("preview keeps the workspace closed on initial history load", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("const route = readRouteState()");
+  expect(app).toContain("route.runId");
+  expect(app).not.toContain("selectedLoopId = newestLoopId(loops, runs)");
+});
+
 test("preview shell uses the new loop button as a session launch action", async () => {
   const html = await readFile(join(previewDir, "index.html"), "utf8");
 

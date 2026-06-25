@@ -61,8 +61,9 @@ async function loadSnapshot() {
 
     const loops = snapshot.loops ?? [];
     const runs = snapshot.runs ?? [];
-    if ((!selectedLoopId || !loops.some((loop) => loop.id === selectedLoopId)) && !loopSelectionClosed) {
-      selectedLoopId = newestLoopId(loops, runs);
+    if (selectedLoopId && !loops.some((loop) => loop.id === selectedLoopId)) {
+      selectedLoopId = null;
+      selectedRunId = null;
     }
 
     const selectedRuns = runsForLoop(selectedLoopId, runs);
