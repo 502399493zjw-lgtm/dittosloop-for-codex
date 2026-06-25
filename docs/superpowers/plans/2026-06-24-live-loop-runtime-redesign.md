@@ -1,5 +1,7 @@
 # Live Loop Runtime Redesign Implementation Plan
 
+> Superseded on 2026-06-25 for launch semantics by `docs/superpowers/plans/2026-06-25-session-first-dynamic-workflow.md`. Keep this plan as historical runtime-engine implementation context only; new work should follow the session-first dynamic workflow plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build an independent, formal Live Loop runtime inside `DittosLoop For Codex` by copying the main Dittos Loop engine shape into this plugin project.

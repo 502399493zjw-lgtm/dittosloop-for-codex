@@ -89,9 +89,9 @@ http://127.0.0.1:47888
 
 The plugin exposes `get_preview_url` so Codex can open the same view in the in-app browser or right-side preview surface.
 
-The preview has three compact panels: loop contracts, recent runs, and the selected run detail. Run detail shows attempts, timeline events, verification results, human requests, memory, and artifacts from the local JSON state.
+The preview has three compact panels: loop contracts, recent runs, and the selected run detail. Run detail shows attempts, workflow runtime state, workflow revision drafts, timeline events, verification results, human requests, memory, and artifacts from the local JSON state.
 
-For engine-backed runs, `/api/runs/:id` also includes `engineEvents` and a grouped `timeline` derived from runtime events. The old fields remain in place so existing preview code and compatibility workflows keep working.
+For session-first workflow runs, `/api/runs/:id` also includes `workflowContexts`, `workflowRevisions`, `engineEvents`, and a grouped `timeline` derived from runtime events. The old record fields remain in place so existing preview code and compatibility workflows keep working.
 
 To preview the sample state without installing the plugin:
 
@@ -108,40 +108,38 @@ Open `http://127.0.0.1:47888` and select `Release Readiness Loop`.
 ## Run Detail Flow
 
 1. `create_loop_contract` creates a formal contract when the loop should have a structured workflow body, rubrics, repair policy, and stop policy.
-2. `start_loop_run` starts an engine-backed run for a formal contract and records runtime events for the preview.
-3. `trigger_run` remains as a compatibility tool for legacy manual runs.
-4. `start_codex_session` requests a host-mediated Codex session when the user should inspect the worker session directly.
-5. `start_attempt` begins visible work under that run.
-6. `complete_attempt` records the attempt outcome.
-7. `record_verification` can attach results to `attemptId`.
-8. Failed verification with `repair: true` moves the run to `repairing`.
-9. `record_human_request` keeps user decisions visible when work pauses.
-10. `resolve_human_request` closes a user decision with the response.
-11. `commit_memory` stores durable lessons or preferences.
-12. `add_artifact` references useful local files, preview URLs, reports, or outputs.
-13. `complete_run` closes the run after verification or a clear blocker.
-14. `get_run_detail` returns the composed view shown in the preview.
+2. `start_codex_session` is the user-visible entry point. It creates the run, starts the first attempt, records the Codex session request, and returns the launch prompt/request for the host app.
+3. `record_codex_thread` links the real Codex App thread once the host creates it. This is a top-level run/thread binding, not per-task workflow result writeback.
+4. `execute_workflow_attempt` runs the formal workflow from inside that visible session. Codex-owned workflow steps can request local Codex tasks and suspend while waiting for precise results.
+5. `record_session_result` writes back the result for a specific `workflowContextId`, `attemptId`, `sessionId`, `taskRunId`, or `stepId`. If multiple task locators are provided, they must all identify the same task run. Completed workflow steps are reused when execution resumes, while `needs_human` suspends the context without caching a completed task result and opens a linked human request when possible.
+6. `propose_workflow_revision`, `promote_workflow_revision`, and `reject_workflow_revision` let the visible session edit the local workflow contract and keep revision history.
+7. `record_verification` can attach verifier results to `attemptId`; failed verification with `repair: true` moves the run to `repairing`.
+8. `record_human_request` keeps user decisions visible when work pauses.
+9. `resolve_human_request` closes a user decision with the response. If the request belongs to a suspended workflow task, the response is written back as that task result and the workflow continues.
+10. `commit_memory` stores durable lessons or preferences.
+11. `add_artifact` references useful local files, preview URLs, reports, or outputs.
+12. `complete_run` closes the run after verification or a clear blocker.
+13. `get_run_detail` returns the composed view shown in the preview.
 
 Legacy compatibility flow:
 
-1. `trigger_run` creates the run.
-2. `start_attempt` begins visible work under that run.
-3. `complete_attempt` records the attempt outcome.
-4. `record_verification` can attach results to `attemptId`.
-5. Failed verification with `repair: true` moves the run to `repairing`.
-6. `record_human_request` keeps user decisions visible when work pauses.
-7. `resolve_human_request` closes a user decision with the response.
-8. `get_run_detail` returns the composed view shown in the preview.
+Legacy JSON state still loads and migrates. New user-visible runs should use `start_codex_session`.
+
+Current workflow task sessions only support omitted `sessionPolicy` or `sessionPolicy: "new"`. Reuse policies are reserved for future work. `subagent` specs, including tool and permission hints, are stored, shown in preview, and passed to the Codex host bridge; DittosLoop does not enforce tool allowlists itself.
 
 ## MCP Tools
 
-- `create_loop`
 - `create_loop_contract`
 - `list_loops`
-- `trigger_run`
-- `start_loop_run`
 - `start_codex_session`
+- `execute_workflow_attempt`
+- `propose_workflow_revision`
+- `list_workflow_revisions`
+- `promote_workflow_revision`
+- `reject_workflow_revision`
 - `record_codex_thread`
+- `record_session_result`
+- `open_codex_session`
 - `start_attempt`
 - `complete_attempt`
 - `append_event`
