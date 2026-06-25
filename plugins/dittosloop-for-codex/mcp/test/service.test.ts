@@ -717,6 +717,45 @@ test("rejects external failure stop reasons so stopPolicy owns failure pausing",
   ).rejects.toThrow(/Failure pauses are derived from stopPolicy/);
 });
 
+test("rejects manual failure stop reasons so completeRun cannot bypass failure thresholds", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Manual failure threshold owner",
+    goal: "Let stopPolicy decide manual failure pauses",
+    stopPolicy: { rule: "pause after two manual failures", maxConsecutiveFailures: 2 },
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Fail once" });
+
+  await expect(
+    service.completeRun(launch.run.id, {
+      status: "failed",
+      pausedReason: "failures" as never
+    })
+  ).rejects.toThrow(/Failure pauses are derived from stopPolicy/);
+  const snapshot = await service.getSnapshot();
+  expect(snapshot).toMatchObject({
+    loops: [{ id: formal.id, status: "active" }],
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 0,
+        paused: false,
+        running: true,
+        runCount: 0
+      }
+    ],
+    runs: [{ id: launch.run.id, status: "running" }]
+  });
+  expect("pausedReason" in snapshot.runs[0]).toBe(false);
+});
+
 test("pauses canonical loop for escalation without counting it as a normal failure", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await service.createLoopContract({
