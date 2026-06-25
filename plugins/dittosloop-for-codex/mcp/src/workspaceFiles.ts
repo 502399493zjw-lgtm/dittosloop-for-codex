@@ -1,4 +1,9 @@
 import type { FormalLoopContract, Step } from "./contract/types.js";
+import {
+  deriveLoopOperationalState,
+  loopRunRecordStatus,
+  runsForLoopChronological
+} from "./loopOperationalState.js";
 import type { LoopContract, LoopRun, LoopState, LoopWorkspaceFile, VerificationResult } from "./types.js";
 
 type DirectoryEngineEvent = Record<string, unknown> & {
@@ -15,7 +20,7 @@ export function loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorksp
   }
 
   const loopRuns = runsForLoop(state, loopId);
-  const chronologicalRuns = runsForLoopChronological(state, loopId);
+  const chronologicalRuns = runsForLoopChronological(state.runs, loopId);
   const formalContract = state.formalContracts.find((contract) => contract.id === loopId);
   const workflowFiles = formalContract
     ? formalLoopDirectoryFiles({ contract: formalContract, state, loopRuns })
@@ -77,12 +82,6 @@ function runsForLoop(state: LoopState, loopId: string): LoopRun[] {
   return state.runs
     .filter((run) => run.loopId === loopId)
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-}
-
-function runsForLoopChronological(state: LoopState, loopId: string): LoopRun[] {
-  return state.runs
-    .filter((run) => run.loopId === loopId)
-    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
 }
 
 function compatibilityFlowFile(loop: LoopContract): string {
@@ -294,26 +293,11 @@ function formalLoopDirectoryFiles(input: {
 }
 
 function loopStatusFile(input: { state: LoopState; loop: LoopContract; loopRuns: LoopRun[] }) {
-  const latestRun = input.loopRuns.at(-1);
-  const latestMemoryCommit = input.state.memoryCommits
-    .filter((commit) => commit.loopId === input.loop.id)
-    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
-    .at(-1);
-
-  return {
-    loopId: input.loop.id,
-    lifecycle: input.loop.status,
-    runIndex: input.loopRuns.length,
-    lastRunId: latestRun?.id,
-    lastRunAt: latestRun?.completedAt ?? latestRun?.updatedAt ?? latestRun?.createdAt,
-    activeRunId: latestRun && !isTerminalRunStatus(latestRun.status) ? latestRun.id : null,
-    activeRunStatus: latestRun && !isTerminalRunStatus(latestRun.status) ? canonicalRunStatus(latestRun.status) : null,
-    nextWakeAt: null,
-    cursor: null,
-    consecutiveFailedRuns: consecutiveFailedRuns(input.loopRuns),
-    lastOutcome: latestRun && isTerminalRunStatus(latestRun.status) ? canonicalRunOutcome(latestRun.status) : undefined,
-    memoryRevision: latestMemoryCommit?.id
-  };
+  return input.state.loopStates.find((state) => state.loopId === input.loop.id)
+    ?? deriveLoopOperationalState({
+      loop: input.loop,
+      runs: input.loopRuns
+    });
 }
 
 function runsIndexFile(input: { state: LoopState; loop: LoopContract; loopRuns: LoopRun[] }) {
@@ -326,14 +310,14 @@ function runsIndexFile(input: { state: LoopState; loop: LoopContract; loopRuns: 
   return {
     loopId: input.loop.id,
     latestRunId: latestRun?.id ?? null,
-    latestRunStatus: latestRun ? canonicalRunStatus(latestRun.status) : null,
+    latestRunStatus: latestRun ? loopRunRecordStatus(latestRun.status) : null,
     latestAttemptId: latestAttempt?.id ?? null,
     latestAttemptStatus: latestAttempt?.status ?? null,
     latestVerificationStatus: latestVerification?.status ?? null,
     runs: input.loopRuns.map((run, index) => ({
       id: run.id,
-      status: canonicalRunStatus(run.status),
-      runIndex: index + 1,
+      status: loopRunRecordStatus(run.status),
+      index: index + 1,
       goal: run.goal,
       trigger: {
         kind: run.trigger
@@ -357,8 +341,9 @@ function runDirectoryFiles(input: { state: LoopState; run: LoopRun; runIndex: nu
     jsonFile(`${basePath}/status.json`, "run", {
       id: input.run.id,
       loopId: input.run.loopId,
-      status: canonicalRunStatus(input.run.status),
-      runIndex: input.runIndex,
+      status: loopRunRecordStatus(input.run.status),
+      index: input.runIndex,
+      codexRunStatus: input.run.status,
       trigger: {
         kind: input.run.trigger
       },
@@ -566,40 +551,6 @@ function numberValue(value: unknown): number | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-type CanonicalRunStatus = "running" | "waiting_for_human" | "repairing" | "succeeded" | "failed";
-
-function canonicalRunStatus(status: LoopRun["status"]): CanonicalRunStatus {
-  if (status === "completed") {
-    return "succeeded";
-  }
-  return status;
-}
-
-function isTerminalRunStatus(status: LoopRun["status"]): boolean {
-  return status === "completed" || status === "failed";
-}
-
-function canonicalRunOutcome(status: LoopRun["status"]): "succeeded" | "failed" | undefined {
-  if (status === "completed") {
-    return "succeeded";
-  }
-  if (status === "failed") {
-    return "failed";
-  }
-  return undefined;
-}
-
-function consecutiveFailedRuns(loopRuns: LoopRun[]): number {
-  let count = 0;
-  for (let index = loopRuns.length - 1; index >= 0; index -= 1) {
-    if (loopRuns[index].status !== "failed") {
-      break;
-    }
-    count += 1;
-  }
-  return count;
 }
 
 function statusText(status: string): string {

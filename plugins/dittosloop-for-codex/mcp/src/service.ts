@@ -590,6 +590,14 @@ export class LoopService {
 
     await this.options.store.updateState((state) => {
       const loop = requireLoop(state, loopId);
+      const loopState = state.loopStates.find((candidate) => candidate.loopId === loopId);
+      if (loopState?.paused || loop.status === "paused") {
+        throw new Error(`Loop is paused: ${loopId}`);
+      }
+      if (loopState?.running) {
+        throw new Error(`Loop is already running: ${loopId}`);
+      }
+
       const goal = input.goal ?? `Run ${loop.title}`;
       const formalContract = state.formalContracts.find((contract) => contract.id === loopId);
       const runId = this.nextId("run");

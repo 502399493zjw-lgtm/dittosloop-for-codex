@@ -474,23 +474,23 @@ test("renders loop directory files from stored loop state", async () => {
   expect(byPath.get("workflow/rubrics.md")?.content).toContain("包含来源");
   expect(JSON.parse(byPath.get("status.json")!.content)).toMatchObject({
     loopId: formal.id,
-    lifecycle: "active",
-    runIndex: 1,
-    lastRunId: run.id,
-    lastRunAt: fixedTime,
-    consecutiveFailedRuns: 0,
-    lastOutcome: "succeeded",
-    memoryRevision: "memory_1"
+    cursor: null,
+    consecutiveFailures: 0,
+    paused: false,
+    running: false,
+    runCount: 1,
+    lastRunAt: Date.parse(fixedTime)
   });
   expect(JSON.parse(byPath.get("runs/index.json")!.content)).toMatchObject({
     loopId: formal.id,
-    runs: [{ id: run.id, status: "succeeded", runIndex: 1 }]
+    runs: [{ id: run.id, status: "completed", index: 1 }]
   });
   expect(JSON.parse(byPath.get(`runs/${run.id}/status.json`)!.content)).toMatchObject({
     id: run.id,
     loopId: formal.id,
-    status: "succeeded",
-    runIndex: 1,
+    status: "completed",
+    index: 1,
+    codexRunStatus: "completed",
     trigger: { kind: "manual" }
   });
   expect(byPath.get(`runs/${run.id}/events.ndjson`)?.content).toContain("run_created");
@@ -520,16 +520,124 @@ test("projects canonical status for failed loop history", async () => {
   const runStatus = JSON.parse(files.find((file) => file.path === `runs/${launch.run.id}/status.json`)!.content);
 
   expect(status).toMatchObject({
-    lifecycle: "active",
-    runIndex: 1,
-    lastRunId: launch.run.id,
-    lastOutcome: "failed",
-    consecutiveFailedRuns: 1
+    cursor: null,
+    paused: false,
+    running: false,
+    runCount: 1,
+    lastRunAt: Date.parse(fixedTime),
+    consecutiveFailures: 1
   });
   expect(runStatus).toMatchObject({
     id: launch.run.id,
     status: "failed",
-    runIndex: 1
+    index: 1,
+    codexRunStatus: "failed"
+  });
+});
+
+test("persists canonical loop operational state across run lifecycle", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loopStates: [
+      {
+        loopId: formal.id,
+        cursor: null,
+        consecutiveFailures: 0,
+        paused: false,
+        running: false,
+        runCount: 0
+      }
+    ]
+  });
+
+  const first = await service.startCodexSessionRun(formal.id, { goal: "First run" });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 0,
+        paused: false,
+        running: true,
+        runCount: 0,
+        activeRunId: first.run.id,
+        activeRunStatus: "running"
+      }
+    ]
+  });
+  await expect(service.startCodexSessionRun(formal.id, { goal: "Overlapping run" })).rejects.toThrow(/already running/);
+
+  await service.recordHumanRequest(first.run.id, { question: "Need input?" });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loopStates: [{ loopId: formal.id, activeRunId: first.run.id, activeRunStatus: "waiting_for_human" }]
+  });
+  const waitingFiles = await service.listLoopFiles(formal.id);
+  const waitingRunIndex = JSON.parse(waitingFiles.find((file) => file.path === "runs/index.json")!.content);
+  const waitingRunStatus = JSON.parse(waitingFiles.find((file) => file.path === `runs/${first.run.id}/status.json`)!.content);
+  expect(waitingRunIndex).toMatchObject({
+    runs: [{ id: first.run.id, status: "waiting_for_human", index: 1 }]
+  });
+  expect(waitingRunStatus).toMatchObject({
+    id: first.run.id,
+    status: "waiting_for_human",
+    codexRunStatus: "waiting_for_human"
+  });
+
+  await service.markRunRepairing(first.run.id, { reason: "Repair after missing source." });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loopStates: [{ loopId: formal.id, activeRunId: first.run.id, activeRunStatus: "repairing" }]
+  });
+  const repairingFiles = await service.listLoopFiles(formal.id);
+  const repairingRunStatus = JSON.parse(repairingFiles.find((file) => file.path === `runs/${first.run.id}/status.json`)!.content);
+  expect(repairingRunStatus).toMatchObject({
+    id: first.run.id,
+    status: "repairing",
+    codexRunStatus: "repairing"
+  });
+
+  await service.completeRun(first.run.id, { status: "failed" });
+  await service.commitMemory(formal.id, { runId: first.run.id, summary: "Keep stricter source rules." });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 1,
+        paused: false,
+        running: false,
+        runCount: 1,
+        lastRunAt: Date.parse(fixedTime)
+      }
+    ]
+  });
+
+  const second = await service.startCodexSessionRun(formal.id, { goal: "Second run" });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 1,
+        paused: false,
+        running: true,
+        runCount: 1,
+        activeRunId: second.run.id,
+        activeRunStatus: "running"
+      }
+    ]
+  });
+  await service.completeRun(second.run.id, { status: "completed" });
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 0,
+        paused: false,
+        running: false,
+        runCount: 2,
+        lastRunAt: Date.parse(fixedTime)
+      }
+    ]
   });
 });
 

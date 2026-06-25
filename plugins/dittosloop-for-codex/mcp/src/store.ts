@@ -1,15 +1,17 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { deriveLoopOperationalStates } from "./loopOperationalState.js";
 import type { LoopState } from "./types.js";
 
 const STATE_FILE = "state.json";
-const CURRENT_STATE_VERSION = 2;
+const CURRENT_STATE_VERSION = 2 as const;
 
 export function createEmptyState(): LoopState {
   return {
     version: CURRENT_STATE_VERSION,
     loops: [],
+    loopStates: [],
     formalContracts: [],
     workflowRevisions: [],
     workflowContexts: [],
@@ -74,11 +76,12 @@ export class LoopStore {
 }
 
 function normalizeState(value: Partial<LoopState> | undefined): LoopState {
-  return {
+  const state = {
     ...createEmptyState(),
     ...value,
     version: CURRENT_STATE_VERSION,
     loops: value?.loops ?? [],
+    loopStates: value?.loopStates ?? [],
     formalContracts: value?.formalContracts ?? [],
     workflowRevisions: value?.workflowRevisions ?? [],
     workflowContexts: value?.workflowContexts ?? [],
@@ -92,6 +95,11 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
     })),
     memoryCommits: value?.memoryCommits ?? [],
     artifacts: value?.artifacts ?? []
+  };
+
+  return {
+    ...state,
+    loopStates: deriveLoopOperationalStates(state)
   };
 }
 

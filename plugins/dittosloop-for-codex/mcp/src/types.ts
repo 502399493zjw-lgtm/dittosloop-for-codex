@@ -3,6 +3,8 @@ import type { CodexSubagentSpec, FormalLoopContract } from "./contract/types.js"
 export type LoopStatus = "active" | "paused" | "archived";
 export type TriggerMode = "manual";
 export type RunStatus = "running" | "waiting_for_human" | "repairing" | "completed" | "failed";
+export type LoopPausedReason = "failures" | "budget" | "escalation";
+export type LoopRunRecordStatus = "queued" | "running" | "waiting_for_human" | "repairing" | "completed" | "failed" | "canceled";
 export type AttemptStatus = "running" | "completed" | "failed";
 export type VerificationStatus = "passed" | "failed" | "skipped";
 export type HumanRequestStatus = "open" | "resolved";
@@ -76,6 +78,19 @@ export interface LoopRun {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+}
+
+export interface LoopOperationalState {
+  loopId: string;
+  cursor: unknown;
+  consecutiveFailures: number;
+  paused: boolean;
+  pausedReason?: LoopPausedReason;
+  running: boolean;
+  runCount: number;
+  lastRunAt?: number;
+  activeRunId?: string;
+  activeRunStatus?: RunStatus;
 }
 
 export interface RunAttempt {
@@ -247,6 +262,7 @@ export interface WorkflowContext {
 export interface LoopState {
   version: 2;
   loops: LoopContract[];
+  loopStates: LoopOperationalState[];
   formalContracts: FormalLoopContract[];
   workflowRevisions: WorkflowRevision[];
   workflowContexts: WorkflowContext[];

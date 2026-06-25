@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Align DittosLoop For Codex loop files and durable loop status with the canonical Dittos Loop model while keeping Codex App as the bound execution runtime.
+**Goal:** Align DittosLoop For Codex loop files and durable loop status with the current Dittos Loop engine model while keeping Codex App as the bound execution runtime.
 
 **Architecture:** Keep `start_codex_session` as the only visible launch path. Treat Codex sessions as run execution surfaces, while loop status, run history, memory, and workflow evolution are projected as durable loop-owned package files.
 
@@ -15,6 +15,20 @@
 - Keep existing state readable.
 - Preserve session-first workflow behavior and existing MCP tools.
 - Add tests before production behavior changes.
+
+## Source Alignment
+
+The current `dittos-loop` engine source uses a compact per-loop `LoopState` persisted beside the loop spec:
+
+- `cursor`
+- `consecutiveFailures`
+- `paused`
+- `pausedReason?: "failures" | "budget" | "escalation"`
+- `running`
+- `runCount`
+- `lastRunAt`
+
+Run history is a separate per-loop index with `LoopRunRecordStatus = "queued" | "running" | "waiting_for_human" | "repairing" | "completed" | "failed" | "canceled"`. Memory is an append-only `<loopId>.md` surface, not a versioned `memoryRevision` state field. For Codex therefore keeps Codex session runs as the execution surface, but derives and persists loop-owned operational state using these engine-aligned fields.
 
 ---
 
@@ -30,55 +44,63 @@
 - Produces: `status.json`, `runs/index.json`, per-run `runs/<runId>/*`, `workflow/workflow.json`, `evolution/revisions.json`, `evolution/memory-commits.json`, and `codex/session.json` from `listLoopFiles(loopId)`.
 - Consumes: existing `LoopState`, `LoopRun`, `RunAttempt`, `RunEvent`, `VerificationResult`, `HumanRequest`, `MemoryCommit`, `WorkflowRevision`, and `WorkflowContext`.
 
-- [ ] **Step 1: Write failing service tests**
+- [x] **Step 1: Write failing service tests**
 
 Add expectations to the loop file test proving the file list includes canonical status, runs, workflow, evolution, and Codex session paths.
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts -t "renders loop directory files"`
 
 Expected: FAIL because the new canonical paths are missing.
 
-- [ ] **Step 3: Implement canonical file rendering**
+- [x] **Step 3: Implement canonical file rendering**
 
 Add pure helpers in `workspaceFiles.ts` that derive lifecycle, active run, run history, memory commits, and workflow revision projections from state.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts -t "renders loop directory files"`
 
 Expected: PASS.
 
-### Task 2: Status Semantics
+### Task 2: Engine-Aligned Status Semantics
 
 **Files:**
 - Modify: `plugins/dittosloop-for-codex/mcp/test/service.test.ts`
+- Modify: `plugins/dittosloop-for-codex/mcp/test/store.test.ts`
+- Modify: `plugins/dittosloop-for-codex/mcp/src/types.ts`
+- Modify: `plugins/dittosloop-for-codex/mcp/src/store.ts`
+- Add: `plugins/dittosloop-for-codex/mcp/src/loopOperationalState.ts`
 - Modify: `plugins/dittosloop-for-codex/mcp/src/workspaceFiles.ts`
 
 **Interfaces:**
-- Produces: canonical `LoopState.lifecycle`, `activeRunStatus`, `runIndex`, `lastRunId`, `lastRunAt`, `lastOutcome`, `consecutiveFailedRuns`, and `memoryRevision` in `status.json`.
-- Consumes: existing loop status, runs, attempts, and memory commits.
+- Produces: engine-aligned per-loop operational state with `cursor`, `consecutiveFailures`, `paused`, `pausedReason`, `running`, `runCount`, `lastRunAt`, and optional active Codex run references in `status.json`.
+- Consumes: existing loop status, runs, attempts, memory commits, and previously stored `loopStates`.
 
-- [ ] **Step 1: Write failing status projection assertions**
+- [x] **Step 1: Write failing status projection assertions**
 
-Assert that completed runs produce `lastOutcome: "succeeded"` and failed runs produce `lastOutcome: "failed"` in `status.json`.
+Assert that completed runs produce `LoopRunRecordStatus: "completed"`, failed runs produce `"failed"`, active Codex runs preserve `"running"`, `"waiting_for_human"`, and `"repairing"`, and the loop state tracks `runCount`, `running`, `lastRunAt`, and `consecutiveFailures`.
 
-- [ ] **Step 2: Run focused test and verify failure**
+- [x] **Step 2: Run focused test and verify failure**
 
-Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts -t "canonical status"`
+Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts store.test.ts -t "canonical loop operational state|canonical status"`
 
-Expected: FAIL until `status.json` exists and maps statuses.
+Expected: FAIL until `loopStates` and `status.json` use engine-aligned fields.
 
-- [ ] **Step 3: Implement status projection**
+- [x] **Step 3: Implement status projection**
 
-Map for-Codex statuses to canonical status without changing the existing stored `RunStatus` union in this task.
+Derive `loopStates` during store normalization and render the same object through `status.json`. Preserve for-Codex `RunStatus`, and project loop run records into the engine's wider run status vocabulary.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
-Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts -t "canonical status|renders loop directory files"`
+Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- store.test.ts service.test.ts -t "canonical loop operational state|derives canonical loop operational state|renders loop directory files|projects canonical status"`
 
 Expected: PASS.
+
+- [x] **Step 5: Enforce claim-run behavior on Codex entry**
+
+Make `start_codex_session` reject a paused loop or any loop that already has a non-terminal active run, matching `dittos-loop`'s `claimRun` no-overlap rule while keeping Codex as the execution runtime.
 
 ### Task 3: Evolution Records
 
@@ -90,21 +112,21 @@ Expected: PASS.
 - Produces: `evolution/revisions.json` with active revision, proposal records, promotion/rejection decisions, and `evolution/memory-commits.json` with durable memory history.
 - Consumes: existing workflow revisions and memory commits.
 
-- [ ] **Step 1: Write failing evolution assertions**
+- [x] **Step 1: Write failing evolution assertions**
 
 Assert that proposed/promoted workflow revisions and memory commits appear under `evolution/`.
 
-- [ ] **Step 2: Run focused test and verify failure**
+- [x] **Step 2: Run focused test and verify failure**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts -t "workflow revisions"`
 
 Expected: FAIL for missing evolution files.
 
-- [ ] **Step 3: Implement evolution projection**
+- [x] **Step 3: Implement evolution projection**
 
 Serialize immutable revision records and memory commits in chronological order.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts`
 
@@ -116,15 +138,15 @@ Expected: PASS.
 - Test: `plugins/dittosloop-for-codex/mcp/test/service.test.ts`
 - Test: `plugins/dittosloop-for-codex/mcp/test/previewServer.test.ts`
 
-- [ ] **Step 1: Run MCP tests**
+- [x] **Step 1: Run MCP tests**
 
 Run: `npm --prefix plugins/dittosloop-for-codex/mcp test`
 
 Expected: PASS.
 
-- [ ] **Step 2: Run build**
+- [x] **Step 2: Run build**
 
-Run: `npm run build`
+Run: `npm --prefix plugins/dittosloop-for-codex/mcp run build`
 
 Expected: PASS.
 
@@ -133,3 +155,12 @@ Expected: PASS.
 Run: `git diff --stat && git diff --check`
 
 Expected: Only canonical loop package files and tests changed; no whitespace errors.
+
+### Task 5: Remaining Engine Parity Work
+
+**Status:** Not part of this commit.
+
+- [ ] Persist memory as a first-class append-only loop surface shaped like `<loopId>.md`, while keeping `evolution/memory-commits.json` as a history projection.
+- [ ] Add explicit pause/resume controls that update `paused`, `pausedReason`, and `consecutiveFailures` like the engine API.
+- [ ] Add threshold-driven pausing for repeated failed Codex runs, budget stops, and escalation stops.
+- [ ] Split run history more cleanly from detailed run event timelines, matching the engine's `LoopRunStore` plus per-run event stream distinction.

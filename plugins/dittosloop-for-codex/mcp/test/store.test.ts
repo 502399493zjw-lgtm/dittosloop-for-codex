@@ -144,3 +144,73 @@ test("preserves workflow contexts when normalizing v2 state", async () => {
     ]
   });
 });
+
+test("derives canonical loop operational state while normalizing existing state", async () => {
+  const dir = await createTempDir();
+  await writeFile(
+    join(dir, "state.json"),
+    `${JSON.stringify({
+      version: 2,
+      loops: [
+        {
+          id: "loop_1",
+          title: "Daily code health check",
+          intent: "Keep the project healthy",
+          trigger: { mode: "manual" },
+          verification: { checks: ["npm test"] },
+          status: "active",
+          createdAt: "2026-06-23T00:00:00.000Z",
+          updatedAt: "2026-06-23T00:00:00.000Z"
+        }
+      ],
+      runs: [
+        {
+          id: "run_1",
+          loopId: "loop_1",
+          status: "completed",
+          goal: "Run checks",
+          trigger: "manual",
+          createdAt: "2026-06-23T00:00:00.000Z",
+          updatedAt: "2026-06-23T00:01:00.000Z",
+          completedAt: "2026-06-23T00:01:00.000Z"
+        },
+        {
+          id: "run_2",
+          loopId: "loop_1",
+          status: "failed",
+          goal: "Run checks again",
+          trigger: "manual",
+          createdAt: "2026-06-24T00:00:00.000Z",
+          updatedAt: "2026-06-24T00:01:00.000Z",
+          completedAt: "2026-06-24T00:01:00.000Z"
+        }
+      ],
+      memoryCommits: [
+        {
+          id: "memory_1",
+          loopId: "loop_1",
+          runId: "run_2",
+          summary: "Keep the stricter source rule.",
+          createdAt: "2026-06-24T00:02:00.000Z"
+        }
+      ]
+    })}\n`,
+    "utf8"
+  );
+
+  const store = new LoopStore(dir);
+
+  await expect(store.readState()).resolves.toMatchObject({
+    loopStates: [
+      {
+        loopId: "loop_1",
+        cursor: null,
+        consecutiveFailures: 1,
+        paused: false,
+        running: false,
+        runCount: 2,
+        lastRunAt: Date.parse("2026-06-24T00:01:00.000Z")
+      }
+    ]
+  });
+});
