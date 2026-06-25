@@ -77,4 +77,203 @@ describe("formal loop contracts", () => {
       { id: "check-1", label: "npm test", requirement: "npm test", severity: "must" }
     ]);
   });
+
+  test("accepts structured Codex subagent specs on task steps", () => {
+    const contract = compileContract(
+      {
+        id: "loop_1",
+        title: "Subagent workflow",
+        goal: "Run a specialized local Codex worker",
+        body: {
+          steps: [
+            {
+              id: "scan",
+              kind: "task",
+              runtime: "codex",
+              label: "Scan worker",
+              prompt: "Scan project changes.",
+              subagent: {
+                ref: "researcher",
+                role: "code-researcher",
+                model: "gpt-5-codex",
+                tools: ["rg", "sed"],
+                workdir: "/tmp/project",
+                env: { LANG: "en_US.UTF-8" },
+                permissions: {
+                  filesystem: "workspace-write",
+                  network: "enabled"
+                },
+                timeoutMs: 120000,
+                context: { topic: "release notes" }
+              }
+            }
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+    expect(contract.body.steps[0]).toMatchObject({
+      kind: "task",
+      subagent: {
+        ref: "researcher",
+        role: "code-researcher",
+        tools: ["rg", "sed"],
+        permissions: {
+          filesystem: "workspace-write",
+          network: "enabled"
+        }
+      }
+    });
+  });
+
+  test("rejects invalid Codex subagent timeout values", () => {
+    const contract = compileContract(
+      {
+        id: "loop_1",
+        title: "Bad subagent workflow",
+        goal: "Reject invalid subagent specs",
+        body: {
+          steps: [
+            {
+              id: "scan",
+              kind: "task",
+              runtime: "codex",
+              label: "Scan worker",
+              prompt: "Scan project changes.",
+              subagent: { timeoutMs: -1 } as any
+            }
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).toThrow(/timeoutMs/i);
+  });
+
+  test("rejects task steps without the Codex runtime", () => {
+    const missingRuntime = compileContract(
+      {
+        id: "loop_1",
+        title: "Bad task workflow",
+        goal: "Reject missing task runtime",
+        body: {
+          steps: [
+            {
+              id: "scan",
+              kind: "task",
+              label: "Scan worker",
+              prompt: "Scan project changes."
+            } as any
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+    const shellRuntime = compileContract(
+      {
+        id: "loop_2",
+        title: "Bad task workflow",
+        goal: "Reject non-Codex task runtime",
+        body: {
+          steps: [
+            {
+              id: "scan",
+              kind: "task",
+              runtime: "shell",
+              label: "Scan worker",
+              prompt: "Scan project changes."
+            } as any
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(missingRuntime)).toThrow(/runtime must be codex/);
+    expect(() => validateContract(shellRuntime)).toThrow(/runtime must be codex/);
+  });
+
+  test("rejects invalid Codex subagent tools and permissions", () => {
+    const invalidTools = compileContract(
+      {
+        id: "loop_1",
+        title: "Bad subagent workflow",
+        goal: "Reject invalid subagent tool specs",
+        body: {
+          steps: [
+            {
+              id: "scan",
+              kind: "task",
+              runtime: "codex",
+              label: "Scan worker",
+              prompt: "Scan project changes.",
+              subagent: { tools: ["rg", ""] } as any
+            }
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+    const invalidPermissions = compileContract(
+      {
+        id: "loop_2",
+        title: "Bad subagent workflow",
+        goal: "Reject invalid subagent permission specs",
+        body: {
+          steps: [
+            {
+              id: "scan",
+              kind: "task",
+              runtime: "codex",
+              label: "Scan worker",
+              prompt: "Scan project changes.",
+              subagent: {
+                permissions: { filesystem: "write-everywhere", network: "sometimes" }
+              } as any
+            }
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(invalidTools)).toThrow(/subagent\.tools/i);
+    expect(() => validateContract(invalidPermissions)).toThrow(/subagent\.permissions\.filesystem/i);
+    expect(() => validateContract(invalidPermissions)).toThrow(/subagent\.permissions\.network/i);
+  });
+
+  test("rejects unsupported session reuse policies", () => {
+    const contract = compileContract(
+      {
+        id: "loop_1",
+        title: "Reuse policy workflow",
+        goal: "Reject session reuse until the runtime implements it",
+        body: {
+          steps: [
+            {
+              id: "scan",
+              kind: "task",
+              runtime: "codex",
+              label: "Scan worker",
+              prompt: "Scan project changes.",
+              sessionPolicy: "reuse-run" as any
+            }
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).toThrow(/sessionPolicy currently supports only new/i);
+  });
 });

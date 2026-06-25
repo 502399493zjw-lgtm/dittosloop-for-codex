@@ -6,6 +6,7 @@ import { afterEach, expect, test } from "vitest";
 
 import { LoopService } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
+import type { IdPrefix } from "../src/id.js";
 import type { LoopContract, LoopRun } from "../src/types.js";
 import type {
   CodexSessionBridge,
@@ -101,7 +102,11 @@ async function startFormalRun(
   } = {}
 ) {
   const loop = await createFormalLoop(service, input);
-  const run = await service.startLoopRun(loop.id, { goal: input.goal ?? "Run checks" });
+  const loopProjection = (await service.listLoops()).find((candidate) => candidate.id === loop.id);
+  if (!loopProjection) {
+    throw new Error(`Missing loop projection for ${loop.id}`);
+  }
+  const run = await seedLegacyRun(service, loopProjection, { goal: input.goal ?? "Run checks" });
 
   return { loop, run };
 }
@@ -203,13 +208,13 @@ function createCompletedSessionBridge(resultText: string) {
   return { bridge, requests };
 }
 
-function createPendingSessionBridge() {
+function createPendingSessionBridge(startIndex = 0) {
   const requests: CodexSessionRequest[] = [];
   const bridge: CodexSessionBridge = {
     async createSession(request) {
       requests.push(request);
       return {
-        sessionId: `session_${requests.length}`,
+        sessionId: `session_${startIndex + requests.length}`,
         runId: request.runId,
         stepId: request.stepId,
         phaseId: request.phaseId,
@@ -233,6 +238,61 @@ function createPendingSessionBridge() {
   };
 
   return { bridge, requests };
+}
+
+function createSkewedPendingSessionBridge() {
+  const requests: CodexSessionRequest[] = [];
+  const bridge: CodexSessionBridge = {
+    async createSession(request) {
+      requests.push(request);
+      return {
+        sessionId: `session_${requests.length}`,
+        runId: request.runId,
+        stepId: request.stepId,
+        phaseId: request.phaseId,
+        title: request.title,
+        status: "requested",
+        createdAt: fixedTime,
+        prompt: request.prompt,
+        workflowRuntime: request.workflowRuntime,
+        workflowContractId: request.workflowContractId,
+        workflowPlan: request.workflowPlan,
+        projectId: request.projectId,
+        projectLabel: request.projectLabel,
+        projectPath: request.projectPath
+      } satisfies CodexSessionRef;
+    },
+    async sendMessage() {},
+    async recordResult() {},
+    async readResult(sessionId) {
+      if (sessionId === "session_2") {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return undefined;
+    }
+  };
+
+  return { bridge, requests };
+}
+
+async function createPendingServiceWithSequentialIds() {
+  const { bridge, requests } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+
+  return { service, requests };
 }
 
 test("creates a formal loop contract with manual trigger defaults", async () => {
@@ -268,9 +328,11 @@ test("does not expose legacy simple loop creation or run methods", async () => {
 
   expect("createLoop" in service).toBe(false);
   expect("triggerRun" in service).toBe(false);
+  expect((service as any).startLoopRun).toBeUndefined();
+  expect((service as any).resumeLoopRun).toBeUndefined();
 });
 
-test("creates a formal loop contract and starts an engine-backed run", async () => {
+test("creates a formal loop contract and starts a visible Codex session run", async () => {
   const service = await createService();
 
   const formal = await service.createLoopContract({
@@ -285,24 +347,29 @@ test("creates a formal loop contract and starts an engine-backed run", async () 
 
   expect(formal.body.steps[0]).toMatchObject({ id: "scan", kind: "agent" });
 
-  const run = await service.startLoopRun(formal.id, { goal: "Manual check" });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Manual check" });
 
-  expect(run).toMatchObject({
+  expect(launch.run).toMatchObject({
     id: "run_1",
     loopId: formal.id,
     status: "running",
-    goal: "Manual check"
+    goal: "Manual check",
+    codexSession: { status: "requested" }
   });
-  await expect(service.getRunDetail(run.id)).resolves.toMatchObject({
+  expect(launch.attempt).toMatchObject({
+    id: "attempt_1",
+    runId: launch.run.id,
+    status: "running"
+  });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
     events: [
       {
-        data: {
-          engineEvent: {
-            type: "run_started",
-            runId: run.id,
-            sequence: 1
-          }
-        }
+        kind: "run_created",
+        data: { codexSession: { status: "requested" } }
+      },
+      {
+        kind: "attempt_started",
+        data: { attemptId: launch.attempt.id }
       }
     ]
   });
@@ -352,7 +419,7 @@ test("normalizes project fields on formal loop creation into the contract bindin
   });
 });
 
-test("runs a formal workflow end to end with a draft workflow repair without replacing the active contract", async () => {
+test("proposes workflow revisions from a visible Codex session without replacing the active contract", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await service.createLoopContract({
     title: "AI Dev Tools Update Monitor",
@@ -382,78 +449,37 @@ test("runs a formal workflow end to end with a draft workflow repair without rep
     stopPolicy: { rule: "stop after verification passes or attempts are exhausted" }
   });
 
-  const run = await service.runLoopWorkflow(formal.id, {
-    executor: {
-      async run(request) {
-        return request.prompt.includes("with official sources")
-          ? { text: "Claude Code update with official changelog source" }
-          : { text: "Claude Code update" };
-      }
-    },
-    verifier: ({ result }) => {
-      const text = JSON.stringify(result);
-      return text.includes("official changelog source")
-        ? {
-            status: "passed",
-            summary: "All updates include official sources.",
-            checks: [{ rubricId: "sources", status: "passed", evidence: "official changelog source" }]
-          }
-        : {
-            status: "failed",
-            summary: "Missing official sources.",
-            repairInstructions: "Update the collect step to require official sources.",
-            checks: [{ rubricId: "sources", status: "failed" }]
-          };
-    },
-    repairWorkflow: ({ contract }) => ({
-      ...contract,
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Check today updates" });
+  await service.recordCodexThread(launch.run.id, {
+    threadId: "thread_main",
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor"
+  });
+
+  const revision = await service.proposeWorkflowRevision(formal.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    authorSessionId: "session_collect",
+    rationale: "Missing official sources.",
+    patch: {
       body: {
-        steps: contract.body.steps.map((step) =>
-          step.id === "collect" && step.kind === "agent"
-            ? { ...step, prompt: "Collect notable updates with official sources" }
-            : step
-        )
+        steps: [
+          {
+            id: "collect",
+            kind: "agent",
+            label: "Collect updates",
+            prompt: "Collect notable updates with official sources"
+          }
+        ]
       }
-    })
-  });
-
-  expect(run).toMatchObject({
-    loopId: formal.id,
-    status: "completed",
-    goal: formal.goal
-  });
-
-  const detail = await service.getRunDetail(run.id);
-  expect(detail.attempts).toMatchObject([
-    { status: "failed", summary: "Missing official sources." },
-    { status: "completed", summary: "All updates include official sources." }
-  ]);
-  expect(detail.verificationResults).toMatchObject([
-    { status: "failed", summary: "Missing official sources.", checks: [{ name: "Sources", status: "failed" }] },
-    {
-      status: "passed",
-      summary: "All updates include official sources.",
-      checks: [{ name: "Sources", status: "passed", output: "official changelog source" }]
     }
-  ]);
-  expect(detail.events.map((event) => event.data?.engineEvent?.type).filter(Boolean)).toEqual([
-    "run_started",
-    "agent_started",
-    "agent_done",
-    "run_completed",
-    "verification_started",
-    "verification_done",
-    "repair_started",
-    "run_started",
-    "agent_started",
-    "agent_done",
-    "run_completed",
-    "verification_started",
-    "verification_done",
-    "run_done"
-  ]);
-  expect(detail.workflowRevisions).toHaveLength(1);
-  expect(detail.workflowRevisions[0]).toMatchObject({
+  });
+
+  expect(revision).toMatchObject({
+    loopId: formal.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    authorSessionId: "session_collect",
+    authorThreadId: "thread_main",
     status: "draft",
     reason: "Missing official sources.",
     contract: {
@@ -462,6 +488,14 @@ test("runs a formal workflow end to end with a draft workflow repair without rep
         steps: [{ id: "collect", kind: "agent", prompt: "Collect notable updates with official sources" }]
       }
     }
+  });
+
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.workflowRevisions).toHaveLength(1);
+  expect(detail.workflowRevisions[0]).toMatchObject({
+    id: revision.id,
+    status: "draft",
+    reason: "Missing official sources."
   });
 
   const snapshot = await service.getSnapshot();
@@ -474,6 +508,111 @@ test("runs a formal workflow end to end with a draft workflow repair without rep
     id: "collect",
     kind: "agent",
     prompt: "Collect notable updates with official sources"
+  });
+
+  const promoted = await service.promoteWorkflowRevision(formal.id, revision.id);
+  expect(promoted.status).toBe("promoted");
+  await expect(
+    service.rejectWorkflowRevision(formal.id, revision.id, { reason: "Do not mutate the active revision." })
+  ).rejects.toThrow(/Only draft workflow revisions can be rejected/);
+
+  const followUpRevision = await service.proposeWorkflowRevision(formal.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    rationale: "Narrow the monitor to official release channels.",
+    contract: {
+      title: formal.title,
+      goal: formal.goal,
+      body: {
+        steps: [
+          {
+            id: "collect",
+            kind: "agent",
+            label: "Collect updates",
+            prompt: "Collect official release-channel updates only"
+          }
+        ]
+      },
+      verification: formal.verification,
+      repairPolicy: formal.repairPolicy,
+      stopPolicy: formal.stopPolicy
+    }
+  });
+  await service.promoteWorkflowRevision(formal.id, followUpRevision.id);
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    formalContracts: [
+      {
+        id: formal.id,
+        body: {
+          steps: [{ id: "collect", kind: "agent", prompt: "Collect official release-channel updates only" }]
+        }
+      }
+    ],
+    workflowRevisions: [
+      { id: revision.id, status: "superseded" },
+      { id: followUpRevision.id, status: "promoted" }
+    ]
+  });
+});
+
+test("keeps promoted workflow revision contract snapshots immutable", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const times = [
+    "2026-06-23T00:00:00.000Z",
+    "2026-06-23T00:01:00.000Z",
+    "2026-06-23T00:02:00.000Z",
+    "2026-06-23T00:03:00.000Z",
+    "2026-06-23T00:04:00.000Z"
+  ];
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => times.shift() ?? "2026-06-23T00:05:00.000Z",
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888"
+  });
+  const formal = await service.createLoopContract({
+    title: "Revision immutability",
+    goal: "Keep workflow revision proposals immutable",
+    body: {
+      steps: [{ id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Collect notes" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Revision is tracked", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  const revision = await service.proposeWorkflowRevision(formal.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    reason: "Add synthesis.",
+    patch: {
+      body: {
+        steps: [
+          { id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Collect notes" },
+          { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write summary" }
+        ]
+      }
+    }
+  });
+  const proposedContract = JSON.parse(JSON.stringify(revision.contract));
+
+  const promoted = await service.promoteWorkflowRevision(formal.id, revision.id);
+  const snapshot = await service.getSnapshot();
+
+  expect(promoted.contract).toEqual(proposedContract);
+  expect(snapshot.workflowRevisions[0].contract).toEqual(proposedContract);
+  expect(snapshot.formalContracts[0]).toMatchObject({
+    id: formal.id,
+    updatedAt: "2026-06-23T00:04:00.000Z",
+    body: { steps: [{ id: "collect" }, { id: "write" }] }
   });
 });
 
@@ -527,8 +666,11 @@ test("uses the configured Codex session bridge as the default formal workflow ex
     }
   });
 
-  const run = await service.runLoopWorkflow(formal.id, {
-    goal: "生成今天的中文日报",
+  const launch = await service.startCodexSessionRun(formal.id, {
+    goal: "生成今天的中文日报"
+  });
+  const run = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id,
     verifier: ({ result }) => ({
       status: JSON.stringify(result).includes("来源") ? "passed" : "failed",
       summary: "日报通过验证。",
@@ -536,7 +678,12 @@ test("uses the configured Codex session bridge as the default formal workflow ex
     })
   });
 
-  expect(run).toMatchObject({ loopId: formal.id, status: "completed" });
+  expect(run).toMatchObject({
+    loopId: formal.id,
+    status: "completed",
+    goal: "生成今天的中文日报"
+  });
+
   expect(run.codexSession).toMatchObject({
     mode: "new_session",
     status: "completed",
@@ -649,8 +796,11 @@ test("keeps a bridge-backed formal workflow running while the Codex session resu
     }
   });
 
-  const run = await service.runLoopWorkflow(formal.id, {
+  const launch = await service.startCodexSessionRun(formal.id, {
     goal: "生成今天的中文日报"
+  });
+  const run = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id
   });
 
   expect(run).toMatchObject({
@@ -672,6 +822,11 @@ test("keeps a bridge-backed formal workflow running while the Codex session resu
       prompt: "生成中文日报。"
     }
   });
+  expect(requests).toHaveLength(1);
+  const rerun = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id
+  });
+  expect(rerun.id).toBe(run.id);
   expect(requests).toHaveLength(1);
   const detail = await service.getRunDetail(run.id);
   expect(detail.attempts).toMatchObject([{ status: "running" }]);
@@ -727,7 +882,11 @@ test("keeps a formal workflow waiting when verifier needs human input", async ()
     repairPolicy: { maxAttempts: 1, strategy: "ask_human" }
   });
 
-  const run = await service.runLoopWorkflow(formal.id, {
+  const launch = await service.startCodexSessionRun(formal.id, {
+    goal: formal.goal
+  });
+  const run = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id,
     executor: {
       async run() {
         return { text: "Only community source found" };
@@ -771,7 +930,7 @@ test("records a run lifecycle in the snapshot", async () => {
     }
   });
 
-  const run = await service.startLoopRun(loop.id, { goal: "Check current tests" });
+  const { run } = await service.startCodexSessionRun(loop.id, { goal: "Check current tests" });
   await service.appendEvent(run.id, { kind: "note", message: "Started local checks" });
   await service.recordVerification(run.id, {
     status: "passed",
@@ -832,18 +991,16 @@ test("deletes a loop and its run history", async () => {
     },
     repairPolicy: { maxAttempts: 2, strategy: "repair_then_retry" }
   });
-  const run = await service.runLoopWorkflow(formal.id, {
-    executor: {
-      async run() {
-        return { text: "Tests passed" };
-      }
-    },
-    verifier: () => ({
-      status: "failed",
-      summary: "Missing artifact.",
-      checks: [{ rubricId: "tests", status: "failed" }]
-    }),
-    repairWorkflow: ({ contract }) => contract
+  const { run, attempt } = await service.startCodexSessionRun(formal.id, {
+    goal: "Run the local health checks."
+  });
+  await service.proposeWorkflowRevision(formal.id, {
+    runId: run.id,
+    attemptId: attempt.id,
+    rationale: "Missing artifact.",
+    patch: {
+      stopPolicy: { rule: "Stop after the verification artifact is captured" }
+    }
   });
   await service.appendEvent(run.id, { kind: "note", message: "Started local checks" });
   await service.recordHumanRequest(run.id, { question: "Ship it?" });
@@ -857,6 +1014,7 @@ test("deletes a loop and its run history", async () => {
     loops: [],
     formalContracts: [],
     workflowRevisions: [],
+    workflowContexts: [],
     runs: [],
     attempts: [],
     events: [],
@@ -877,7 +1035,7 @@ test("binds loop runs to the Codex project selected for the loop", async () => {
     projectPath: "/Users/edisonzhong/Documents/dittos loop"
   });
 
-  const run = await service.startLoopRun(loop.id, { goal: "Run scheduled check" });
+  const { run } = await service.startCodexSessionRun(loop.id, { goal: "Run scheduled check" });
 
   expect(run).toMatchObject({
     codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
@@ -991,6 +1149,1229 @@ test("starts a host-mediated Codex session launch request with project binding a
   });
 });
 
+test("creates a workflow context when requesting a visible Codex session", async () => {
+  const service = await createServiceWithSequentialIds();
+  const loop = await createFormalLoop(service, {
+    title: "AI Dev Tools Update Monitor",
+    goal: "Watch release updates and Twitter/X signals"
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "Check today updates"
+  });
+
+  expect(launch.launchRequest).toMatchObject({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: "workflow_1"
+  });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    version: 2,
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        runId: launch.run.id,
+        loopId: loop.id,
+        attemptId: launch.attempt.id,
+        contractId: loop.id,
+        contractSnapshot: {
+          id: loop.id,
+          body: {
+            steps: [{ id: "run-worker", kind: "agent", prompt: "Run the loop workflow." }]
+          }
+        },
+        status: "ready",
+        cursor: { state: "created" },
+        taskRuns: [],
+        pendingSessionIds: []
+      }
+    ]
+  });
+});
+
+test("executes a session run against the workflow snapshot captured at launch", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await service.createLoopContract({
+    title: "Snapshot workflow",
+    goal: "Run the launched workflow version",
+    body: {
+      steps: [{ id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Use launch-time prompt" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run the launch snapshot" });
+  const revision = await service.proposeWorkflowRevision(loop.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    rationale: "Use a newer prompt for future runs.",
+    patch: {
+      body: {
+        steps: [
+          { id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Use promoted prompt" }
+        ]
+      }
+    }
+  });
+  await service.promoteWorkflowRevision(loop.id, revision.id);
+
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(requests).toMatchObject([{ stepId: "collect", prompt: "Use launch-time prompt" }]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    formalContracts: [
+      {
+        id: loop.id,
+        body: { steps: [{ id: "collect", prompt: "Use promoted prompt" }] }
+      }
+    ],
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        contractSnapshot: {
+          body: { steps: [{ id: "collect", prompt: "Use launch-time prompt" }] }
+        },
+        steps: {
+          collect: { status: "suspended", sessionId: "session_1" }
+        }
+      }
+    ]
+  });
+});
+
+test("executes a visible session workflow attempt through the same attempt and suspends on pending Codex work", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await createFormalLoop(service, {
+    title: "AI Dev Tools Update Monitor",
+    goal: "Watch release updates and Twitter/X signals"
+  });
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "Check today updates"
+  });
+
+  const run = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id
+  });
+
+  expect(run).toMatchObject({
+    id: launch.run.id,
+    status: "running",
+    codexSession: {
+      status: "requested",
+      subagents: [{ role: "Run worker", status: "requested", prompt: "Run the loop workflow." }]
+    }
+  });
+  expect(requests).toMatchObject([
+    {
+      runId: launch.run.id,
+      stepId: "run-worker",
+      title: "Run worker",
+      prompt: "Run the loop workflow."
+    }
+  ]);
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    attempts: [{ id: launch.attempt.id, status: "running" }]
+  });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        runId: launch.run.id,
+        attemptId: launch.attempt.id,
+        status: "suspended",
+        cursor: { state: "waiting_for_session", stepId: "run-worker", sessionId: "session_1" },
+        steps: {
+          "run-worker": {
+            status: "suspended",
+            sessionId: "session_1"
+          }
+        },
+        taskRuns: [
+          {
+            id: "task_1",
+            runId: launch.run.id,
+            attemptId: launch.attempt.id,
+            stepId: "run-worker",
+            sessionId: "session_1",
+            status: "suspended"
+          }
+        ],
+        pendingSessionIds: ["session_1"]
+      }
+    ]
+  });
+
+  const replay = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: "workflow_1",
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "run-worker",
+    idempotencyKey: "session_1:final",
+    status: "passed",
+    summary: "Worker result passed verification",
+    result: "Daily report body"
+  });
+  const replayDetail = await service.getRunDetail(launch.run.id);
+  expect(replay.status).toBe("completed");
+  expect(replayDetail.verificationResults).toHaveLength(1);
+  expect(replayDetail.events.filter((event) => event.kind === "verification_recorded")).toHaveLength(1);
+});
+
+test("records a targeted session result against the specified workflow context, attempt, and pending task", async () => {
+  const { bridge } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  const unrelatedAttempt = await service.startAttempt(launch.run.id, { summary: "Manual follow-up" });
+
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: "workflow_1",
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "run-worker",
+    idempotencyKey: "session_1:final",
+    status: "passed",
+    summary: "Worker result passed verification",
+    result: "Daily report body"
+  });
+
+  expect(run.status).toBe("completed");
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    attempts: [
+      { id: launch.attempt.id, status: "completed", summary: "Worker result passed verification" },
+      { id: unrelatedAttempt.id, status: "running", summary: "Manual follow-up" }
+    ],
+    verificationResults: [{ attemptId: launch.attempt.id, status: "passed" }]
+  });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        status: "completed",
+        cursor: { state: "completed" },
+        pendingSessionIds: [],
+        idempotencyKeys: ["session_1:final"],
+        taskRuns: [
+          {
+            id: "task_1",
+            sessionId: "session_1",
+            status: "completed",
+            result: "Daily report body"
+          }
+        ]
+      }
+    ]
+  });
+});
+
+test("uses the workflow context attempt when precise writeback omits attemptId", async () => {
+  const { bridge } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  const laterAttempt = await service.startAttempt(launch.run.id, { summary: "Later manual attempt" });
+
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: "workflow_1",
+    sessionId: "session_1",
+    stepId: "run-worker",
+    idempotencyKey: "session_1:context-only",
+    status: "passed",
+    summary: "Worker result passed verification",
+    result: "Daily report body"
+  });
+
+  expect(run.status).toBe("completed");
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    attempts: [
+      { id: launch.attempt.id, status: "completed", summary: "Worker result passed verification" },
+      { id: laterAttempt.id, status: "running", summary: "Later manual attempt" }
+    ],
+    verificationResults: [{ attemptId: launch.attempt.id, status: "passed" }]
+  });
+});
+
+test("rejects session result writeback when workflowContextId and attemptId disagree", async () => {
+  const { bridge } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  const laterAttempt = await service.startAttempt(launch.run.id, { summary: "Later manual attempt" });
+
+  await expect(
+    service.recordSessionResult(launch.run.id, {
+      workflowContextId: "workflow_1",
+      attemptId: laterAttempt.id,
+      sessionId: "session_1",
+      stepId: "run-worker",
+      idempotencyKey: "session_1:wrong-attempt",
+      status: "passed",
+      summary: "Worker result passed verification",
+      result: "Daily report body"
+    })
+  ).rejects.toThrow(/Workflow context does not belong to attempt/);
+});
+
+test("resumes the workflow after a targeted Codex task result without relaunching completed steps", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await service.createLoopContract({
+    title: "Two step Codex workflow",
+    goal: "Collect and synthesize updates",
+    body: {
+      steps: [
+        {
+          id: "collect",
+          kind: "task",
+          runtime: "codex",
+          label: "Collect updates",
+          prompt: "Collect official updates.",
+          subagent: {
+            ref: "researcher",
+            role: "code-researcher",
+            tools: ["rg"],
+            permissions: { filesystem: "workspace-write", network: "enabled" }
+          }
+        },
+        {
+          id: "synthesize",
+          kind: "task",
+          runtime: "codex",
+          label: "Synthesize report",
+          prompt: "Turn collected updates into a report."
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run two-step workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(requests.map((request) => request.stepId)).toEqual(["collect"]);
+  expect(requests[0].subagent).toMatchObject({
+    ref: "researcher",
+    role: "code-researcher",
+    tools: ["rg"],
+    permissions: { filesystem: "workspace-write", network: "enabled" }
+  });
+
+  const afterCollect = await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:final",
+    status: "passed",
+    summary: "Collected source notes.",
+    result: "Collected notes"
+  });
+
+  expect(afterCollect.status).toBe("running");
+  expect(requests.map((request) => request.stepId)).toEqual(["collect", "synthesize"]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        status: "suspended",
+        pendingSessionIds: ["session_2"],
+        steps: {
+          collect: {
+            status: "completed",
+            output: "Collected notes",
+            sessionId: "session_1"
+          },
+          synthesize: {
+            status: "suspended",
+            sessionId: "session_2"
+          }
+        },
+        taskRuns: [
+          {
+            id: "task_1",
+            stepId: "collect",
+            sessionId: "session_1",
+            status: "completed",
+            result: "Collected notes",
+            subagent: {
+              ref: "researcher",
+              role: "code-researcher",
+              tools: ["rg"],
+              permissions: { filesystem: "workspace-write", network: "enabled" }
+            }
+          },
+          {
+            id: "task_2",
+            stepId: "synthesize",
+            sessionId: "session_2",
+            status: "suspended"
+          }
+        ],
+        idempotencyKeys: ["collect:final"]
+      }
+    ]
+  });
+
+  const completed = await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    sessionId: "session_2",
+    stepId: "synthesize",
+    idempotencyKey: "synthesize:final",
+    status: "passed",
+    summary: "Report passed.",
+    result: "Final report"
+  });
+
+  expect(completed.status).toBe("completed");
+  expect(requests.map((request) => request.stepId)).toEqual(["collect", "synthesize"]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        status: "completed",
+        cursor: { state: "completed" },
+        pendingSessionIds: [],
+        steps: {
+          collect: { status: "completed", output: "Collected notes" },
+          synthesize: { status: "completed", output: "Final report" }
+        },
+        idempotencyKeys: ["collect:final", "synthesize:final"]
+      }
+    ],
+    runs: [{ id: launch.run.id, status: "completed" }],
+    attempts: [{ id: launch.attempt.id, status: "completed", summary: "Report passed." }]
+  });
+});
+
+test("does not reopen a completed workflow context when executed again", async () => {
+  const { service, requests } = await createPendingServiceWithSequentialIds();
+  const loop = await service.createLoopContract({
+    title: "Completed workflow guard",
+    goal: "Keep completed workflow state immutable on replay",
+    body: {
+      steps: [{ id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Collect notes." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run once" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:final",
+    status: "passed",
+    summary: "Collected notes passed.",
+    result: "Collected notes"
+  });
+  const beforeReplay = await service.getSnapshot();
+
+  const replayed = await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(replayed.status).toBe("completed");
+  expect(requests.map((request) => request.stepId)).toEqual(["collect"]);
+  const afterReplay = await service.getSnapshot();
+  expect(afterReplay.workflowContexts).toEqual(beforeReplay.workflowContexts);
+  expect(afterReplay.events).toEqual(beforeReplay.events);
+  expect(afterReplay.verificationResults).toEqual(beforeReplay.verificationResults);
+});
+
+test("resumes a suspended workflow from persisted state after the service restarts", async () => {
+  const initialBridge = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const createSequentialId = (prefix: IdPrefix) => {
+    const next = (counters.get(prefix) ?? 0) + 1;
+    counters.set(prefix, next);
+    return `${prefix}_${next}`;
+  };
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: createSequentialId,
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: initialBridge.bridge
+  });
+  const loop = await service.createLoopContract({
+    title: "Restartable Codex workflow",
+    goal: "Continue workflow from local state after restart",
+    body: {
+      steps: [
+        { id: "collect", kind: "task", runtime: "codex", label: "Collect updates", prompt: "Collect updates." },
+        { id: "synthesize", kind: "task", runtime: "codex", label: "Synthesize report", prompt: "Write report." }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run restartable workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(initialBridge.requests.map((request) => request.stepId)).toEqual(["collect"]);
+
+  const resumedBridge = createPendingSessionBridge(1);
+  const resumedService = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: createSequentialId,
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: resumedBridge.bridge
+  });
+
+  const resumedRun = await resumedService.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:after-restart",
+    status: "passed",
+    summary: "Collected notes after restart.",
+    result: "Collected notes"
+  });
+
+  expect(resumedRun.status).toBe("running");
+  expect(initialBridge.requests.map((request) => request.stepId)).toEqual(["collect"]);
+  expect(resumedBridge.requests.map((request) => request.stepId)).toEqual(["synthesize"]);
+  await expect(resumedService.getSnapshot()).resolves.toMatchObject({
+    workflowContexts: [
+      {
+        id: launch.launchRequest.workflowContextId,
+        status: "suspended",
+        pendingSessionIds: ["session_2"],
+        steps: {
+          collect: { status: "completed", output: "Collected notes", sessionId: "session_1" },
+          synthesize: { status: "suspended", sessionId: "session_2" }
+        },
+        taskRuns: [
+          { id: "task_1", stepId: "collect", sessionId: "session_1", status: "completed" },
+          { id: "task_2", stepId: "synthesize", sessionId: "session_2", status: "suspended" }
+        ],
+        idempotencyKeys: ["collect:after-restart"]
+      }
+    ]
+  });
+});
+
+test("continues a suspended workflow against its launch snapshot after a revision is promoted", async () => {
+  const { service, requests } = await createPendingServiceWithSequentialIds();
+  const loop = await service.createLoopContract({
+    title: "Suspended snapshot workflow",
+    goal: "Continue the suspended workflow version",
+    body: {
+      steps: [
+        { id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Collect using original prompt." },
+        { id: "synthesize", kind: "task", runtime: "codex", label: "Synthesize", prompt: "Synthesize original result." }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run suspended snapshot workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  const revision = await service.proposeWorkflowRevision(loop.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    rationale: "Future runs should use a different second step.",
+    patch: {
+      body: {
+        steps: [
+          { id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Collect using promoted prompt." },
+          { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write the promoted workflow result." }
+        ]
+      }
+    }
+  });
+  await service.promoteWorkflowRevision(loop.id, revision.id);
+
+  const resumed = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:promoted-after-suspend",
+    status: "passed",
+    summary: "Collected original notes.",
+    result: "Original notes"
+  });
+
+  expect(resumed.status).toBe("running");
+  expect(requests.map((request) => [request.stepId, request.prompt])).toEqual([
+    ["collect", "Collect using original prompt."],
+    ["synthesize", "Synthesize original result."]
+  ]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    formalContracts: [
+      {
+        id: loop.id,
+        body: { steps: [{ id: "collect", prompt: "Collect using promoted prompt." }, { id: "write" }] }
+      }
+    ],
+    workflowContexts: [
+      {
+        id: launch.launchRequest.workflowContextId,
+        contractSnapshot: {
+          body: { steps: [{ id: "collect", prompt: "Collect using original prompt." }, { id: "synthesize" }] }
+        },
+        pendingSessionIds: ["session_2"],
+        steps: {
+          collect: { status: "completed", output: "Original notes" },
+          synthesize: { status: "suspended", sessionId: "session_2" }
+        }
+      }
+    ]
+  });
+});
+
+test("waits for all skewed parallel Codex sessions to suspend before returning", async () => {
+  const { bridge, requests } = createSkewedPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await service.createLoopContract({
+    title: "Skewed parallel workflow",
+    goal: "Start both branches before returning control",
+    body: {
+      steps: [
+        {
+          id: "parallel-collect",
+          kind: "parallel",
+          label: "Parallel collect",
+          children: [
+            { id: "left", kind: "task", runtime: "codex", label: "Left branch", prompt: "Collect left branch." },
+            { id: "right", kind: "task", runtime: "codex", label: "Right branch", prompt: "Collect right branch." }
+          ]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Both branches complete", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run skewed parallel workflow" });
+
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right"]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    workflowContexts: [
+      {
+        id: launch.launchRequest.workflowContextId,
+        status: "suspended",
+        pendingSessionIds: ["session_1", "session_2"],
+        taskRuns: [
+          { id: "task_1", stepId: "left", sessionId: "session_1", status: "suspended" },
+          { id: "task_2", stepId: "right", sessionId: "session_2", status: "suspended" }
+        ]
+      }
+    ]
+  });
+});
+
+test("waits for existing parallel Codex task sessions before resuming fan-in", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await service.createLoopContract({
+    title: "Parallel Codex workflow",
+    goal: "Collect two branches and merge",
+    body: {
+      steps: [
+        {
+          id: "parallel-collect",
+          kind: "parallel",
+          label: "Parallel collect",
+          children: [
+            {
+              id: "left",
+              kind: "task",
+              runtime: "codex",
+              label: "Left branch",
+              prompt: "Collect left branch."
+            },
+            {
+              id: "right",
+              kind: "task",
+              runtime: "codex",
+              label: "Right branch",
+              prompt: "Collect right branch."
+            }
+          ]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Both branches complete", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run parallel workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right"]);
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right"]);
+  await expect(
+    service.recordSessionResult(launch.run.id, {
+      attemptId: launch.attempt.id,
+      idempotencyKey: "ambiguous:final",
+      status: "passed",
+      summary: "Ambiguous branch complete.",
+      result: "Ambiguous result"
+    })
+  ).rejects.toThrow(/Multiple workflow task runs are pending/);
+
+  const afterLeft = await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "left",
+    idempotencyKey: "left:final",
+    status: "passed",
+    summary: "Left branch complete.",
+    result: "Left result"
+  });
+
+  expect(afterLeft.status).toBe("running");
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right"]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    verificationResults: [],
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        status: "running",
+        pendingSessionIds: ["session_2"],
+        steps: {
+          left: { status: "completed", output: "Left result" },
+          right: { status: "suspended", sessionId: "session_2" }
+        }
+      }
+    ]
+  });
+
+  const completed = await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    sessionId: "session_2",
+    stepId: "right",
+    idempotencyKey: "right:final",
+    status: "passed",
+    summary: "Both branches complete.",
+    result: "Right result"
+  });
+
+  expect(completed.status).toBe("completed");
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right"]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        status: "completed",
+        pendingSessionIds: [],
+        steps: {
+          left: { status: "completed", output: "Left result" },
+          right: { status: "completed", output: "Right result" }
+        }
+      }
+    ],
+    runs: [{ id: launch.run.id, status: "completed" }],
+    attempts: [{ id: launch.attempt.id, status: "completed", summary: "Both branches complete." }]
+  });
+  const detail = await service.getRunDetail(launch.run.id);
+  const engineEventTypes = detail.events
+    .map((event) => event.data?.engineEvent)
+    .filter((event): event is { type: string } => Boolean(event) && typeof event === "object" && "type" in event)
+    .map((event) => event.type);
+  expect(engineEventTypes.filter((type) => type === "agent_done")).toHaveLength(2);
+  expect(engineEventTypes).toContain("parallel_completed");
+});
+
+test("rejects conflicting workflow task result locators without mutating context", async () => {
+  const { service } = await createPendingServiceWithSequentialIds();
+  const loop = await service.createLoopContract({
+    title: "Parallel locator workflow",
+    goal: "Reject conflicting task writeback locators",
+    body: {
+      steps: [
+        {
+          id: "parallel-collect",
+          kind: "parallel",
+          label: "Parallel collect",
+          children: [
+            { id: "left", kind: "task", runtime: "codex", label: "Left branch", prompt: "Collect left branch." },
+            { id: "right", kind: "task", runtime: "codex", label: "Right branch", prompt: "Collect right branch." }
+          ]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Both branches complete", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run parallel workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  const beforeContexts = (await service.getSnapshot()).workflowContexts;
+
+  await expect(
+    service.recordSessionResult(launch.run.id, {
+      workflowContextId: launch.launchRequest.workflowContextId,
+      attemptId: launch.attempt.id,
+      sessionId: "session_1",
+      stepId: "right",
+      idempotencyKey: "conflict:session-step",
+      status: "passed",
+      summary: "Conflicting branch complete.",
+      result: "Conflicting result"
+    })
+  ).rejects.toThrow(/locator fields disagree/);
+  await expect(
+    service.recordSessionResult(launch.run.id, {
+      workflowContextId: launch.launchRequest.workflowContextId,
+      attemptId: launch.attempt.id,
+      taskRunId: "task_1",
+      sessionId: "session_2",
+      idempotencyKey: "conflict:task-session",
+      status: "passed",
+      summary: "Conflicting branch complete.",
+      result: "Conflicting result"
+    })
+  ).rejects.toThrow(/locator fields disagree/);
+
+  expect((await service.getSnapshot()).workflowContexts).toEqual(beforeContexts);
+});
+
+test("continues from completed parallel children into the fan-in task exactly once", async () => {
+  const { service, requests } = await createPendingServiceWithSequentialIds();
+  const loop = await service.createLoopContract({
+    title: "Parallel fan-in workflow",
+    goal: "Collect two branches and synthesize them",
+    body: {
+      steps: [
+        {
+          id: "parallel-collect",
+          kind: "parallel",
+          label: "Parallel collect",
+          children: [
+            { id: "left", kind: "task", runtime: "codex", label: "Left branch", prompt: "Collect left branch." },
+            { id: "right", kind: "task", runtime: "codex", label: "Right branch", prompt: "Collect right branch." }
+          ]
+        },
+        {
+          id: "join",
+          kind: "task",
+          runtime: "codex",
+          label: "Join branches",
+          prompt: "Synthesize left and right branch results."
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Joined result is complete", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run fan-in workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right"]);
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "left",
+    idempotencyKey: "left:final",
+    status: "passed",
+    summary: "Left branch complete.",
+    result: "Left result"
+  });
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right"]);
+
+  const afterRight = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_2",
+    stepId: "right",
+    idempotencyKey: "right:final",
+    status: "passed",
+    summary: "Right branch complete.",
+    result: "Right result"
+  });
+
+  expect(afterRight.status).toBe("running");
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right", "join"]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        status: "suspended",
+        pendingSessionIds: ["session_3"],
+        steps: {
+          left: { status: "completed", output: "Left result" },
+          right: { status: "completed", output: "Right result" },
+          join: { status: "suspended", sessionId: "session_3" }
+        },
+        taskRuns: [
+          { id: "task_1", stepId: "left", status: "completed" },
+          { id: "task_2", stepId: "right", status: "completed" },
+          { id: "task_3", stepId: "join", status: "suspended" }
+        ]
+      }
+    ]
+  });
+
+  const completed = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    taskRunId: "task_3",
+    idempotencyKey: "join:final",
+    status: "passed",
+    summary: "Joined result passed.",
+    result: "Joined result"
+  });
+
+  expect(completed.status).toBe("completed");
+  expect(requests.map((request) => request.stepId)).toEqual(["left", "right", "join"]);
+});
+
+test("updates the original workflow subagent when writeback only provides taskRunId", async () => {
+  const { service, requests } = await createPendingServiceWithSequentialIds();
+  const loop = await service.createLoopContract({
+    title: "Task id writeback workflow",
+    goal: "Resume from a taskRunId-only result",
+    body: {
+      steps: [
+        { id: "collect", kind: "task", runtime: "codex", label: "Collect updates", prompt: "Collect official updates." },
+        { id: "synthesize", kind: "task", runtime: "codex", label: "Synthesize report", prompt: "Write a report." }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run task id workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  const afterCollect = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    taskRunId: "task_1",
+    idempotencyKey: "task_1:final",
+    status: "passed",
+    summary: "Collected updates.",
+    result: "Collected notes"
+  });
+
+  expect(requests.map((request) => request.stepId)).toEqual(["collect", "synthesize"]);
+  expect(afterCollect.codexSession?.subagents).toEqual([
+    expect.objectContaining({
+      role: "Collect updates",
+      stepId: "collect",
+      sessionId: "session_1",
+      status: "completed"
+    }),
+    expect.objectContaining({
+      role: "Synthesize report",
+      stepId: "synthesize",
+      sessionId: "session_2",
+      status: "requested"
+    })
+  ]);
+  expect(afterCollect.codexSession?.subagents?.some((subagent) => subagent.role === "loop-runner")).toBe(false);
+});
+
+test("keeps needs_human workflow task results suspended instead of completed-cacheable", async () => {
+  const { service, requests } = await createPendingServiceWithSequentialIds();
+  const loop = await service.createLoopContract({
+    title: "Human decision workflow",
+    goal: "Pause when a worker needs human input",
+    body: {
+      steps: [
+        { id: "collect", kind: "task", runtime: "codex", label: "Collect updates", prompt: "Collect official updates." },
+        { id: "synthesize", kind: "task", runtime: "codex", label: "Synthesize report", prompt: "Write a report." }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run human decision workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  const waiting = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:needs-human",
+    status: "needs_human",
+    summary: "Need user to choose source scope.",
+    result: "Waiting on scope decision.",
+    humanQuestion: "Which sources should the worker include?"
+  });
+
+  expect(waiting.status).toBe("waiting_for_human");
+  const snapshot = await service.getSnapshot();
+  expect(snapshot).toMatchObject({
+    attempts: [{ id: launch.attempt.id, status: "running" }],
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        status: "suspended",
+        cursor: { state: "waiting_for_human", stepId: "collect", sessionId: "session_1" },
+        pendingSessionIds: [],
+        steps: {
+          collect: { status: "suspended", sessionId: "session_1" }
+        },
+        taskRuns: [
+          {
+            id: "task_1",
+            stepId: "collect",
+            sessionId: "session_1",
+            status: "suspended"
+          }
+        ],
+        idempotencyKeys: ["collect:needs-human"]
+      }
+    ],
+    humanRequests: [{ question: "Which sources should the worker include?", status: "open" }]
+  });
+  expect(snapshot.attempts[0]).not.toHaveProperty("completedAt");
+  expect(snapshot.workflowContexts[0].steps.collect).not.toHaveProperty("output");
+  expect(snapshot.workflowContexts[0].taskRuns[0]).not.toHaveProperty("result");
+
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  expect(requests.map((request) => request.stepId)).toEqual(["collect"]);
+});
+
+test("resolves a human request by writing the answer back to the suspended workflow task", async () => {
+  const { service, requests } = await createPendingServiceWithSequentialIds();
+  const loop = await service.createLoopContract({
+    title: "Human resume workflow",
+    goal: "Resume after a user decision",
+    body: {
+      steps: [
+        { id: "collect", kind: "task", runtime: "codex", label: "Collect updates", prompt: "Collect official updates." },
+        { id: "synthesize", kind: "task", runtime: "codex", label: "Synthesize report", prompt: "Write a report." }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run human resume workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:needs-human",
+    status: "needs_human",
+    summary: "Need source scope.",
+    humanQuestion: "Which sources should the worker include?"
+  });
+
+  const resolved = await service.resolveHumanRequest("human_1", {
+    response: "Use official sources only.",
+    summary: "User selected official sources."
+  });
+
+  expect(resolved).toMatchObject({
+    id: "human_1",
+    status: "resolved",
+    response: "Use official sources only.",
+    workflowContextId: launch.launchRequest.workflowContextId,
+    taskRunId: "task_1",
+    sessionId: "session_1",
+    stepId: "collect"
+  });
+  expect(requests.map((request) => request.stepId)).toEqual(["collect", "synthesize"]);
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    runs: [{ id: launch.run.id, status: "running" }],
+    attempts: [{ id: launch.attempt.id, status: "running" }],
+    humanRequests: [{ id: "human_1", status: "resolved", response: "Use official sources only." }],
+    workflowContexts: [
+      {
+        id: launch.launchRequest.workflowContextId,
+        status: "suspended",
+        pendingSessionIds: ["session_2"],
+        steps: {
+          collect: { status: "completed", output: "Use official sources only.", sessionId: "session_1" },
+          synthesize: { status: "suspended", sessionId: "session_2" }
+        },
+        taskRuns: [
+          { id: "task_1", stepId: "collect", sessionId: "session_1", status: "completed" },
+          { id: "task_2", stepId: "synthesize", sessionId: "session_2", status: "suspended" }
+        ],
+        idempotencyKeys: ["collect:needs-human", "human:human_1"]
+      }
+    ]
+  });
+});
+
+test("accepts codex task nodes as the V2 spelling for legacy agent steps", async () => {
+  const service = await createService();
+
+  const formal = await service.createLoopContract({
+    title: "Codex task workflow",
+    goal: "Run one codex task",
+    body: {
+      steps: [
+        {
+          id: "scan",
+          kind: "task",
+          runtime: "codex",
+          label: "Scan updates",
+          prompt: "Scan official updates"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Task finishes", severity: "must" }]
+    }
+  });
+
+  expect(formal.body.steps[0]).toMatchObject({
+    id: "scan",
+    kind: "task",
+    runtime: "codex",
+    prompt: "Scan official updates"
+  });
+
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run task workflow" });
+  expect(launch.launchRequest.workflowPlan?.steps).toEqual([
+    {
+      id: "scan",
+      kind: "task",
+      runtime: "codex",
+      label: "Scan updates",
+      prompt: "Scan official updates",
+      depth: 0
+    }
+  ]);
+});
+
 test("compiles Codex session prompt from formal workflow contract when available", async () => {
   const service = await createService();
   const formal = await service.createLoopContract({
@@ -1033,6 +2414,12 @@ test("compiles Codex session prompt from formal workflow contract when available
   });
 
   expect(launch.prompt).toContain(`Contract id: ${formal.id}`);
+  expect(launch.prompt).toContain("runId: run_1");
+  expect(launch.prompt).toContain("attemptId: attempt_1");
+  expect(launch.prompt).toContain("workflowContextId: workflow_1");
+  expect(launch.prompt).toContain("execute_workflow_attempt");
+  expect(launch.prompt).toContain("record_session_result");
+  expect(launch.prompt).toContain("propose_workflow_revision");
   expect(launch.prompt).toContain("使用本地 DittosLoop workflow runtime 执行这个 contract");
   expect(launch.prompt).toContain("不要覆盖当前 active workflow contract");
   expect(launch.prompt).toContain("不要把 run/attempt/verification id、调试说明或 cite turn 残留写进正文");
@@ -1298,7 +2685,7 @@ test("records a Codex session result and completes the session-backed run", asyn
   });
 });
 
-test("opens and resumes a Codex session backed run without creating a new run", async () => {
+test("opens a Codex session backed run without creating a new run", async () => {
   const service = await createService();
   const formal = await service.createLoopContract({
     title: "AI 开发工具更新日报",
@@ -1348,54 +2735,7 @@ test("opens and resumes a Codex session backed run without creating a new run", 
     threadTitle: "DittosLoop: AI 开发工具更新日报",
     threadUrl: "codex://thread/019ef91e-0f19-74d5-b14c-bac2f257d269"
   });
-
-  const resumed = await service.resumeLoopRun(launch.run.id, {
-    goal: "根据校验意见修复日报"
-  });
-
-  expect(resumed.run).toMatchObject({
-    id: launch.run.id,
-    loopId: formal.id,
-    status: "running",
-    goal: "根据校验意见修复日报",
-    codexProjectId: "project-dittos-loop",
-    projectLabel: "dittos loop",
-    codexSession: {
-      status: "requested",
-      codexProjectId: "project-dittos-loop",
-      projectLabel: "dittos loop",
-      subagents: [
-        {
-          status: "running",
-          threadId: "019ef91e-0f19-74d5-b14c-bac2f257d269"
-        },
-        {
-          role: "撰写日报",
-          status: "requested"
-        }
-      ]
-    }
-  });
-  expect(resumed.launchRequest).toMatchObject({
-    runId: launch.run.id,
-    loopId: formal.id,
-    workflowRuntime: "dittosloop-local-workflow",
-    workflowContractId: formal.id,
-    workflowPlan: {
-      contractId: formal.id,
-      steps: [
-        {
-          id: "write-report",
-          kind: "agent",
-          label: "撰写日报",
-          prompt: "整理 OpenClaw、Claude Code、Codex、Hermes 的中文日报。",
-          depth: 0
-        }
-      ]
-    },
-    codexProjectId: "project-dittos-loop",
-    projectLabel: "dittos loop"
-  });
+  expect((service as any).resumeLoopRun).toBeUndefined();
   await expect(service.getSnapshot()).resolves.toMatchObject({
     runs: [
       {
@@ -1407,19 +2747,15 @@ test("opens and resumes a Codex session backed run without creating a new run", 
   await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
     attempts: [
       {
-        status: "running"
-      },
-      {
         status: "running",
-        summary: "Resume Codex session for AI 开发工具更新日报"
+        summary: "Request a new Codex session for AI 开发工具更新日报"
       }
     ],
     events: [
       { kind: "run_created" },
       { kind: "attempt_started" },
       { kind: "note", message: "Codex thread created and attached to this run" },
-      { kind: "note", message: "Codex session open requested" },
-      { kind: "attempt_started", message: "Resume Codex session for AI 开发工具更新日报" }
+      { kind: "note", message: "Codex session open requested" }
     ]
   });
 });

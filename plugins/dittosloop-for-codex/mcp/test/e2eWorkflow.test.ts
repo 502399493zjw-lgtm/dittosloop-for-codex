@@ -135,12 +135,16 @@ test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and
     }
   });
 
-  const run = await callTool(handlers.start_loop_run, {
+  const launch = await callTool<{ run: { id: string }; attempt: { id: string } }>(handlers.start_codex_session, {
     loopId: loop.id,
     goal: "执行一次真实端到端日报闭环。",
     codexProjectId: "dittos-loop",
     projectLabel: "dittos loop",
     projectPath: "/Users/edisonzhong/Documents/dittos loop"
+  });
+  const run = await callTool(handlers.execute_workflow_attempt, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
   });
 
   const detail = await fetchJson<RunDetail>(`${server.url}/api/runs/${run.id}`);
@@ -263,6 +267,8 @@ function createCompletedSessionBridge() {
       const session: CodexSessionRef = {
         sessionId,
         runId: request.runId,
+        attemptId: request.attemptId,
+        workflowContextId: request.workflowContextId,
         stepId: request.stepId,
         phaseId: request.phaseId,
         title: request.title,

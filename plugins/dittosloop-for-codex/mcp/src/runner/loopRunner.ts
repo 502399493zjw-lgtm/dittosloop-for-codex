@@ -9,6 +9,7 @@ export interface LoopRunnerOptions {
   executor: Executor;
   verifier?: LoopVerifier;
   now?: () => string;
+  completedStepOutputs?: Record<string, string>;
 }
 
 export interface LoopRunRequest {
@@ -55,6 +56,7 @@ export class LoopRunner {
         runId: request.runId,
         executor: this.options.executor,
         workflow: buildWorkflowExecutionPlan(request.contract),
+        completedStepOutputs: this.options.completedStepOutputs,
         emit,
         now
       }
@@ -123,13 +125,15 @@ function flattenWorkflowSteps(steps: Step[], phaseId?: string, depth = 0): Workf
     const current: WorkflowExecutionPlanStep = {
       id: step.id,
       kind: step.kind,
+      runtime: step.kind === "task" ? step.runtime : undefined,
       label: step.label,
       depth,
       phaseId,
-      prompt: step.kind === "agent" ? step.prompt : undefined,
-      sessionPolicy: step.kind === "agent" ? step.sessionPolicy : undefined
+      prompt: step.kind === "agent" || step.kind === "task" ? step.prompt : undefined,
+      sessionPolicy: step.kind === "agent" || step.kind === "task" ? step.sessionPolicy : undefined,
+      subagent: step.kind === "agent" || step.kind === "task" ? step.subagent : undefined
     };
-    if (step.kind === "agent") {
+    if (step.kind === "agent" || step.kind === "task") {
       return [current];
     }
 
