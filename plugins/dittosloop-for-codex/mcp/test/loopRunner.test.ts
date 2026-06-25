@@ -74,7 +74,19 @@ describe("LoopRunner", () => {
       })
     });
 
-    const firstAttempt = await runner.run({ contract, runId: "run_1", attemptNumber: 1, emit: (event) => events.push(event.type) });
+    const emittedAttemptIds: string[] = [];
+    const firstAttempt = await runner.run({
+      contract,
+      runId: "run_1",
+      attemptId: "persisted_attempt_17",
+      attemptNumber: 1,
+      emit: (event) => {
+        events.push(event.type);
+        if ("attemptId" in event) {
+          emittedAttemptIds.push(event.attemptId);
+        }
+      }
+    });
     const secondAttempt = await runner.run({ contract, runId: "run_2", attemptNumber: 2 });
 
     expect(firstAttempt.shouldRepair).toBe(true);
@@ -82,6 +94,11 @@ describe("LoopRunner", () => {
     expect(secondAttempt.shouldRepair).toBe(false);
     expect(secondAttempt.status).toBe("failed");
     expect(events).toContain("repair_started");
+    expect(emittedAttemptIds).toEqual([
+      "persisted_attempt_17",
+      "persisted_attempt_17",
+      "persisted_attempt_17"
+    ]);
   });
 
   test("emits a human request when verification needs a decision", async () => {

@@ -135,12 +135,16 @@ test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and
     }
   });
 
-  const run = await callTool(handlers.start_loop_run, {
+  const launch = await callTool<{ run: { id: string }; attempt: { id: string } }>(handlers.start_codex_session, {
     loopId: loop.id,
     goal: "执行一次真实端到端日报闭环。",
     codexProjectId: "dittos-loop",
     projectLabel: "dittos loop",
     projectPath: "/Users/edisonzhong/Documents/dittos loop"
+  });
+  const run = await callTool(handlers.execute_workflow_attempt, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
   });
 
   const detail = await fetchJson<RunDetail>(`${server.url}/api/runs/${run.id}`);
@@ -225,7 +229,222 @@ test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and
   expect(detail.events.some((event) => event.message.includes("loop-runner"))).toBe(false);
 });
 
-async function createService(sessionBridge: ReturnType<typeof createCompletedSessionBridge>) {
+test("resumes a suspended task workflow with subagent metadata through session writeback and preview detail", async () => {
+  const researcherSubagent = {
+    ref: "researcher",
+    role: "Release researcher",
+    model: "gpt-5.4-mini",
+    tools: ["rg", "sed"],
+    permissions: { filesystem: "workspace-write", network: "disabled" },
+    timeoutMs: 120_000,
+    context: { scope: "local e2e", expectedOutput: "facts" }
+  };
+  const reviewerSubagent = {
+    ref: "reviewer",
+    role: "Quality reviewer",
+    model: "gpt-5.4-mini",
+    tools: ["rg"],
+    permissions: { filesystem: "read-only", network: "disabled" },
+    timeoutMs: 60_000,
+    context: { scope: "local e2e", expectedOutput: "approval" }
+  };
+
+  const sessionBridge = createPendingSessionBridge();
+  const service = await createService(sessionBridge);
+  const handlers = createToolHandlers(service);
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const loop = await callTool<{ id: string }>(handlers.create_loop_contract, {
+    title: "Suspended local subagent workflow",
+    goal: "Run a session-first workflow that delegates local work to Codex subagents.",
+    intent: "Verify the visible Codex session starts the workflow and task sessions resume through result writeback.",
+    projectBinding: {
+      codexProjectId: "dittos-loop",
+      projectLabel: "dittos loop",
+      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    },
+    body: {
+      steps: [
+        {
+          id: "collect",
+          kind: "task",
+          runtime: "codex",
+          label: "Collect release evidence",
+          prompt: "Inspect local files and summarize release facts.",
+          subagent: researcherSubagent
+        },
+        {
+          id: "review",
+          kind: "task",
+          runtime: "codex",
+          label: "Review release evidence",
+          prompt: "Review the collected facts and decide whether the loop can pass.",
+          subagent: reviewerSubagent
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "review-approved",
+          label: "Review approved",
+          requirement: "The reviewer subagent must approve the collected evidence.",
+          severity: "must"
+        }
+      ]
+    },
+    repairPolicy: {
+      maxAttempts: 0,
+      strategy: "fail_run"
+    },
+    stopPolicy: {
+      rule: "verification_passed_or_failed",
+      maxConsecutiveFailures: 0
+    }
+  });
+
+  const launch = await callTool<{
+    run: { id: string };
+    attempt: { id: string };
+    launchRequest: {
+      workflowContextId: string;
+      workflowPlan: { steps: Array<{ id: string; subagent?: unknown }> };
+    };
+  }>(handlers.start_codex_session, {
+    loopId: loop.id,
+    goal: "Start the local suspended workflow.",
+    codexProjectId: "dittos-loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+  });
+
+  await callTool(handlers.record_codex_thread, {
+    runId: launch.run.id,
+    threadId: "thread_suspended_subagents",
+    threadTitle: "Suspended subagent workflow",
+    threadUrl: "codex://thread/thread_suspended_subagents"
+  });
+
+  expect(launch.launchRequest.workflowPlan.steps.find((step) => step.id === "collect")?.subagent).toEqual(
+    researcherSubagent
+  );
+  expect(launch.launchRequest.workflowPlan.steps.find((step) => step.id === "review")?.subagent).toEqual(
+    reviewerSubagent
+  );
+
+  const firstExecution = await callTool<{ status: string }>(handlers.execute_workflow_attempt, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+
+  expect(firstExecution.status).toBe("running");
+  expect(sessionBridge.requests).toHaveLength(1);
+  expect(sessionBridge.requests[0]).toMatchObject({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    stepId: "collect",
+    workflowRuntime: "dittosloop-local-workflow",
+    workflowContractId: loop.id,
+    subagent: researcherSubagent
+  });
+
+  let detail = await callTool<RunDetail>(handlers.get_run_detail, { runId: launch.run.id });
+  let workflowContext = detail.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
+
+  expect(workflowContext).toBeDefined();
+  expect(workflowContext?.status).toBe("suspended");
+  expect(workflowContext?.pendingSessionIds).toEqual(["session_1"]);
+  expect(workflowContext?.taskRuns).toHaveLength(1);
+  expect(workflowContext?.taskRuns[0]).toMatchObject({
+    stepId: "collect",
+    sessionId: "session_1",
+    status: "suspended",
+    subagent: researcherSubagent
+  });
+
+  const afterCollect = await callTool<{ status: string }>(handlers.record_session_result, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "session_1:collect:passed",
+    status: "passed",
+    summary: "Collect subagent finished.",
+    result: "Collected release facts from the local project."
+  });
+
+  expect(afterCollect.status).toBe("running");
+  expect(sessionBridge.requests).toHaveLength(2);
+  expect(sessionBridge.requests[1]).toMatchObject({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    stepId: "review",
+    workflowRuntime: "dittosloop-local-workflow",
+    workflowContractId: loop.id,
+    subagent: reviewerSubagent
+  });
+
+  detail = await callTool<RunDetail>(handlers.get_run_detail, { runId: launch.run.id });
+  workflowContext = detail.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
+
+  expect(workflowContext?.status).toBe("suspended");
+  expect(workflowContext?.pendingSessionIds).toEqual(["session_2"]);
+  expect(workflowContext?.taskRuns.find((taskRun) => taskRun.stepId === "collect")).toMatchObject({
+    status: "completed",
+    result: "Collected release facts from the local project.",
+    subagent: researcherSubagent
+  });
+  expect(workflowContext?.taskRuns.find((taskRun) => taskRun.stepId === "review")).toMatchObject({
+    sessionId: "session_2",
+    status: "suspended",
+    subagent: reviewerSubagent
+  });
+
+  const completed = await callTool<{ status: string }>(handlers.record_session_result, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_2",
+    stepId: "review",
+    idempotencyKey: "session_2:review:passed",
+    status: "passed",
+    summary: "Review subagent approved.",
+    result: "Reviewed the collected facts and approved the release evidence."
+  });
+
+  expect(completed.status).toBe("completed");
+
+  detail = await callTool<RunDetail>(handlers.get_run_detail, { runId: launch.run.id });
+  workflowContext = detail.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
+
+  expect(detail.run.status).toBe("completed");
+  expect(detail.run.codexSession?.status).toBe("completed");
+  expect(detail.attempts[0]?.status).toBe("completed");
+  expect(workflowContext?.status).toBe("completed");
+  expect(workflowContext?.taskRuns.map((taskRun) => taskRun.status)).toEqual(["completed", "completed"]);
+  expect(detail.verificationResults).toHaveLength(1);
+  expect(detail.verificationResults[0]?.status).toBe("passed");
+
+  const previewDetail = await fetchJson<RunDetail>(`${server.url}/api/runs/${launch.run.id}`);
+  const previewContext = previewDetail.workflowContexts.find(
+    (context) => context.id === launch.launchRequest.workflowContextId
+  );
+
+  expect(previewContext?.taskRuns.find((taskRun) => taskRun.stepId === "collect")?.subagent).toEqual(
+    researcherSubagent
+  );
+  expect(previewContext?.taskRuns.find((taskRun) => taskRun.stepId === "review")?.subagent).toEqual(reviewerSubagent);
+  expect(previewDetail.events.some((event) => event.message === "Codex task result recorded; continuing workflow")).toBe(
+    true
+  );
+});
+
+async function createService(sessionBridge: CodexSessionBridge) {
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-e2e-"));
   tempDirs.push(dir);
   const counters = new Map<string, number>();
@@ -263,6 +482,8 @@ function createCompletedSessionBridge() {
       const session: CodexSessionRef = {
         sessionId,
         runId: request.runId,
+        attemptId: request.attemptId,
+        workflowContextId: request.workflowContextId,
         stepId: request.stepId,
         phaseId: request.phaseId,
         title: request.title,
@@ -295,6 +516,60 @@ function createCompletedSessionBridge() {
       const session = sessions.get(sessionId);
       if (session) {
         sessions.set(sessionId, { ...session, status: result.status });
+      }
+    },
+    async readResult(sessionId) {
+      return results.get(sessionId);
+    }
+  };
+
+  return bridge;
+}
+
+function createPendingSessionBridge() {
+  const requests: CodexSessionRequest[] = [];
+  const sessions = new Map<string, CodexSessionRef>();
+  const results = new Map<string, CodexSessionResult>();
+
+  const bridge: CodexSessionBridge & {
+    requests: CodexSessionRequest[];
+    results: Map<string, CodexSessionResult>;
+  } = {
+    requests,
+    results,
+    async createSession(request) {
+      requests.push(request);
+      const sessionId = `session_${requests.length}`;
+      const session: CodexSessionRef = {
+        sessionId,
+        runId: request.runId,
+        attemptId: request.attemptId,
+        workflowContextId: request.workflowContextId,
+        stepId: request.stepId,
+        phaseId: request.phaseId,
+        title: request.title,
+        status: "requested",
+        createdAt: "2026-06-25T00:00:00.000Z",
+        prompt: request.prompt,
+        subagent: request.subagent,
+        workflowRuntime: request.workflowRuntime,
+        workflowContractId: request.workflowContractId,
+        workflowPlan: request.workflowPlan,
+        projectId: request.projectId,
+        projectLabel: request.projectLabel,
+        projectPath: request.projectPath
+      };
+      sessions.set(sessionId, session);
+      return session;
+    },
+    async sendMessage() {
+      return undefined;
+    },
+    async recordResult(sessionId, result) {
+      results.set(sessionId, result);
+      const session = sessions.get(sessionId);
+      if (session) {
+        sessions.set(sessionId, { ...session, status: result.status === "passed" ? "completed" : "failed" });
       }
     },
     async readResult(sessionId) {

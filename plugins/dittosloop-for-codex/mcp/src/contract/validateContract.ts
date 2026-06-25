@@ -1,4 +1,4 @@
-import type { FormalLoopContract, Step } from "./types.js";
+import type { CodexSubagentSpec, FormalLoopContract, Step } from "./types.js";
 
 export function validateContract(contract: FormalLoopContract): void {
   const errors: string[] = [];
@@ -63,8 +63,15 @@ function validateStep(step: Step, stepIds: Set<string>, errors: string[]): void 
     stepIds.add(step.id);
   }
 
-  if (step.kind === "agent") {
-    required(step.prompt, `agent step ${step.id || "<missing>"} prompt`, errors);
+  if (step.kind === "agent" || step.kind === "task") {
+    required(step.prompt, `${step.kind} step ${step.id || "<missing>"} prompt`, errors);
+    if (step.kind === "task" && step.runtime !== "codex") {
+      errors.push(`task step ${step.id || "<missing>"} runtime must be codex`);
+    }
+    if (step.sessionPolicy !== undefined && step.sessionPolicy !== "new") {
+      errors.push(`${step.kind} step ${step.id || "<missing>"} sessionPolicy currently supports only new`);
+    }
+    validateSubagent(step.subagent, step, errors);
     return;
   }
 
@@ -87,5 +94,34 @@ function validateStep(step: Step, stepIds: Set<string>, errors: string[]): void 
 function required(value: string | undefined, label: string, errors: string[]): void {
   if (!value || value.trim().length === 0) {
     errors.push(`${label} is required`);
+  }
+}
+
+function validateSubagent(subagent: CodexSubagentSpec | undefined, step: Step, errors: string[]): void {
+  if (!subagent) return;
+
+  if (subagent.timeoutMs !== undefined && (!Number.isInteger(subagent.timeoutMs) || subagent.timeoutMs <= 0)) {
+    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.timeoutMs must be a positive integer`);
+  }
+
+  if (subagent.tools !== undefined) {
+    if (!Array.isArray(subagent.tools) || subagent.tools.some((tool) => !tool || tool.trim().length === 0)) {
+      errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.tools must contain non-empty strings`);
+    }
+  }
+
+  if (
+    subagent.permissions?.filesystem !== undefined &&
+    !["read-only", "workspace-write", "danger-full-access"].includes(subagent.permissions.filesystem)
+  ) {
+    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.filesystem is invalid`);
+  }
+
+  if (
+    subagent.permissions?.network !== undefined &&
+    subagent.permissions.network !== "enabled" &&
+    subagent.permissions.network !== "disabled"
+  ) {
+    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.network is invalid`);
   }
 }

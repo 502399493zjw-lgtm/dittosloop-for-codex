@@ -19,6 +19,9 @@ let selectedRunId = null;
 let currentSnapshot = null;
 let activeLoopTab = "history";
 let selectedDirectoryPath = "flow.js";
+const loopFilesById = new Map();
+const loopFilesLoading = new Set();
+const loopFilesErrors = new Map();
 let selectedRunPhaseId = "attempts";
 let loopSelectionClosed = false;
 let observedHash = window.location.hash;
@@ -58,6 +61,8 @@ async function loadSnapshot() {
 
     const snapshot = await response.json();
     currentSnapshot = snapshot;
+    loopFilesById.clear();
+    loopFilesErrors.clear();
 
     const loops = snapshot.loops ?? [];
     const runs = snapshot.runs ?? [];
@@ -125,6 +130,44 @@ async function loadRunDetail(runId) {
   loopSelectionClosed = false;
   render(currentSnapshot);
   renderLoopStage({ snapshot: currentSnapshot, detail });
+}
+
+async function loadLoopFiles(loopId) {
+  if (loopFilesLoading.has(loopId)) return;
+  loopFilesLoading.add(loopId);
+  loopFilesErrors.delete(loopId);
+
+  try {
+    const response = await fetch(`/api/loops/${encodeURIComponent(loopId)}/files`, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Loop files request failed: ${response.status}`);
+    }
+
+    const files = await response.json();
+    if (!Array.isArray(files)) {
+      throw new Error("Loop files response was not a file list.");
+    }
+
+    loopFilesById.set(loopId, files.map(normalizeLoopFile).filter(Boolean));
+  } catch (error) {
+    loopFilesErrors.set(loopId, error instanceof Error ? error.message : "Loop files failed to load.");
+  } finally {
+    loopFilesLoading.delete(loopId);
+    if (selectedLoopId === loopId && activeLoopTab === "directory") {
+      renderLoopStage({ snapshot: currentSnapshot });
+    }
+  }
+}
+
+function normalizeLoopFile(file) {
+  if (!file || typeof file.path !== "string") return null;
+  return {
+    path: file.path,
+    kind: typeof file.kind === "string" ? file.kind : "contract",
+    language: typeof file.language === "string" ? file.language : "json",
+    content: typeof file.content === "string" ? file.content : JSON.stringify(file.content ?? null, null, 2),
+    size: typeof file.size === "number" ? file.size : 0
+  };
 }
 
 function renderLoopGroups(groups, runs, verificationResults) {
@@ -266,7 +309,7 @@ function renderLoopStage({ snapshot, detail }) {
     ]),
     renderLoopTabs(),
     activeLoopTab === "directory"
-      ? renderLoopDirectory({ snapshot, loop, loopRuns, checks })
+      ? renderLoopDirectory({ loop, loopRuns })
       : el("section", "history-panel", [
           ...renderHistoryRows(loopRuns, verificationResults, humanRequests)
         ])
@@ -444,33 +487,51 @@ function renderLoopTabs() {
   ]);
 }
 
-function renderLoopDirectory({ snapshot, loop, loopRuns, checks }) {
+function renderLoopDirectory({ loop, loopRuns }) {
   const latestRun = loopRuns.at(0);
-  const files = buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks });
+  const files = loopFilesById.get(loop.id);
+  const error = loopFilesErrors.get(loop.id);
+
+  if (!files && !error) {
+    void loadLoopFiles(loop.id);
+    return el("section", "directory-browser", [
+      renderDirectoryFileList({ files: [], selectedPath: null }),
+      el("div", "directory-file-view", [
+        el("header", "directory-file-head", [
+          el("span", "directory-path", "Live Loop 目录"),
+          el("span", "directory-spacer", ""),
+          el("span", "directory-sync-note", "正在读取目录")
+        ]),
+        el("div", "directory-empty", "正在读取 Live Loop 目录。")
+      ])
+    ]);
+  }
+
+  if (error) {
+    return el("section", "directory-browser", [
+      renderDirectoryFileList({ files: [], selectedPath: null }),
+      el("div", "directory-file-view", [
+        el("header", "directory-file-head", [
+          el("span", "directory-path", "Live Loop 目录"),
+          el("span", "directory-spacer", ""),
+          button("ghost-button", () => {
+            void loadLoopFiles(loop.id);
+          }, "重试")
+        ]),
+        el("div", "directory-empty", error)
+      ])
+    ]);
+  }
+
   const selected = files.find((file) => file.path === selectedDirectoryPath) ?? files[0];
   selectedDirectoryPath = selected?.path ?? "flow.js";
 
   return el("section", "directory-browser", [
-    el("aside", "directory-file-list", [
-      el("div", "directory-file-root", [
-        inlineIcon("folder"),
-        el("span", "", "Live Loop")
-      ]),
-      el("div", "directory-files", files.map((file) =>
-        button(`directory-file ${file.path === selected.path ? "active" : ""}`, () => {
-          selectedDirectoryPath = file.path;
-          renderLoopStage({ snapshot: currentSnapshot });
-        }, [
-          inlineIcon(file.language === "markdown" ? "fileText" : "fileCode"),
-          el("span", "directory-file-name", file.path),
-          el("span", "directory-file-meta", file.meta)
-        ])
-      ))
-    ]),
+    renderDirectoryFileList({ files, selectedPath: selected?.path }),
     el("div", "directory-file-view", [
       el("header", "directory-file-head", [
         el("span", "directory-path", selected?.path ?? "Live Loop 目录"),
-        selected ? el("span", "directory-file-type", selected.meta) : null,
+        selected ? el("span", "directory-file-type", fileMeta(selected)) : null,
         el("span", "directory-spacer", ""),
         latestRun ? el("span", "directory-sync-note", `最近 run ${formatDate.format(new Date(latestRun.createdAt))}`) : null
       ]),
@@ -479,6 +540,32 @@ function renderLoopDirectory({ snapshot, loop, loopRuns, checks }) {
         : el("div", "directory-empty", "选择一个文件查看内容。")
     ])
   ]);
+}
+
+function renderDirectoryFileList({ files, selectedPath }) {
+  return el("aside", "directory-file-list", [
+    el("div", "directory-file-root", [
+      inlineIcon("folder"),
+      el("span", "", "Live Loop")
+    ]),
+    el("div", "directory-files", files.map((file) =>
+      button(`directory-file ${file.path === selectedPath ? "active" : ""}`, () => {
+        selectedDirectoryPath = file.path;
+        renderLoopStage({ snapshot: currentSnapshot });
+      }, [
+        inlineIcon(file.language === "markdown" ? "fileText" : "fileCode"),
+        el("span", "directory-file-name", file.path),
+        el("span", "directory-file-meta", fileMeta(file))
+      ])
+    ))
+  ]);
+}
+
+function fileMeta(file) {
+  if (file.language === "javascript") return "JS";
+  if (file.language === "markdown") return "MD";
+  if (file.language === "json") return "JSON";
+  return (file.kind ?? "FILE").toUpperCase();
 }
 
 function renderHistoryRows(runs, verificationResults, humanRequests) {
@@ -582,6 +669,7 @@ function renderRunBoard({ detail, loop, loopRuns }) {
           el("p", "", activeHumanRequest.question)
         ])
       : null,
+    renderWorkflowRuntimePanel(detail),
     el("section", "run-board-body", [
       el("aside", "phase-rail", [
         el("div", "phase-rail-title", "工作流阶段"),
@@ -603,6 +691,93 @@ function renderRunBoard({ detail, loop, loopRuns }) {
       ] : [el("p", "detail-empty", "当前运行没有可展示的 agent 明细。")])
     ])
   ].filter(Boolean));
+}
+
+function renderWorkflowRuntimePanel(detail) {
+  const workflowContexts = detail.workflowContexts ?? [];
+  const workflowRevisions = detail.workflowRevisions ?? [];
+  if (!workflowContexts.length && !workflowRevisions.length) return null;
+
+  return el("section", "workflow-runtime-panel", [
+    el("div", "workflow-runtime-heading", [
+      el("span", "detail-kicker", "Local workflow"),
+      el("strong", "", "动态工作流状态")
+    ]),
+    el("div", "workflow-runtime-grid", [
+      workflowContexts.length
+        ? el("div", "workflow-runtime-card workflow-contexts", [
+            el("h3", "", "Workflow attempt"),
+            ...workflowContexts.map(renderWorkflowContextRow)
+          ])
+        : null,
+      workflowRevisions.length
+        ? el("div", "workflow-runtime-card workflow-revisions", [
+            el("h3", "", "工作流草稿"),
+            ...workflowRevisions.map(renderWorkflowRevisionRow)
+          ])
+        : null
+    ])
+  ]);
+}
+
+function renderWorkflowContextRow(context) {
+  const taskRuns = context.taskRuns ?? [];
+  const completedTasks = taskRuns.filter((task) => task.status === "completed").length;
+  const pendingSessions = context.pendingSessionIds ?? [];
+  const cursor = context.cursor ?? {};
+  const cursorLabel = [cursor.state, cursor.stepId, cursor.sessionId].filter(Boolean).join(" · ");
+
+  return el("div", "workflow-context-block", [
+    el("div", "workflow-runtime-row", [
+      statusChip(context.status),
+      el("div", "workflow-runtime-copy", [
+        el("p", "", cursorLabel || context.id),
+        el(
+          "span",
+          "detail-meta",
+          `${completedTasks}/${taskRuns.length} tasks · ${context.attemptId}` +
+            (pendingSessions.length ? ` · pending ${pendingSessions.join(", ")}` : "")
+        )
+      ])
+    ]),
+    taskRuns.length
+      ? el("div", "workflow-task-list", taskRuns.map(renderWorkflowTaskRun))
+      : el("div", "workflow-task-empty detail-meta", "暂无 task run"),
+    pendingSessions.length
+      ? el("div", "workflow-pending-sessions detail-meta", `Pending sessions: ${pendingSessions.join(", ")}`)
+      : null
+  ]);
+}
+
+function renderWorkflowTaskRun(taskRun) {
+  const title = taskRun.label || taskRun.stepId || taskRun.id;
+  const sessionLabel = taskRun.sessionId ? `session ${taskRun.sessionId}` : "session pending";
+  const meta = [taskRun.id, taskRun.stepId, taskRun.phaseId, sessionLabel].filter(Boolean).join(" · ");
+  const result = taskRun.result || taskRun.error;
+  const subagent = taskRun.subagent;
+  const subagentMeta = formatSubagentMeta(subagent);
+
+  return el("div", "workflow-task-row", [
+    statusChip(taskRun.status),
+    el("div", "workflow-runtime-copy", [
+      el("p", "", title),
+      el("span", "detail-meta", meta),
+      subagentMeta ? el("span", "detail-meta", subagentMeta) : null,
+      result ? el("span", "workflow-task-result", result) : null
+    ])
+  ]);
+}
+
+function renderWorkflowRevisionRow(revision) {
+  return el("div", "workflow-runtime-row", [
+    statusChip(revision.status),
+    el("div", "workflow-runtime-copy", [
+      el("p", "", revision.reason || revision.contract?.title || revision.id),
+      el("span", "detail-meta", revision.rejectionReason
+        ? `${revision.id} · ${revision.rejectionReason}`
+        : revision.id)
+    ])
+  ]);
 }
 
 function buildRunPhases(detail) {
@@ -680,7 +855,7 @@ function codexSessionPhaseAgents(run) {
       description: subagent.threadId
         ? "点击查看这一步的实际运行结果。"
         : "已纳入本次 Codex worker 的 workflow 计划。",
-      meta: subagent.threadTitle ?? "workflow agent",
+      meta: subagent.threadTitle || formatSubagentMeta(subagent.subagent) || "workflow agent",
       threadId: subagent.threadId ?? run.codexSession.threadId,
       threadTitle: subagent.threadTitle ?? run.codexSession.threadTitle,
       threadUrl: subagent.threadUrl ?? run.codexSession.threadUrl,
@@ -703,6 +878,39 @@ function codexSessionPhaseAgents(run) {
       threadUrl: run.codexSession.threadUrl
     }
   ];
+}
+
+function formatSubagentMeta(subagent) {
+  const envMeta = subagent?.env ? formatKeyValueMeta(subagent.env) : "";
+  const contextMeta = subagent?.context ? formatKeyValueMeta(subagent.context) : "";
+  return subagent
+    ? [
+        subagent.ref,
+        subagent.role,
+        subagent.model,
+        subagent.tools?.length ? `tools ${subagent.tools.join(", ")}` : null,
+        subagent.workdir ? `cwd ${subagent.workdir}` : null,
+        envMeta ? `env ${envMeta}` : null,
+        subagent.permissions?.filesystem ? `fs ${subagent.permissions.filesystem}` : null,
+        subagent.permissions?.network ? `net ${subagent.permissions.network}` : null,
+        subagent.timeoutMs ? `timeout ${subagent.timeoutMs}ms` : null,
+        contextMeta ? `ctx ${contextMeta}` : null
+      ].filter(Boolean).join(" · ")
+    : "";
+}
+
+function formatKeyValueMeta(value) {
+  return Object.entries(value)
+    .map(([key, entry]) => `${key}=${formatMetaValue(entry)}`)
+    .join(", ");
+}
+
+function formatMetaValue(value) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value === null) return "null";
+  return JSON.stringify(value);
 }
 
 function timelineSectionPhase(section, fallbackStatus) {
@@ -1075,337 +1283,6 @@ function runsForLoop(loopId, runs) {
   return runs.filter((run) => run.loopId === loopId);
 }
 
-function buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks }) {
-  const latestRun = loopRuns.at(0);
-  const formalContract = (snapshot?.formalContracts ?? []).find((contract) => contract.id === loop.id);
-  const workflowFiles = formalContract ? formalLoopDirectoryFiles({ contract: formalContract, snapshot, loopRuns }) : [];
-  return [
-    {
-      path: "flow.js",
-      language: "javascript",
-      meta: "JS",
-      content: formalContract ? formalWorkflowFlowFile(formalContract) : legacyLoopFlowNoticeFile(loop)
-    },
-    {
-      path: "memory.md",
-      language: "markdown",
-      meta: "MD",
-      content: [
-        `# ${loop.title}`,
-        "",
-        loop.intent,
-        "",
-        "## Runtime",
-        `- 状态：${statusText(loop.status)}`,
-        `- 运行次数：${loopRuns.length}`,
-        `- 最近 run：${latestRun ? formatDate.format(new Date(latestRun.createdAt)) : "暂无"}`,
-        "",
-        "## Codex session policy",
-        "- Loop 触发时创建新的真实 Codex worker session。",
-        "- DittosLoop 只生成 launchRequest，不在预览页里伪造 session。",
-        "- Codex App 宿主负责 create_thread，并把 threadId/threadUrl 写回 run。",
-        "- 新 session 的输入作为 user prompt 注入，提醒 agent 读取 loop 目标、历史和验证点。",
-        "- session 执行结果在 Codex 原生会话里查看；DittosLoop 记录 run、attempt、verification 和链接。"
-      ].join("\n")
-    },
-    ...workflowFiles,
-    {
-      path: "contract.json",
-      language: "json",
-      meta: "JSON",
-      content: JSON.stringify({
-        id: loop.id,
-        title: loop.title,
-        intent: loop.intent,
-        status: loop.status,
-        trigger: "manual",
-        verificationChecks: checks
-      }, null, 2)
-    },
-    {
-      path: "session.json",
-      language: "json",
-      meta: "JSON",
-      content: JSON.stringify({
-        launch: "host-mediated-new-codex-session",
-        projectBinding: {
-          mode: "select-codex-project",
-          default: "current-workspace"
-        },
-        execution: {
-          host: "codex-app",
-          worker: "new-codex-session"
-        },
-        launchRequest: latestRun?.codexSession
-          ? {
-              runId: latestRun.id,
-              loopId: latestRun.loopId,
-              title: `DittosLoop: ${loop.title}`,
-              prompt: latestRun.codexSession.prompt
-            }
-          : null,
-        hostWriteback: {
-          required: true,
-          api: latestRun ? `/api/runs/${latestRun.id}/codex-thread` : "/api/runs/{runId}/codex-thread",
-          mcpTool: "record_codex_thread",
-          fields: ["threadId", "threadTitle", "threadUrl"]
-        },
-        userPromptInjection: {
-          timing: ["session-start", "context-compaction"],
-          source: ["loopable.md", "loop memory", "latest user confirmation"]
-        }
-      }, null, 2)
-    }
-  ];
-}
-
-function legacyLoopFlowNoticeFile(loop) {
-  return [
-    `export const loop = ${JSON.stringify(loop.title)};`,
-    "",
-    "// 这个旧版 loop 没有正式 workflow contract。",
-    "// 它只保留历史记录，不伪装成可执行 workflow。",
-    "export const workflow = null;"
-  ].join("\n");
-}
-
-function formalWorkflowFlowFile(contract) {
-  const lines = [
-    `export const loop = ${JSON.stringify(contract.title)};`,
-    `export const workflowContractId = ${JSON.stringify(contract.id)};`,
-    `export const goal = ${JSON.stringify(contract.goal)};`,
-    `export const rubrics = ${JSON.stringify(contract.verification?.rubrics ?? [], null, 2)};`,
-    "",
-    "export async function run(context) {",
-    "  const results = [];",
-    ...workflowStepLines(contract.body?.steps ?? [], "  "),
-    "  const verification = await verifyRubrics(context, results);",
-    "  return { results, verification };",
-    "}",
-    "",
-    "async function runPhase(context, label, body) {",
-    "  await context.dittosloop.phaseStarted(label);",
-    "  const result = await body();",
-    "  await context.dittosloop.phaseCompleted(label);",
-    "  return result;",
-    "}",
-    "",
-    "async function runParallel(context, label, tasks) {",
-    "  await context.dittosloop.parallelStarted(label);",
-    "  return Promise.all(tasks.map((task) => task()));",
-    "}",
-    "",
-    "async function runAgent(context, results, step) {",
-    "  const result = await context.codexSession.runAgent(step);",
-    "  results.push({ stepId: step.id, label: step.label, result });",
-    "  await context.dittosloop.agentCompleted(step.id, result);",
-    "  return result;",
-    "}",
-    "",
-    "async function verifyRubrics(context, results) {",
-    "  return context.verifier.check({ results, rubrics });",
-    "}"
-  ];
-  return lines.join("\n");
-}
-
-function workflowStepLines(steps, indent) {
-  return steps.flatMap((step) => workflowStepLine(step, indent));
-}
-
-function workflowStepLine(step, indent) {
-  if (step.kind === "phase") {
-    return [
-      `${indent}await runPhase(context, ${JSON.stringify(step.label)}, async () => {`,
-      ...workflowStepLines(step.children ?? [], `${indent}  `),
-      `${indent}});`
-    ];
-  }
-
-  if (step.kind === "parallel") {
-    return [
-      `${indent}await runParallel(context, ${JSON.stringify(step.label)}, [`,
-      ...(step.children ?? []).flatMap((child) => [
-        `${indent}  async () => {`,
-        ...workflowStepLine(child, `${indent}    `),
-        `${indent}  },`
-      ]),
-      `${indent}]);`
-    ];
-  }
-
-  return [
-    `${indent}await runAgent(context, results, ${JSON.stringify({
-      id: step.id,
-      label: step.label,
-      prompt: step.prompt ?? "",
-      inputs: step.inputs ?? []
-    }, null, 2).replaceAll("\n", `\n${indent}`)});`
-  ];
-}
-
-function formalLoopDirectoryFiles({ contract, snapshot, loopRuns }) {
-  const agentSteps = flattenContractSteps(contract.body?.steps ?? []).filter((step) => step.kind === "agent");
-  const latestRun = loopRuns.at(0);
-  const latestAttempt = latestRun
-    ? [...(snapshot?.attempts ?? [])].reverse().find((attempt) => attempt.runId === latestRun.id)
-    : null;
-  const latestVerification = latestRun
-    ? [...(snapshot?.verificationResults ?? [])].reverse().find((result) => result.runId === latestRun.id)
-    : null;
-  const engineEvents = latestRun ? engineEventsForRun(snapshot, latestRun.id) : [];
-  const agentStatuses = agentStatusByStepId(engineEvents);
-  const rubricStatuses = rubricStatusByLabel(latestVerification);
-  return [
-    {
-      path: "workflow.json",
-      language: "json",
-      meta: "JSON",
-      content: JSON.stringify({
-        id: contract.id,
-        title: contract.title,
-        goal: contract.goal,
-        status: contract.status,
-        latestRunStatus: latestRun?.status ?? null,
-        latestAttemptStatus: latestAttempt?.status ?? null,
-        latestVerificationStatus: latestVerification?.status ?? null,
-        body: contract.body,
-        repairPolicy: contract.repairPolicy,
-        stopPolicy: contract.stopPolicy,
-        projectBinding: contract.projectBinding
-      }, null, 2)
-    },
-    {
-      path: "agents.md",
-      language: "markdown",
-      meta: "MD",
-      content: [
-        `# ${contract.title} agents`,
-        "",
-        ...agentSteps.flatMap((step, index) => [
-          `## ${index + 1}. ${step.label}`,
-          "",
-          `- id: \`${step.id}\``,
-          `- kind: \`${step.kind}\``,
-          `- status: ${statusText(agentStatuses.get(step.id) ?? "not-run")}`,
-          "",
-          step.prompt,
-          ""
-        ])
-      ].join("\n")
-    },
-    {
-      path: "rubrics.md",
-      language: "markdown",
-      meta: "MD",
-      content: [
-        `# ${contract.title} verifier`,
-        "",
-        `Mode: \`${contract.verification?.mode ?? "after_workflow"}\``,
-        "",
-        ...(contract.verification?.rubrics ?? []).flatMap((rubric) => [
-          `## ${rubric.label}`,
-          "",
-          `- id: \`${rubric.id}\``,
-          `- severity: \`${rubric.severity}\``,
-          `- status: ${statusText(rubricStatuses.get(rubric.label) ?? "not-run")}`,
-          `- requirement: ${rubric.requirement}`,
-          rubricStatuses.get(`${rubric.label}:output`) ? `- evidence: ${rubricStatuses.get(`${rubric.label}:output`)}` : "",
-          ""
-        ].filter(Boolean))
-      ].join("\n")
-    },
-    {
-      path: "runs.json",
-      language: "json",
-      meta: "JSON",
-      content: JSON.stringify({
-        latestRun: latestRun
-          ? {
-              id: latestRun.id,
-              status: latestRun.status,
-              goal: latestRun.goal,
-              createdAt: latestRun.createdAt,
-              completedAt: latestRun.completedAt
-            }
-          : null,
-        latestAttempt: latestAttempt
-          ? {
-              id: latestAttempt.id,
-              status: latestAttempt.status,
-              summary: latestAttempt.summary,
-              startedAt: latestAttempt.startedAt,
-              completedAt: latestAttempt.completedAt
-            }
-          : null,
-        latestVerification: latestVerification
-          ? {
-              id: latestVerification.id,
-              status: latestVerification.status,
-              summary: latestVerification.summary,
-              checks: latestVerification.checks ?? [],
-              createdAt: latestVerification.createdAt
-            }
-          : null,
-        runs: loopRuns.map((run) => ({
-          id: run.id,
-          status: run.status,
-          goal: run.goal,
-          createdAt: run.createdAt,
-          completedAt: run.completedAt
-        }))
-      }, null, 2)
-    }
-  ];
-}
-
-function engineEventsForRun(snapshot, runId) {
-  return (snapshot?.events ?? [])
-    .filter((event) => event.runId === runId)
-    .map((event) => event.data?.engineEvent)
-    .filter(Boolean)
-    .sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0));
-}
-
-function agentStatusByStepId(engineEvents) {
-  const statuses = new Map();
-  for (const event of engineEvents) {
-    if (!event.stepId) continue;
-    if (event.type === "agent_started") {
-      statuses.set(event.stepId, "running");
-    }
-    if (event.type === "agent_done") {
-      statuses.set(event.stepId, "completed");
-    }
-    if (event.type === "agent_failed") {
-      statuses.set(event.stepId, "failed");
-    }
-  }
-  return statuses;
-}
-
-function rubricStatusByLabel(verification) {
-  const statuses = new Map();
-  for (const check of verification?.checks ?? []) {
-    statuses.set(check.name, check.status);
-    if (check.output) {
-      statuses.set(`${check.name}:output`, check.output);
-    }
-  }
-  return statuses;
-}
-
-function flattenContractSteps(steps) {
-  const result = [];
-  for (const step of steps) {
-    result.push(step);
-    if (Array.isArray(step.children)) {
-      result.push(...flattenContractSteps(step.children));
-    }
-  }
-  return result;
-}
-
 function readRouteState() {
   const hash = window.location.hash.replace(/^#/, "");
   if (!hash) return { tab: "history" };
@@ -1447,11 +1324,15 @@ function statusText(status) {
     failed: "失败",
     passed: "通过",
     repairing: "修复中",
+    ready: "就绪",
+    suspended: "等待会话",
+    executing: "执行中",
     requested: "待创建",
     started: "已创建",
     unavailable: "不可用",
     draft: "候选",
     promoted: "已采用",
+    superseded: "已替代",
     rejected: "已拒绝",
     skipped: "跳过",
     "not-run": "未运行",

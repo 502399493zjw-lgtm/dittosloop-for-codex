@@ -9,6 +9,7 @@ import { afterEach, expect, test } from "vitest";
 import { startPreviewServer, type PreviewServer } from "../src/previewServer.js";
 import { LoopService, type LoopServiceOptions } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
+import type { CodexSessionBridge, CodexSessionRef, CodexSessionRequest } from "../src/codex/sessionBridge.js";
 
 const tempDirs: string[] = [];
 const servers: PreviewServer[] = [];
@@ -19,7 +20,9 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function createService(options: Partial<Pick<LoopServiceOptions, "codexProjects">> = {}) {
+async function createService(
+  options: Partial<Pick<LoopServiceOptions, "codexProjects" | "createId" | "sessionBridge">> = {}
+) {
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-preview-"));
   tempDirs.push(dir);
 
@@ -30,6 +33,38 @@ async function createService(options: Partial<Pick<LoopServiceOptions, "codexPro
     previewBaseUrl: "http://127.0.0.1:0",
     ...options
   });
+}
+
+function createPendingSessionBridge() {
+  const requests: CodexSessionRequest[] = [];
+  const bridge: CodexSessionBridge = {
+    async createSession(request) {
+      requests.push(request);
+      return {
+        sessionId: `session_${requests.length}`,
+        runId: request.runId,
+        attemptId: request.attemptId,
+        workflowContextId: request.workflowContextId,
+        stepId: request.stepId,
+        phaseId: request.phaseId,
+        title: request.title,
+        status: "requested",
+        createdAt: "2026-06-23T00:00:00.000Z",
+        prompt: request.prompt,
+        subagent: request.subagent,
+        workflowRuntime: request.workflowRuntime,
+        workflowContractId: request.workflowContractId,
+        workflowPlan: request.workflowPlan
+      } satisfies CodexSessionRef;
+    },
+    async sendMessage() {},
+    async recordResult() {},
+    async readResult() {
+      return undefined;
+    }
+  };
+
+  return { bridge, requests };
 }
 
 async function createFormalLoop(
@@ -94,21 +129,17 @@ test("preview script includes a real Live Loop directory view", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
   expect(app).toContain("renderLoopDirectory");
+  expect(app).toContain("loadLoopFiles");
   expect(app).toContain("activeLoopTab = \"directory\"");
   expect(app).toContain("readRouteState");
   expect(app).toContain("directory-file-list");
-  expect(app).toContain("flow.js");
-  expect(app).toContain("memory.md");
-  expect(app).toContain("contract.json");
-  expect(app).toContain("session.json");
-  expect(app).toContain("formalWorkflowFlowFile");
+  expect(app).toContain("/api/loops/");
+  expect(app).toContain("/files");
+  expect(app).not.toContain("function buildLoopDirectoryFiles");
+  expect(app).not.toContain("function formalLoopDirectoryFiles");
+  expect(app).not.toContain("formalWorkflowFlowFile");
   expect(app).not.toContain("compatibilityFlowFile");
   expect(app).not.toContain("context.codexApp.createThread(launch.launchRequest)");
-  expect(app).toContain("workflowContractId");
-  expect(app).toContain("runPhase");
-  expect(app).toContain("runParallel");
-  expect(app).toContain("runAgent");
-  expect(app).toContain("verifyRubrics");
 });
 
 test("preview script renders run detail as phase rail and agent cards", async () => {
@@ -131,12 +162,23 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("session?.threadUrl");
   expect(app).toContain("timelineSectionStatus");
   expect(app).toContain("工作流阶段");
-  expect(app).not.toContain("workflowRevisions ?? []).map");
-  expect(app).not.toContain("workflow-revisions");
-  expect(app).not.toContain("修订草稿");
-  expect(app).not.toContain("Workflow attempt");
-  expect(app).not.toContain("Workflow draft");
-  expect(app).not.toContain("工作流草稿");
+  expect(app).toContain("renderWorkflowRuntimePanel");
+  expect(app).toContain("detail.workflowContexts ?? []");
+  expect(app).toContain("detail.workflowRevisions ?? []");
+  expect(app).toContain("workflow-revisions");
+  expect(app).toContain("Workflow attempt");
+  expect(app).toContain("工作流草稿");
+  expect(app).toContain("renderWorkflowTaskRun");
+  expect(app).toContain("context.pendingSessionIds ?? []");
+  expect(app).toContain("workflow-task-row");
+  expect(app).toContain("workflow-pending-sessions");
+  expect(app).toContain("subagent.tools?.length");
+  expect(app).toContain("subagent.permissions?.filesystem");
+  expect(app).toContain("subagent.workdir");
+  expect(app).toContain("subagent.env");
+  expect(app).toContain("subagent.timeoutMs");
+  expect(app).toContain("subagent.context");
+  expect(app).toContain("superseded: \"已替代\"");
   expect(app).not.toContain("阶段暂无 agent 明细");
 });
 
@@ -194,8 +236,6 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("workspace-closed");
   expect(app).toContain("/codex-session");
   expect(app).toContain("/api/new-loop-session");
-  expect(app).toContain("/codex-thread");
-  expect(app).toContain("record_codex_thread");
   expect(app).toContain("已复制成功，请打开 Codex 新会话粘贴构建。");
   expect(app).toContain("创建 Codex 会话请求");
   expect(app).toContain("sessionActionForRun");
@@ -295,6 +335,41 @@ test("serves the loop snapshot api", async () => {
   });
 });
 
+test("serves backend-rendered loop directory files api", async () => {
+  const service = await createService();
+  const contract = await service.createLoopContract({
+    title: "AI 开发工具日报",
+    goal: "生成 AI 开发工具中文日报",
+    body: {
+      steps: [{ id: "write-report", kind: "agent", label: "日报 worker", prompt: "生成中文日报。" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "daily-report", label: "中文日报", requirement: "输出中文日报。", severity: "must" }]
+    }
+  });
+  const { run } = await service.startCodexSessionRun(contract.id, { goal: "生成今天的中文日报" });
+  await service.commitMemory(contract.id, { runId: run.id, summary: "保留昨天的来源筛选规则。" });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/loops/${contract.id}/files`);
+  const files = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(files).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ path: "flow.js", kind: "flow", language: "javascript" }),
+      expect.objectContaining({ path: "memory.md", kind: "memory", language: "markdown" }),
+      expect.objectContaining({ path: "contract.json", kind: "contract", language: "json" })
+    ])
+  );
+  expect(files.find((file: { path: string }) => file.path === "memory.md").content).toContain("保留昨天的来源筛选规则。");
+  const sessionFile = files.find((file: { path: string }) => file.path === "session.json");
+  expect(sessionFile.content).toContain(`/api/runs/${run.id}/codex-thread`);
+  expect(sessionFile.content).toContain("record_codex_thread");
+});
+
 test("creates a host-mediated new loop codex session request", async () => {
   const service = await createService();
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
@@ -320,7 +395,7 @@ test("creates a host-mediated new loop codex session request", async () => {
   expect(launch.prompt).toContain("create_loop_contract");
   expect(launch.prompt).toContain("workflow steps");
   expect(launch.prompt).toContain("verifier rubrics");
-  expect(launch.prompt).toContain("agent / phase / parallel");
+  expect(launch.prompt).toContain("task(runtime: \"codex\") / phase / parallel");
   expect(launch.prompt).not.toContain("agent / sequence / parallel");
 });
 
@@ -330,7 +405,7 @@ test("deletes a loop from the preview api", async () => {
     title: "Daily code health check",
     goal: "Keep the project healthy"
   });
-  const run = await service.startLoopRun(loop.id, { goal: "Run checks" });
+  const { run } = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
   const attempt = await service.startAttempt(run.id, { summary: "First pass" });
   await service.recordVerification(run.id, { attemptId: attempt.id, status: "passed", summary: "Tests passed" });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
@@ -352,8 +427,34 @@ test("deletes a loop from the preview api", async () => {
 test("serves composed run detail api", async () => {
   const service = await createService();
   const loop = await createFormalLoop(service);
-  const run = await service.startLoopRun(loop.id, { goal: "Run checks" });
-  const attempt = await service.startAttempt(run.id, { summary: "First pass" });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+  const { run, attempt } = launch;
+  await service.proposeWorkflowRevision(loop.id, {
+    runId: run.id,
+    attemptId: attempt.id,
+    reason: "Add source scan",
+    contract: {
+      title: "Code health",
+      goal: "Keep checks visible",
+      body: {
+        steps: [
+          { id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." },
+          { id: "scan-source", kind: "agent", label: "Scan source", prompt: "Check source links." }
+        ]
+      },
+      verification: {
+        mode: "after_workflow",
+        rubrics: [
+          {
+            id: "done",
+            label: "Done",
+            requirement: "The workflow result satisfies the loop goal.",
+            severity: "must"
+          }
+        ]
+      }
+    }
+  });
   await service.recordVerification(run.id, { attemptId: attempt.id, status: "passed", summary: "Tests passed" });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
   servers.push(server);
@@ -365,7 +466,117 @@ test("serves composed run detail api", async () => {
   expect(detail).toMatchObject({
     run: { id: run.id },
     attempts: [{ id: attempt.id }],
-    verificationResults: [{ attemptId: attempt.id }]
+    verificationResults: [{ attemptId: attempt.id }],
+    workflowContexts: [{ runId: run.id, status: "ready" }],
+    workflowRevisions: [{ runId: run.id, status: "draft", reason: "Add source scan" }]
+  });
+});
+
+test("serves workflow runtime detail for suspended tasks and promoted revisions", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const counters = new Map<string, number>();
+  const service = await createService({
+    sessionBridge: bridge,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    }
+  });
+  const contract = await service.createLoopContract({
+    title: "Preview runtime",
+    goal: "Show runtime state",
+    body: {
+      steps: [
+        {
+          id: "collect",
+          kind: "task",
+          runtime: "codex",
+          label: "Collect",
+          prompt: "Collect facts.",
+          subagent: {
+            ref: "researcher",
+            tools: ["rg"],
+            permissions: { filesystem: "workspace-write", network: "enabled" }
+          }
+        },
+        { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write summary." }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Runtime is visible", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(contract.id, { goal: "Preview suspended runtime" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  const draft = await service.proposeWorkflowRevision(contract.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    reason: "Add review step.",
+    patch: {
+      body: {
+        steps: [
+          { id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Collect facts." },
+          { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write summary." },
+          { id: "review", kind: "task", runtime: "codex", label: "Review", prompt: "Review summary." }
+        ]
+      }
+    }
+  });
+  await service.promoteWorkflowRevision(contract.id, draft.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/${launch.run.id}`);
+  const detail = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(requests.map((request) => request.stepId)).toEqual(["collect"]);
+  expect(detail).toMatchObject({
+    workflowContexts: [
+      {
+        id: launch.launchRequest.workflowContextId,
+        status: "suspended",
+        cursor: { state: "waiting_for_session", stepId: "collect", sessionId: "session_1" },
+        pendingSessionIds: ["session_1"],
+        taskRuns: [
+          {
+            id: "task_1",
+            stepId: "collect",
+            sessionId: "session_1",
+            status: "suspended",
+            subagent: {
+              ref: "researcher",
+              tools: ["rg"],
+              permissions: { filesystem: "workspace-write", network: "enabled" }
+            }
+          }
+        ]
+      }
+    ],
+    workflowRevisions: [
+      {
+        id: draft.id,
+        status: "promoted",
+        reason: "Add review step."
+      }
+    ],
+    engineEvents: [
+      expect.objectContaining({ type: "run_started" }),
+      expect.objectContaining({ type: "agent_started", stepId: "collect" })
+    ],
+    timeline: [
+      expect.objectContaining({
+        id: "workflow",
+        items: expect.arrayContaining([
+          expect.objectContaining({ kind: "agent", label: "Collect", status: "started", stepId: "collect" })
+        ])
+      })
+    ]
   });
 });
 
@@ -380,7 +591,18 @@ test("serves engine events and grouped runtime timeline in run detail api", asyn
       rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
     }
   });
-  const run = await service.startLoopRun(contract.id, { goal: "Manual check" });
+  const { run } = await service.startCodexSessionRun(contract.id, { goal: "Manual check" });
+  await service.appendEvent(run.id, {
+    message: "run_started",
+    data: {
+      engineEvent: {
+        type: "run_started",
+        runId: run.id,
+        sequence: 1,
+        createdAt: "2026-06-23T00:00:00.000Z"
+      }
+    }
+  });
   await service.appendEvent(run.id, {
     message: "Agent started",
     data: {
@@ -454,8 +676,14 @@ test("serves formal engine event sections without invented verification records"
       rubrics: [{ id: "complete", label: "Complete", requirement: "Produce complete output", severity: "must" }]
     }
   });
-  const run = await service.startLoopRun(contract.id, { goal: "Manual formal run" });
+  const { run } = await service.startCodexSessionRun(contract.id, { goal: "Manual formal run" });
   const events = [
+    {
+      type: "run_started",
+      runId: run.id,
+      sequence: 1,
+      createdAt: "2026-06-23T00:00:00.000Z"
+    },
     {
       type: "phase_started",
       runId: run.id,

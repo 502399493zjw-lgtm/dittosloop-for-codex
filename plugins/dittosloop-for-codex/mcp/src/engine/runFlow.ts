@@ -31,6 +31,19 @@ export async function runFlow<T>(
       };
     },
     async agent(prompt, opts) {
+      const cachedOutput = opts?.stepId ? deps.completedStepOutputs?.[opts.stepId] : undefined;
+      if (cachedOutput !== undefined) {
+        emit({
+          type: "agent_done",
+          label: opts?.label,
+          stepId: opts?.stepId,
+          phaseId: opts?.phaseId,
+          result: cachedOutput,
+          status: "ok"
+        });
+        return cachedOutput;
+      }
+
       emit({ type: "agent_started", label: opts?.label, stepId: opts?.stepId, phaseId: opts?.phaseId, prompt });
       try {
         const result = await deps.executor.run({
@@ -38,6 +51,7 @@ export async function runFlow<T>(
           label: opts?.label,
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
+          subagent: opts?.subagent,
           workflowRuntime: deps.workflow?.runtime,
           workflowContractId: deps.workflow?.contractId,
           workflowPlan: deps.workflow

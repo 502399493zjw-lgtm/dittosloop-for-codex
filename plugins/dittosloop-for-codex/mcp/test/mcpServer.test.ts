@@ -36,6 +36,7 @@ async function createHandlers() {
         status: "requested",
         createdAt: "2026-06-23T00:00:00.000Z",
         prompt: request.prompt,
+        subagent: request.subagent,
         workflowRuntime: request.workflowRuntime,
         workflowContractId: request.workflowContractId,
         workflowPlan: request.workflowPlan,
@@ -63,7 +64,12 @@ async function createHandlers() {
     sessionBridge
   });
 
-  return createToolHandlers(service);
+  const handlers = createToolHandlers(service);
+  Object.defineProperty(handlers, "__sessionRequests", {
+    value: sessionRequests,
+    enumerable: false
+  });
+  return handlers as ReturnType<typeof createToolHandlers> & { __sessionRequests: CodexSessionRequest[] };
 }
 
 test("exposes loop operations as MCP content", async () => {
@@ -99,7 +105,7 @@ test("exposes loop operations as MCP content", async () => {
   ]));
 });
 
-test("exposes formal contract and engine run operations as MCP content", async () => {
+test("exposes formal contract and session-first workflow operations as MCP content", async () => {
   const handlers = await createHandlers();
 
   const contract = readResult(await handlers.create_loop_contract({
@@ -115,7 +121,13 @@ test("exposes formal contract and engine run operations as MCP content", async (
     repairPolicy: { maxAttempts: 3, strategy: "ask_human" },
     stopPolicy: { rule: "Stop after a verified daily report", maxConsecutiveFailures: 2 }
   }));
-  const run = readResult(await handlers.start_loop_run({ loopId: contract.id, goal: "Manual check" }));
+  expect(handlers.start_loop_run).toBeUndefined();
+  expect(handlers.resume_loop_run).toBeUndefined();
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  const run = readResult(await handlers.execute_workflow_attempt({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  }));
   const detail = readResult(await handlers.get_run_detail({ runId: run.id }));
 
   expect(contract).toMatchObject({
@@ -140,10 +152,18 @@ test("exposes formal contract and engine run operations as MCP content", async (
       }
     }
   });
+  expect(detail.workflowContexts).toMatchObject([
+    {
+      runId: "run_1",
+      attemptId: "attempt_1",
+      status: "suspended",
+      cursor: { state: "waiting_for_session", stepId: "scan", sessionId: "session_1" }
+    }
+  ]);
   expect(detail.events).toEqual(expect.arrayContaining([
     expect.objectContaining({
       kind: "attempt_started",
-      message: "工作流执行第 1 次"
+      message: "Request a new Codex session for AI monitor"
     }),
     expect.objectContaining({
       data: expect.objectContaining({
@@ -162,6 +182,359 @@ test("exposes formal contract and engine run operations as MCP content", async (
       })
     })
   ]));
+});
+
+test("rejects unsupported session reuse policies at the MCP schema boundary", async () => {
+  const handlers = await createHandlers();
+
+  await expect(
+    handlers.create_loop_contract({
+      title: "Reuse policy workflow",
+      goal: "Reject unsupported session reuse",
+      body: {
+        steps: [
+          {
+            id: "scan",
+            kind: "task",
+            runtime: "codex",
+            label: "Scan",
+            prompt: "Scan updates",
+            sessionPolicy: "reuse-run"
+          }
+        ]
+      },
+      verification: {
+        mode: "after_workflow",
+        rubrics: [{ id: "done", label: "Done", requirement: "Task finishes", severity: "must" }]
+      }
+    })
+  ).rejects.toThrow();
+});
+
+test("exposes workflow execution and precise session result writeback as MCP content", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "AI monitor",
+    goal: "Track AI tool updates",
+    body: {
+      steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  const run = readResult(await handlers.execute_workflow_attempt({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  }));
+
+  expect(run).toMatchObject({
+    id: launch.run.id,
+    status: "running",
+    codexSession: {
+      status: "requested",
+      subagents: [{ role: "Scan", status: "requested" }]
+    }
+  });
+
+  const completed = readResult(await handlers.record_session_result({
+    runId: launch.run.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "scan",
+    idempotencyKey: "session_1:final",
+    status: "passed",
+    summary: "Worker result passed verification",
+    result: "Daily report body"
+  }));
+
+  expect(completed).toMatchObject({
+    id: launch.run.id,
+    status: "completed"
+  });
+  const snapshot = readResult(await handlers.get_snapshot({}));
+  expect(snapshot.workflowContexts).toMatchObject([
+    {
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
+      status: "completed",
+      taskRuns: [{ stepId: "scan", sessionId: "session_1", status: "completed" }]
+    }
+  ]);
+});
+
+test("does not relaunch existing pending workflow sessions through the MCP handler", async () => {
+  const handlers = await createHandlers();
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "AI monitor",
+    goal: "Track AI tool updates",
+    body: {
+      steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  await handlers.execute_workflow_attempt({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+  const before = readResult(await handlers.get_snapshot({})).workflowContexts;
+
+  await handlers.execute_workflow_attempt({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+
+  expect(readResult(await handlers.get_snapshot({})).workflowContexts).toEqual(before);
+});
+
+test("passes codex task subagent tools through the MCP workflow execution path", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Tool allowlist workflow",
+    goal: "Run a task with explicit Codex subagent tools",
+    body: {
+      steps: [
+        {
+          id: "scan",
+          kind: "task",
+          runtime: "codex",
+          label: "Scan",
+          prompt: "Scan the workspace",
+          subagent: {
+            ref: "code-searcher",
+            role: "Code searcher",
+            model: "gpt-5.4-mini",
+            tools: ["rg", "sed"],
+            permissions: { filesystem: "workspace-write", network: "disabled" }
+          }
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Task finishes", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Run scan" }));
+
+  expect(launch.run.codexSession.subagents).toMatchObject([
+    {
+      stepId: "scan",
+      subagent: {
+        ref: "code-searcher",
+        role: "Code searcher",
+        model: "gpt-5.4-mini",
+        tools: ["rg", "sed"],
+        permissions: { filesystem: "workspace-write", network: "disabled" }
+      }
+    }
+  ]);
+
+  await handlers.execute_workflow_attempt({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+
+  expect(handlers.__sessionRequests).toMatchObject([
+    {
+      stepId: "scan",
+      subagent: {
+        ref: "code-searcher",
+        role: "Code searcher",
+        model: "gpt-5.4-mini",
+        tools: ["rg", "sed"],
+        permissions: { filesystem: "workspace-write", network: "disabled" }
+      }
+    }
+  ]);
+  expect(readResult(await handlers.get_snapshot({})).workflowContexts).toMatchObject([
+    {
+      taskRuns: [
+        {
+          stepId: "scan",
+          status: "suspended",
+          subagent: {
+            tools: ["rg", "sed"],
+            permissions: { filesystem: "workspace-write", network: "disabled" }
+          }
+        }
+      ]
+    }
+  ]);
+});
+
+test("accepts taskRunId-only precise session result writeback through MCP", async () => {
+  const handlers = await createHandlers();
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "AI monitor",
+    goal: "Track AI tool updates",
+    body: {
+      steps: [
+        { id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" },
+        { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write report" }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  await handlers.execute_workflow_attempt({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+
+  const running = readResult(await handlers.record_session_result({
+    runId: launch.run.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    taskRunId: "task_1",
+    idempotencyKey: "task_1:final",
+    status: "passed",
+    summary: "Scan complete.",
+    result: "Scan notes"
+  }));
+
+  expect(running).toMatchObject({
+    status: "running",
+    codexSession: {
+      subagents: [
+        { stepId: "scan", sessionId: "session_1", status: "completed" },
+        { stepId: "write", sessionId: "session_2", status: "requested" }
+      ]
+    }
+  });
+  expect(running.codexSession.subagents.some((subagent: any) => subagent.role === "loop-runner")).toBe(false);
+  expect(readResult(await handlers.get_snapshot({})).workflowContexts).toMatchObject([
+    {
+      status: "suspended",
+      pendingSessionIds: ["session_2"],
+      taskRuns: [
+        { id: "task_1", stepId: "scan", sessionId: "session_1", status: "completed" },
+        { id: "task_2", stepId: "write", sessionId: "session_2", status: "suspended" }
+      ]
+    }
+  ]);
+});
+
+test("exposes workflow revision proposal, promotion, listing, and rejection as MCP content", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "AI monitor",
+    goal: "Track AI tool updates",
+    body: {
+      steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  const draft = readResult(await handlers.propose_workflow_revision({
+    loopId: contract.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    reason: "Need synthesis after scanning.",
+    contract: {
+      title: "AI monitor",
+      goal: "Track AI tool updates",
+      body: {
+        steps: [
+          { id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" },
+          { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write a sourced report" }
+        ]
+      },
+      verification: {
+        mode: "after_workflow",
+        rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+      }
+    }
+  }));
+
+  expect(draft).toMatchObject({
+    id: "revision_1",
+    loopId: contract.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    status: "draft",
+    reason: "Need synthesis after scanning.",
+    contract: {
+      id: contract.id,
+      body: { steps: [{ id: "scan" }, { id: "write" }] }
+    }
+  });
+  expect(readResult(await handlers.list_workflow_revisions({ loopId: contract.id }))).toHaveLength(1);
+
+  await expect(
+    handlers.promote_workflow_revision({
+      loopId: contract.id,
+      revisionId: draft.id
+    })
+  ).rejects.toThrow(/runId|attemptId|Required/);
+
+  const promoted = readResult(await handlers.promote_workflow_revision({
+    loopId: contract.id,
+    revisionId: draft.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  }));
+  expect(promoted).toMatchObject({ id: draft.id, status: "promoted", promotedAt: "2026-06-23T00:00:00.000Z" });
+  await expect(
+    handlers.reject_workflow_revision({
+      loopId: contract.id,
+      revisionId: draft.id,
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
+      reason: "Promoted revisions cannot be rejected."
+    })
+  ).rejects.toThrow(/Only draft workflow revisions can be rejected/);
+  const snapshotAfterPromote = readResult(await handlers.get_snapshot({}));
+  expect(snapshotAfterPromote.formalContracts[0].body.steps).toMatchObject([{ id: "scan" }, { id: "write" }]);
+
+  const secondDraft = readResult(await handlers.propose_workflow_revision({
+    loopId: contract.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    reason: "Try a longer report shape.",
+    contract: {
+      title: "AI monitor",
+      goal: "Track AI tool updates",
+      body: {
+        steps: [
+          { id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" },
+          { id: "outline", kind: "task", runtime: "codex", label: "Outline", prompt: "Outline a report" },
+          { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write a sourced report" }
+        ]
+      },
+      verification: {
+        mode: "after_workflow",
+        rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+      }
+    }
+  }));
+  const rejected = readResult(await handlers.reject_workflow_revision({
+    loopId: contract.id,
+    revisionId: secondDraft.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    reason: "Superseded by another local edit."
+  }));
+  expect(rejected).toMatchObject({
+    id: secondDraft.id,
+    status: "rejected",
+    rejectionReason: "Superseded by another local edit."
+  });
 });
 
 test("exposes attempt and run detail operations as MCP content", async () => {
@@ -317,7 +690,7 @@ test("exposes codex session result writeback as MCP content", async () => {
   });
 });
 
-test("exposes codex session open and resume operations as MCP content", async () => {
+test("exposes codex session open operation as MCP content", async () => {
   const handlers = await createHandlers();
   const loop = readResult(await handlers.create_loop_contract({
     title: "AI Dev Tools Daily",
@@ -343,41 +716,22 @@ test("exposes codex session open and resume operations as MCP content", async ()
   });
 
   const opened = readResult(await handlers.open_codex_session({ runId: launch.run.id }));
-  const resumed = readResult(await handlers.resume_loop_run({ runId: launch.run.id, goal: "Repair the report" }));
 
   expect(opened).toMatchObject({
     status: "ready",
     threadId: "019ef91e-0f19-74d5-b14c-bac2f257d269",
     threadUrl: "codex://thread/019ef91e-0f19-74d5-b14c-bac2f257d269"
   });
-  expect(resumed).toMatchObject({
-    run: {
-      id: launch.run.id,
-      status: "running",
-      goal: "Repair the report",
-      codexProjectId: "project-1",
-      projectLabel: "dittos loop"
-    },
-    attempt: {
-      runId: launch.run.id,
-      status: "running"
-    },
-    launchRequest: {
-      runId: launch.run.id,
-      loopId: loop.id,
-      workflowRuntime: "dittosloop-local-workflow",
-      workflowContractId: loop.id,
-      codexProjectId: "project-1",
-      projectLabel: "dittos loop"
-    }
-  });
+  expect(handlers.resume_loop_run).toBeUndefined();
 });
 
 test("registers the DittosLoop tool surface", () => {
   const registeredTools: string[] = [];
+  const toolMetadata: Record<string, { title: string; description: string }> = {};
   const fakeServer = {
-    registerTool(name: string) {
+    registerTool(name: string, metadata: { title: string; description: string }) {
       registeredTools.push(name);
+      toolMetadata[name] = metadata;
     }
   };
 
@@ -386,11 +740,14 @@ test("registers the DittosLoop tool surface", () => {
   expect(registeredTools).toEqual([
     "create_loop_contract",
     "list_loops",
-    "start_loop_run",
     "start_codex_session",
+    "execute_workflow_attempt",
+    "propose_workflow_revision",
+    "list_workflow_revisions",
+    "promote_workflow_revision",
+    "reject_workflow_revision",
     "record_codex_thread",
     "record_session_result",
-    "resume_loop_run",
     "open_codex_session",
     "start_attempt",
     "complete_attempt",
@@ -406,6 +763,8 @@ test("registers the DittosLoop tool surface", () => {
     "get_snapshot",
     "get_preview_url"
   ]);
+  expect(toolMetadata.record_session_result.description).toContain("resume");
+  expect(toolMetadata.record_session_result.description).not.toContain("close or pause");
 });
 
 function readResult(result: { content: Array<{ type: "text"; text: string }> }) {
