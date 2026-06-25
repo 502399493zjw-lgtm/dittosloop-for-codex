@@ -20,6 +20,8 @@ export interface CodexWorkflowLaunchPlan {
   verification: unknown;
   repairPolicy: unknown;
   stopPolicy: unknown;
+  budgetUsd?: number;
+  escalation?: string[];
 }
 
 export interface CodexSessionRequest {

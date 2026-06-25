@@ -31,6 +31,7 @@ const eventKindSchema = z.enum([
 
 const verificationStatusSchema = z.enum(["passed", "failed", "skipped"]);
 const pausedReasonSchema = z.enum(["failures", "budget", "escalation"]);
+const immediatePausedReasonSchema = z.enum(["budget", "escalation"]);
 
 const subagentSchema = z.object({
   ref: z.string().min(1).optional(),
@@ -200,7 +201,7 @@ const recordSessionResultSchema = z.object({
   stepId: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1).optional(),
   status: z.enum(["passed", "failed", "needs_human"]),
-  pausedReason: pausedReasonSchema.optional(),
+  pausedReason: immediatePausedReasonSchema.optional(),
   summary: z.string().min(1),
   result: z.string().optional(),
   checks: z.array(z.object({
@@ -276,7 +277,7 @@ const addArtifactSchema = z.object({
 const completeRunSchema = z.object({
   runId: z.string().min(1),
   status: z.enum(["completed", "failed"]).optional(),
-  pausedReason: pausedReasonSchema.optional()
+  pausedReason: immediatePausedReasonSchema.optional()
 });
 
 const markRunRepairingSchema = z.object({

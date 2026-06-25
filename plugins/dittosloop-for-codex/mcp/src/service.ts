@@ -168,6 +168,8 @@ export interface RecordCodexThreadInput {
   threadUrl?: string;
 }
 
+type ImmediatePausedReason = Extract<LoopPausedReason, "budget" | "escalation">;
+
 export interface RecordSessionResultInput {
   workflowContextId?: string;
   attemptId?: string;
@@ -176,7 +178,7 @@ export interface RecordSessionResultInput {
   stepId?: string;
   idempotencyKey?: string;
   status: "passed" | "failed" | "needs_human";
-  pausedReason?: LoopPausedReason;
+  pausedReason?: ImmediatePausedReason;
   summary: string;
   result?: string;
   checks?: VerificationResult["checks"];
@@ -229,7 +231,7 @@ export interface AddArtifactInput {
 
 export interface CompleteRunInput {
   status?: Extract<RunStatus, "completed" | "failed">;
-  pausedReason?: LoopPausedReason;
+  pausedReason?: ImmediatePausedReason;
 }
 
 export interface PauseLoopInput {
@@ -908,6 +910,9 @@ export class LoopService {
 
   async recordSessionResult(runId: string, input: RecordSessionResultInput): Promise<LoopRun> {
     const timestamp = this.now();
+    if ((input.pausedReason as LoopPausedReason | undefined) === "failures") {
+      throw new Error("Failure pauses are derived from stopPolicy");
+    }
     if (input.pausedReason && input.status !== "failed") {
       throw new Error("pausedReason can only be recorded for failed session results");
     }
@@ -1520,6 +1525,9 @@ export class LoopService {
   async completeRun(runId: string, input: CompleteRunInput = {}): Promise<LoopRun> {
     const timestamp = this.now();
     const status = input.status ?? "completed";
+    if ((input.pausedReason as LoopPausedReason | undefined) === "failures") {
+      throw new Error("Failure pauses are derived from stopPolicy");
+    }
     if (input.pausedReason && status !== "failed") {
       throw new Error("pausedReason can only be recorded for failed runs");
     }
@@ -3549,7 +3557,7 @@ function buildCodexSessionPrompt(
         `workflowContextId: ${callbacks.workflowContextId}`,
         "- 在本会话内先调用 execute_workflow_attempt({ runId, attemptId })，让本地 workflow engine 按 active contract 调度步骤。",
         "- Codex task/session 完成后，用 record_session_result({ runId, workflowContextId, attemptId, taskRunId/sessionId/stepId, idempotencyKey, status, pausedReason, summary, result }) 精确回写结果。",
-        "- 只有预算耗尽、升级边界或失败阈值这类停止原因才填写 pausedReason；普通通过或等待用户不要填写。",
+        "- 只有预算耗尽或升级边界才填写 pausedReason；连续失败阈值由 runtime 按 stopPolicy 自动计算。",
         "- 多个 locator 同时出现时必须指向同一个 task run；不确定时先读取 run detail，不要猜。",
         "- workflow 需要动态调整时，只能通过 propose_workflow_revision 提交候选，再用 list_workflow_revisions / promote_workflow_revision / reject_workflow_revision 管理修订。"
       ].join("\n")

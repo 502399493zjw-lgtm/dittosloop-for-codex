@@ -692,6 +692,31 @@ test("pauses canonical loop immediately when a Codex session reports a budget st
   });
 });
 
+test("rejects external failure stop reasons so stopPolicy owns failure pausing", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Failure threshold owner",
+    goal: "Let stopPolicy decide failure pauses",
+    stopPolicy: { rule: "pause after two failed sessions", maxConsecutiveFailures: 2 },
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Fail once" });
+
+  await expect(
+    service.recordSessionResult(launch.run.id, {
+      status: "failed",
+      summary: "Session failed once.",
+      pausedReason: "failures" as never
+    })
+  ).rejects.toThrow(/Failure pauses are derived from stopPolicy/);
+});
+
 test("pauses canonical loop for escalation without counting it as a normal failure", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await service.createLoopContract({

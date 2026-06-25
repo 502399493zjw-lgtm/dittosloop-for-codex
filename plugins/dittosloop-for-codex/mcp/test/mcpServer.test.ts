@@ -278,6 +278,99 @@ test("preserves budget and escalation stop metadata through MCP session result w
   });
 });
 
+test("rejects failure pausedReason at the MCP session result boundary", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Failure threshold owner",
+    goal: "Let stopPolicy decide failure pauses",
+    stopPolicy: { rule: "pause after two failures", maxConsecutiveFailures: 2 },
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+
+  await expect(handlers.record_session_result({
+    runId: launch.run.id,
+    status: "failed",
+    summary: "Session failed once.",
+    pausedReason: "failures"
+  })).rejects.toThrow();
+});
+
+test("preserves budget stop metadata through the MCP complete_run writeback", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Budgeted completion",
+    goal: "Pause when the manual run exceeds its budget",
+    budgetUsd: 0.5,
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+
+  const failed = readResult(await handlers.complete_run({
+    runId: launch.run.id,
+    status: "failed",
+    pausedReason: "budget"
+  }));
+  const snapshot = readResult(await handlers.get_snapshot({}));
+
+  expect(failed).toMatchObject({
+    id: launch.run.id,
+    status: "failed",
+    pausedReason: "budget"
+  });
+  expect(snapshot).toMatchObject({
+    loops: [{ id: contract.id, status: "paused" }],
+    loopStates: [
+      {
+        loopId: contract.id,
+        consecutiveFailures: 1,
+        paused: true,
+        pausedReason: "budget",
+        running: false,
+        runCount: 1
+      }
+    ]
+  });
+});
+
+test("rejects failure pausedReason at the MCP complete_run boundary", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Manual failure threshold owner",
+    goal: "Let stopPolicy decide manual failure pauses",
+    stopPolicy: { rule: "pause after two failures", maxConsecutiveFailures: 2 },
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+
+  await expect(handlers.complete_run({
+    runId: launch.run.id,
+    status: "failed",
+    pausedReason: "failures"
+  })).rejects.toThrow();
+});
+
 test("rejects unsupported session reuse policies at the MCP schema boundary", async () => {
   const handlers = await createHandlers();
 

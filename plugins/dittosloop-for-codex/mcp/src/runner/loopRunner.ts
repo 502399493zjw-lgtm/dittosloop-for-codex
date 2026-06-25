@@ -117,7 +117,9 @@ function buildWorkflowExecutionPlan(contract: FormalLoopContract): WorkflowExecu
     steps: flattenWorkflowSteps(contract.body.steps),
     verification: contract.verification,
     repairPolicy: contract.repairPolicy,
-    stopPolicy: contract.stopPolicy
+    stopPolicy: contract.stopPolicy,
+    budgetUsd: contract.budgetUsd,
+    escalation: contract.escalation
   };
 }
 

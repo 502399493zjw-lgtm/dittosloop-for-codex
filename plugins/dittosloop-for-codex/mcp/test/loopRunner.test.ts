@@ -154,6 +154,8 @@ describe("LoopRunner", () => {
     });
     const workflowContract: FormalLoopContract = {
       ...contract,
+      budgetUsd: 0.5,
+      escalation: ["production deploy"],
       body: {
         steps: [
           {
@@ -193,7 +195,9 @@ describe("LoopRunner", () => {
           ],
           verification: workflowContract.verification,
           repairPolicy: workflowContract.repairPolicy,
-          stopPolicy: workflowContract.stopPolicy
+          stopPolicy: workflowContract.stopPolicy,
+          budgetUsd: 0.5,
+          escalation: ["production deploy"]
         }
       }
     ]);

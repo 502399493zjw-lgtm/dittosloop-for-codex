@@ -33,6 +33,8 @@ export interface WorkflowExecutionPlan {
   verification: unknown;
   repairPolicy: unknown;
   stopPolicy: unknown;
+  budgetUsd?: number;
+  escalation?: string[];
 }
 
 export interface AgentResult {
