@@ -78,6 +78,7 @@ export interface LoopRun {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  pausedReason?: LoopPausedReason;
 }
 
 export interface LoopOperationalState {

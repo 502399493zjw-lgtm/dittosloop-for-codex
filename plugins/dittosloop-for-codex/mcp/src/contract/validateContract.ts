@@ -47,6 +47,18 @@ export function validateContract(contract: FormalLoopContract): void {
 
   required(contract.stopPolicy.rule, "stopPolicy.rule", errors);
 
+  if (contract.budgetUsd !== undefined && (!Number.isFinite(contract.budgetUsd) || contract.budgetUsd <= 0 || contract.budgetUsd > 20)) {
+    errors.push("budgetUsd must be a positive number no greater than 20");
+  }
+
+  if (contract.escalation !== undefined) {
+    if (!Array.isArray(contract.escalation)) {
+      errors.push("escalation must be an array");
+    } else if (contract.escalation.some((boundary) => !boundary || boundary.trim().length === 0)) {
+      errors.push("escalation must contain non-empty strings");
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(`Loop contract is invalid: ${errors.join("; ")}`);
   }

@@ -61,7 +61,7 @@ export function loopRunRecordStatus(status: LoopRun["status"]): LoopRunRecordSta
 export function consecutiveFailures(loopRuns: LoopRun[]): number {
   let count = 0;
   for (let index = loopRuns.length - 1; index >= 0; index -= 1) {
-    if (loopRuns[index].status !== "failed") {
+    if (loopRuns[index].status !== "failed" || loopRuns[index].pausedReason === "escalation") {
       break;
     }
     count += 1;

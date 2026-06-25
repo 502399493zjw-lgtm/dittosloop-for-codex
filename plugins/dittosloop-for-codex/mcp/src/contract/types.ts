@@ -103,6 +103,8 @@ export interface FormalLoopContract {
   verification: VerificationPolicy;
   repairPolicy: RepairPolicy;
   stopPolicy: StopPolicy;
+  budgetUsd?: number;
+  escalation?: string[];
   projectBinding?: CodexProjectBinding;
   memoryPolicy?: MemoryPolicy;
   status: LoopStatus;

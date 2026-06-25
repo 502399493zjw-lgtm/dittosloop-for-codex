@@ -146,6 +146,8 @@ export interface WorkflowLaunchPlan {
   verification: FormalLoopContract["verification"];
   repairPolicy: FormalLoopContract["repairPolicy"];
   stopPolicy: FormalLoopContract["stopPolicy"];
+  budgetUsd?: FormalLoopContract["budgetUsd"];
+  escalation?: FormalLoopContract["escalation"];
 }
 
 export interface NewLoopSessionLaunch {
@@ -174,6 +176,7 @@ export interface RecordSessionResultInput {
   stepId?: string;
   idempotencyKey?: string;
   status: "passed" | "failed" | "needs_human";
+  pausedReason?: LoopPausedReason;
   summary: string;
   result?: string;
   checks?: VerificationResult["checks"];
@@ -226,6 +229,7 @@ export interface AddArtifactInput {
 
 export interface CompleteRunInput {
   status?: Extract<RunStatus, "completed" | "failed">;
+  pausedReason?: LoopPausedReason;
 }
 
 export interface PauseLoopInput {
@@ -904,6 +908,9 @@ export class LoopService {
 
   async recordSessionResult(runId: string, input: RecordSessionResultInput): Promise<LoopRun> {
     const timestamp = this.now();
+    if (input.pausedReason && input.status !== "failed") {
+      throw new Error("pausedReason can only be recorded for failed session results");
+    }
     let updatedRun: LoopRun | undefined;
     let shouldContinueWorkflow = false;
     let continuationAttemptId: string | undefined;
@@ -1083,7 +1090,8 @@ export class LoopService {
         status: runStatus,
         codexSession,
         updatedAt: timestamp,
-        ...(runStatus === "completed" || runStatus === "failed" ? { completedAt: timestamp } : {})
+        ...(runStatus === "completed" || runStatus === "failed" ? { completedAt: timestamp } : {}),
+        ...(resultInput.pausedReason ? { pausedReason: resultInput.pausedReason } : {})
       };
 
       const attempts = targetAttempt
@@ -1206,12 +1214,20 @@ export class LoopService {
       };
 
       const terminalState = runStatus === "completed" || runStatus === "failed"
-        ? applyTerminalRunState(nextState, run.loopId)
+        ? applyTerminalRunState(
+            nextState,
+            run.loopId,
+            terminalRunStateOverridesForPausedReason(state, run.loopId, resultInput.pausedReason)
+          )
         : nextState;
 
-      return runStatus === "failed"
-        ? applyFailureStopPolicy(terminalState, run.loopId, timestamp)
-        : terminalState;
+      if (runStatus !== "failed") {
+        return terminalState;
+      }
+
+      return resultInput.pausedReason
+        ? applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp)
+        : applyFailureStopPolicy(terminalState, run.loopId, timestamp);
     });
 
     if (shouldContinueWorkflow && continuationAttemptId) {
@@ -1504,6 +1520,9 @@ export class LoopService {
   async completeRun(runId: string, input: CompleteRunInput = {}): Promise<LoopRun> {
     const timestamp = this.now();
     const status = input.status ?? "completed";
+    if (input.pausedReason && status !== "failed") {
+      throw new Error("pausedReason can only be recorded for failed runs");
+    }
     let completedRun: LoopRun | undefined;
 
     await this.options.store.updateState((state) => {
@@ -1532,7 +1551,8 @@ export class LoopService {
           status,
           ...(codexSession ? { codexSession } : {}),
           updatedAt: timestamp,
-          completedAt: timestamp
+          completedAt: timestamp,
+          ...(input.pausedReason ? { pausedReason: input.pausedReason } : {})
         };
 
         return completedRun;
@@ -1542,11 +1562,21 @@ export class LoopService {
         ...state,
         runs
       };
-      const terminalState = completedRun ? applyTerminalRunState(nextState, completedRun.loopId) : nextState;
+      const terminalState = completedRun
+        ? applyTerminalRunState(
+            nextState,
+            completedRun.loopId,
+            terminalRunStateOverridesForPausedReason(state, completedRun.loopId, input.pausedReason)
+          )
+        : nextState;
 
-      return status === "failed" && completedRun
-        ? applyFailureStopPolicy(terminalState, completedRun.loopId, timestamp)
-        : terminalState;
+      if (status !== "failed" || !completedRun) {
+        return terminalState;
+      }
+
+      return input.pausedReason
+        ? applyImmediateStopPolicy(terminalState, completedRun.loopId, input.pausedReason, timestamp)
+        : applyFailureStopPolicy(terminalState, completedRun.loopId, timestamp);
     });
 
     return completedRun!;
@@ -2474,6 +2504,8 @@ function applyContractPatch(
     verification: patch.verification ?? baseContract.verification,
     repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
     stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+    budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+    escalation: patch.escalation ?? baseContract.escalation,
     projectBinding: patch.projectBinding ?? baseContract.projectBinding,
     memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
     trigger: patch.trigger ?? baseContract.trigger,
@@ -3147,21 +3179,36 @@ function appendLoopMemory(memories: LoopMemory[], loopId: string, line: string, 
   return memories.map((memory) => (memory.loopId === loopId ? updated : memory));
 }
 
-function applyTerminalRunState(state: LoopState, loopId: string): LoopState {
+function applyTerminalRunState(
+  state: LoopState,
+  loopId: string,
+  overrides: { consecutiveFailures?: number } = {}
+): LoopState {
   return {
     ...state,
     loopStates: upsertLoopOperationalState(
       state.loopStates,
       buildLoopOperationalState(state, loopId, {
-        consecutiveFailures: consecutiveFailuresAfterLatestTerminalRun(state, loopId)
+        consecutiveFailures: overrides.consecutiveFailures ?? consecutiveFailuresAfterLatestTerminalRun(state, loopId)
       })
     )
   };
 }
 
+function terminalRunStateOverridesForPausedReason(
+  state: LoopState,
+  loopId: string,
+  pausedReason?: LoopPausedReason
+): { consecutiveFailures?: number } {
+  if (pausedReason !== "escalation") {
+    return {};
+  }
+
+  return { consecutiveFailures: existingConsecutiveFailures(state, loopId) };
+}
+
 function applyFailureStopPolicy(state: LoopState, loopId: string, timestamp: string): LoopState {
-  const failures = state.loopStates.find((candidate) => candidate.loopId === loopId)?.consecutiveFailures
-    ?? consecutiveFailuresForLoop(state.runs, loopId);
+  const failures = existingConsecutiveFailures(state, loopId);
   const threshold = failureThresholdForLoop(state, loopId);
   if (failures < threshold) {
     return state;
@@ -3169,6 +3216,7 @@ function applyFailureStopPolicy(state: LoopState, loopId: string, timestamp: str
 
   return {
     ...state,
+    runs: markLatestFailedRunPausedReason(state.runs, loopId, "failures"),
     loops: state.loops.map((loop) =>
       loop.id === loopId
         ? { ...loop, status: "paused", updatedAt: timestamp }
@@ -3181,7 +3229,35 @@ function applyFailureStopPolicy(state: LoopState, loopId: string, timestamp: str
     ),
     loopStates: upsertLoopOperationalState(
       state.loopStates,
-      pausedFailureState(state, loopId, failures)
+      pausedStopState(state, loopId, "failures", failures)
+    )
+  };
+}
+
+function applyImmediateStopPolicy(
+  state: LoopState,
+  loopId: string,
+  reason: LoopPausedReason,
+  timestamp: string
+): LoopState {
+  const failures = existingConsecutiveFailures(state, loopId);
+
+  return {
+    ...state,
+    runs: markLatestFailedRunPausedReason(state.runs, loopId, reason),
+    loops: state.loops.map((loop) =>
+      loop.id === loopId
+        ? { ...loop, status: "paused", updatedAt: timestamp }
+        : loop
+    ),
+    formalContracts: state.formalContracts.map((contract) =>
+      contract.id === loopId
+        ? { ...contract, status: "paused", updatedAt: timestamp }
+        : contract
+    ),
+    loopStates: upsertLoopOperationalState(
+      state.loopStates,
+      pausedStopState(state, loopId, reason, failures)
     )
   };
 }
@@ -3195,13 +3271,23 @@ function failureThresholdForLoop(state: LoopState, loopId: string): number {
   return 3;
 }
 
-function pausedFailureState(state: LoopState, loopId: string, failures: number): LoopOperationalState {
+function pausedStopState(
+  state: LoopState,
+  loopId: string,
+  reason: LoopPausedReason,
+  failures: number
+): LoopOperationalState {
   return buildLoopOperationalState(state, loopId, {
     consecutiveFailures: failures,
     paused: true,
-    pausedReason: "failures",
+    pausedReason: reason,
     clearPausedReason: false
   });
+}
+
+function existingConsecutiveFailures(state: LoopState, loopId: string): number {
+  return state.loopStates.find((candidate) => candidate.loopId === loopId)?.consecutiveFailures
+    ?? consecutiveFailuresForLoop(state.runs, loopId);
 }
 
 function upsertLoopOperationalState(states: LoopOperationalState[], next: LoopOperationalState): LoopOperationalState[] {
@@ -3273,13 +3359,30 @@ function consecutiveFailuresForLoop(runs: LoopRun[], loopId: string): number {
 
   let failures = 0;
   for (let index = loopRuns.length - 1; index >= 0; index -= 1) {
-    if (loopRuns[index].status !== "failed") {
+    if (loopRuns[index].status !== "failed" || loopRuns[index].pausedReason === "escalation") {
       break;
     }
     failures += 1;
   }
 
   return failures;
+}
+
+function markLatestFailedRunPausedReason(
+  runs: LoopRun[],
+  loopId: string,
+  reason: LoopPausedReason
+): LoopRun[] {
+  const latestFailedRun = terminalRunsForLoop(runs, loopId).at(-1);
+  if (!latestFailedRun || latestFailedRun.status !== "failed") {
+    return runs;
+  }
+
+  return runs.map((run) =>
+    run.id === latestFailedRun.id
+      ? { ...run, pausedReason: run.pausedReason ?? reason }
+      : run
+  );
 }
 
 function runsForLoopChronological(runs: LoopRun[], loopId: string): LoopRun[] {
@@ -3398,7 +3501,7 @@ function buildNewLoopSessionPrompt(project: Pick<LoopRun, "codexProjectId" | "pr
     "- title / goal / intent",
     "- body.steps：优先用 task(runtime: \"codex\") / phase / parallel 组织实际工作流；agent 仅作为旧 contract 兼容 spelling",
     "- verification.rubrics：用于检查 candidate result",
-    "- repairPolicy 和 stopPolicy",
+    "- repairPolicy、stopPolicy、budgetUsd、escalation",
     "- projectBinding：绑定所选 Codex 项目",
     "",
     "完成后请用中文简短返回：loop id、项目名、workflow tasks、verifier rubrics、repair/stop 策略，以及下一步是否要立即启动一次 run。"
@@ -3424,6 +3527,9 @@ function buildCodexSessionPrompt(
         "- 如果验证失败且允许修复，请生成 candidate workflow draft，并通过 runtime 重试。",
         "- 不要覆盖当前 active workflow contract；workflow 改动只能作为候选修订，等待明确采纳。",
         `- Repair policy: ${contract.repairPolicy.strategy}，最多尝试 ${contract.repairPolicy.maxAttempts} 次。`,
+        `- Stop policy: ${contract.stopPolicy.rule}`,
+        contract.budgetUsd !== undefined ? `- Budget: 每轮最多 ${contract.budgetUsd} USD；触发时用 pausedReason=budget 回写。` : "",
+        contract.escalation?.length ? `- Escalation boundaries: ${contract.escalation.join("；")}；触发时用 pausedReason=escalation 回写。` : "",
         "",
         "Workflow steps / 工作流步骤：",
         formatWorkflowSteps(contract),
@@ -3442,7 +3548,8 @@ function buildCodexSessionPrompt(
         `attemptId: ${callbacks.attemptId}`,
         `workflowContextId: ${callbacks.workflowContextId}`,
         "- 在本会话内先调用 execute_workflow_attempt({ runId, attemptId })，让本地 workflow engine 按 active contract 调度步骤。",
-        "- Codex task/session 完成后，用 record_session_result({ runId, workflowContextId, attemptId, taskRunId/sessionId/stepId, idempotencyKey, status, summary, result }) 精确回写结果。",
+        "- Codex task/session 完成后，用 record_session_result({ runId, workflowContextId, attemptId, taskRunId/sessionId/stepId, idempotencyKey, status, pausedReason, summary, result }) 精确回写结果。",
+        "- 只有预算耗尽、升级边界或失败阈值这类停止原因才填写 pausedReason；普通通过或等待用户不要填写。",
         "- 多个 locator 同时出现时必须指向同一个 task run；不确定时先读取 run detail，不要猜。",
         "- workflow 需要动态调整时，只能通过 propose_workflow_revision 提交候选，再用 list_workflow_revisions / promote_workflow_revision / reject_workflow_revision 管理修订。"
       ].join("\n")
@@ -3482,7 +3589,9 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
       steps: flattenWorkflowLaunchSteps(contract.body.steps),
       verification: contract.verification,
       repairPolicy: contract.repairPolicy,
-      stopPolicy: contract.stopPolicy
+      stopPolicy: contract.stopPolicy,
+      budgetUsd: contract.budgetUsd,
+      escalation: contract.escalation
     }
   };
 }

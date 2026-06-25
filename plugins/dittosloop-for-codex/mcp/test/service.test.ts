@@ -632,6 +632,112 @@ test("pauses canonical loop after failed Codex session result reaches threshold"
   await expect(service.startCodexSessionRun(formal.id, { goal: "Retry while paused" })).rejects.toThrow(/Loop is paused/);
 });
 
+test("pauses canonical loop immediately when a Codex session reports a budget stop", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Budgeted monitor",
+    goal: "Respect a per-run budget",
+    budgetUsd: 0.5,
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run with budget cap" });
+
+  const failedRun = await service.recordSessionResult(launch.run.id, {
+    status: "failed",
+    summary: "Per-run budget cap exceeded.",
+    pausedReason: "budget"
+  });
+
+  expect(formal.budgetUsd).toBe(0.5);
+  expect(failedRun).toMatchObject({
+    id: launch.run.id,
+    status: "failed",
+    pausedReason: "budget"
+  });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [{ id: formal.id, status: "paused" }],
+    formalContracts: [{ id: formal.id, status: "paused", budgetUsd: 0.5 }],
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 1,
+        paused: true,
+        pausedReason: "budget",
+        running: false,
+        runCount: 1
+      }
+    ],
+    runs: [{ id: launch.run.id, pausedReason: "budget" }]
+  });
+  await expect(service.startCodexSessionRun(formal.id, { goal: "Retry while budget paused" })).rejects.toThrow(/Loop is paused/);
+
+  const files = await service.listLoopFiles(formal.id);
+  expect(JSON.parse(files.find((file) => file.path === "status.json")!.content)).toMatchObject({
+    loopId: formal.id,
+    consecutiveFailures: 1,
+    paused: true,
+    pausedReason: "budget",
+    running: false
+  });
+  expect(JSON.parse(files.find((file) => file.path === `runs/${launch.run.id}/status.json`)!.content)).toMatchObject({
+    id: launch.run.id,
+    status: "failed",
+    pausedReason: "budget"
+  });
+});
+
+test("pauses canonical loop for escalation without counting it as a normal failure", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Escalation monitor",
+    goal: "Stop before crossing approval boundaries",
+    escalation: ["production deploy"],
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Attempt an escalation boundary" });
+
+  const stoppedRun = await service.recordSessionResult(launch.run.id, {
+    status: "failed",
+    summary: "Escalation boundary requested: production deploy.",
+    pausedReason: "escalation"
+  });
+
+  expect(formal.escalation).toEqual(["production deploy"]);
+  expect(stoppedRun).toMatchObject({
+    id: launch.run.id,
+    status: "failed",
+    pausedReason: "escalation"
+  });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [{ id: formal.id, status: "paused" }],
+    formalContracts: [{ id: formal.id, status: "paused", escalation: ["production deploy"] }],
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 0,
+        paused: true,
+        pausedReason: "escalation",
+        running: false,
+        runCount: 1
+      }
+    ],
+    runs: [{ id: launch.run.id, pausedReason: "escalation" }]
+  });
+  await expect(service.startCodexSessionRun(formal.id, { goal: "Retry while escalation paused" })).rejects.toThrow(/Loop is paused/);
+});
+
 test("resumes paused canonical loop and clears failure stop state", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await service.createLoopContract({

@@ -30,6 +30,7 @@ const eventKindSchema = z.enum([
 ]);
 
 const verificationStatusSchema = z.enum(["passed", "failed", "skipped"]);
+const pausedReasonSchema = z.enum(["failures", "budget", "escalation"]);
 
 const subagentSchema = z.object({
   ref: z.string().min(1).optional(),
@@ -117,6 +118,8 @@ const createLoopContractSchema = z.object({
     rule: z.string().min(1),
     maxConsecutiveFailures: z.number().int().nonnegative().optional()
   }).optional(),
+  budgetUsd: z.number().positive().max(20).optional(),
+  escalation: z.array(z.string().min(1)).optional(),
   projectBinding: z.object({
     codexProjectId: z.string().optional(),
     projectLabel: z.string().optional(),
@@ -134,7 +137,7 @@ const startCodexSessionSchema = z.object({
 
 const pauseLoopSchema = z.object({
   loopId: z.string().min(1),
-  reason: z.enum(["failures", "budget", "escalation"]).optional()
+  reason: pausedReasonSchema.optional()
 });
 
 const resumeLoopSchema = z.object({
@@ -197,6 +200,7 @@ const recordSessionResultSchema = z.object({
   stepId: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1).optional(),
   status: z.enum(["passed", "failed", "needs_human"]),
+  pausedReason: pausedReasonSchema.optional(),
   summary: z.string().min(1),
   result: z.string().optional(),
   checks: z.array(z.object({
@@ -271,7 +275,8 @@ const addArtifactSchema = z.object({
 
 const completeRunSchema = z.object({
   runId: z.string().min(1),
-  status: z.enum(["completed", "failed"]).optional()
+  status: z.enum(["completed", "failed"]).optional(),
+  pausedReason: pausedReasonSchema.optional()
 });
 
 const markRunRepairingSchema = z.object({
@@ -367,6 +372,7 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
         stepId: args.stepId,
         idempotencyKey: args.idempotencyKey,
         status: args.status,
+        pausedReason: args.pausedReason,
         summary: args.summary,
         result: args.result,
         checks: args.checks,
@@ -419,7 +425,7 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     complete_run: async (input) => {
       const args = completeRunSchema.parse(input);
-      return toToolResult(await service.completeRun(args.runId, { status: args.status }));
+      return toToolResult(await service.completeRun(args.runId, { status: args.status, pausedReason: args.pausedReason }));
     },
     mark_run_repairing: async (input) => {
       const args = markRunRepairingSchema.parse(input);

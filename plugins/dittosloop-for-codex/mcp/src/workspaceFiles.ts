@@ -225,6 +225,8 @@ function formalLoopDirectoryFiles(input: {
           body: input.contract.body,
           repairPolicy: input.contract.repairPolicy,
           stopPolicy: input.contract.stopPolicy,
+          budgetUsd: input.contract.budgetUsd,
+          escalation: input.contract.escalation,
           projectBinding: input.contract.projectBinding
         },
         null,
@@ -301,6 +303,7 @@ function runsIndexFile(input: { state: LoopState; loop: LoopContract; loopRuns: 
     runs: input.loopRuns.map((run, index) => ({
       id: run.id,
       status: loopRunRecordStatus(run.status),
+      pausedReason: run.pausedReason,
       index: index + 1,
       goal: run.goal,
       trigger: {
@@ -326,6 +329,7 @@ function runDirectoryFiles(input: { state: LoopState; run: LoopRun; runIndex: nu
       id: input.run.id,
       loopId: input.run.loopId,
       status: loopRunRecordStatus(input.run.status),
+      pausedReason: input.run.pausedReason,
       index: input.runIndex,
       codexRunStatus: input.run.status,
       trigger: {

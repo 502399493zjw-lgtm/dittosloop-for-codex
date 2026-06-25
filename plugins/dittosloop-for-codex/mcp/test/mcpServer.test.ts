@@ -227,6 +227,57 @@ test("exposes loop-level pause and resume controls", async () => {
   expect(launch.run).toMatchObject({ id: "run_1", loopId: contract.id, status: "running" });
 });
 
+test("preserves budget and escalation stop metadata through MCP session result writeback", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Guarded workflow",
+    goal: "Stop on budget or escalation boundaries",
+    budgetUsd: 0.5,
+    escalation: ["production deploy"],
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+
+  const failed = readResult(await handlers.record_session_result({
+    runId: launch.run.id,
+    status: "failed",
+    summary: "Per-run budget cap exceeded.",
+    pausedReason: "budget"
+  }));
+  const snapshot = readResult(await handlers.get_snapshot({}));
+
+  expect(contract).toMatchObject({
+    budgetUsd: 0.5,
+    escalation: ["production deploy"]
+  });
+  expect(failed).toMatchObject({
+    id: launch.run.id,
+    status: "failed",
+    pausedReason: "budget"
+  });
+  expect(snapshot).toMatchObject({
+    loops: [{ id: contract.id, status: "paused" }],
+    formalContracts: [{ id: contract.id, status: "paused", budgetUsd: 0.5, escalation: ["production deploy"] }],
+    loopStates: [
+      {
+        loopId: contract.id,
+        consecutiveFailures: 1,
+        paused: true,
+        pausedReason: "budget",
+        running: false,
+        runCount: 1
+      }
+    ]
+  });
+});
+
 test("rejects unsupported session reuse policies at the MCP schema boundary", async () => {
   const handlers = await createHandlers();
 
