@@ -184,6 +184,49 @@ test("exposes formal contract and session-first workflow operations as MCP conte
   ]));
 });
 
+test("exposes loop-level pause and resume controls", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Manual loop control",
+    goal: "Pause and resume visible sessions",
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  }));
+
+  const paused = readResult(await handlers.pause_loop({ loopId: contract.id }));
+  expect(paused).toMatchObject({
+    loop: { id: contract.id, status: "paused" },
+    state: {
+      loopId: contract.id,
+      paused: true,
+      consecutiveFailures: 0,
+      running: false
+    }
+  });
+  expect(paused.state.pausedReason).toBeUndefined();
+  await expect(handlers.start_codex_session({ loopId: contract.id, goal: "Blocked while paused" })).rejects.toThrow(/Loop is paused/);
+
+  const resumed = readResult(await handlers.resume_loop({ loopId: contract.id }));
+  expect(resumed).toMatchObject({
+    loop: { id: contract.id, status: "active" },
+    state: {
+      loopId: contract.id,
+      paused: false,
+      consecutiveFailures: 0,
+      running: false
+    }
+  });
+  expect(resumed.state.pausedReason).toBeUndefined();
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Run after resume" }));
+  expect(launch.run).toMatchObject({ id: "run_1", loopId: contract.id, status: "running" });
+});
+
 test("rejects unsupported session reuse policies at the MCP schema boundary", async () => {
   const handlers = await createHandlers();
 
@@ -740,6 +783,8 @@ test("registers the DittosLoop tool surface", () => {
   expect(registeredTools).toEqual([
     "create_loop_contract",
     "list_loops",
+    "pause_loop",
+    "resume_loop",
     "start_codex_session",
     "execute_workflow_attempt",
     "propose_workflow_revision",

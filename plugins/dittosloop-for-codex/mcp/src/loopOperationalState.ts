@@ -20,7 +20,7 @@ export function deriveLoopOperationalState(input: {
   return {
     loopId: input.loop.id,
     cursor: input.existing?.cursor ?? null,
-    consecutiveFailures: consecutiveFailures(terminalRuns),
+    consecutiveFailures: input.existing?.consecutiveFailures ?? consecutiveFailures(terminalRuns),
     paused,
     ...(paused && input.existing?.pausedReason ? { pausedReason: input.existing.pausedReason } : {}),
     running: Boolean(activeRun),

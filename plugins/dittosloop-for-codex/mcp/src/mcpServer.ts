@@ -132,6 +132,15 @@ const startCodexSessionSchema = z.object({
   projectPath: z.string().optional()
 });
 
+const pauseLoopSchema = z.object({
+  loopId: z.string().min(1),
+  reason: z.enum(["failures", "budget", "escalation"]).optional()
+});
+
+const resumeLoopSchema = z.object({
+  loopId: z.string().min(1)
+});
+
 const executeWorkflowAttemptSchema = z.object({
   runId: z.string().min(1),
   attemptId: z.string().min(1).optional()
@@ -283,6 +292,14 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
       return toToolResult(await service.createLoopContract(args));
     },
     list_loops: async () => toToolResult(await service.listLoops()),
+    pause_loop: async (input) => {
+      const args = pauseLoopSchema.parse(input);
+      return toToolResult(await service.pauseLoop(args.loopId, { reason: args.reason }));
+    },
+    resume_loop: async (input) => {
+      const args = resumeLoopSchema.parse(input);
+      return toToolResult(await service.resumeLoop(args.loopId));
+    },
     start_codex_session: async (input) => {
       const args = startCodexSessionSchema.parse(input);
       return toToolResult(await service.startCodexSessionRun(args.loopId, {
@@ -465,6 +482,18 @@ const toolDefinitions = [
     title: "List loops",
     description: "List local Dittos loop contracts.",
     schema: emptySchema
+  },
+  {
+    name: "pause_loop",
+    title: "Pause loop",
+    description: "Pause a local Dittos loop so new visible Codex session runs cannot start.",
+    schema: pauseLoopSchema
+  },
+  {
+    name: "resume_loop",
+    title: "Resume loop",
+    description: "Resume a paused local Dittos loop and clear its consecutive failure stop state.",
+    schema: resumeLoopSchema
   },
   {
     name: "start_codex_session",

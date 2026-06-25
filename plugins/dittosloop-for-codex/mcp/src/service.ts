@@ -14,6 +14,7 @@ import type {
   LoopContract,
   LoopMemory,
   LoopOperationalState,
+  LoopPausedReason,
   LoopRun,
   LoopWorkspaceFile,
   RunAttempt,
@@ -227,6 +228,15 @@ export interface CompleteRunInput {
   status?: Extract<RunStatus, "completed" | "failed">;
 }
 
+export interface PauseLoopInput {
+  reason?: LoopPausedReason;
+}
+
+export interface LoopStatusUpdate {
+  loop: LoopContract;
+  state: LoopOperationalState;
+}
+
 export type Snapshot = LoopState & {
   previewUrl: string;
   codexProjects: CodexProjectRef[];
@@ -277,6 +287,74 @@ export class LoopService {
     const state = await this.options.store.readState();
 
     return state.loops;
+  }
+
+  async pauseLoop(loopId: string, input: PauseLoopInput = {}): Promise<LoopStatusUpdate> {
+    const timestamp = this.now();
+    let update: LoopStatusUpdate | undefined;
+
+    await this.options.store.updateState((state) => {
+      const loop = requireLoop(state, loopId);
+      const nextLoops = state.loops.map((candidate) =>
+        candidate.id === loopId ? { ...candidate, status: "paused" as const, updatedAt: timestamp } : candidate
+      );
+      const nextContracts = state.formalContracts.map((contract) =>
+        contract.id === loopId ? { ...contract, status: "paused" as const, updatedAt: timestamp } : contract
+      );
+      const nextState = {
+        ...state,
+        loops: nextLoops,
+        formalContracts: nextContracts
+      };
+      const operationalState = buildLoopOperationalState(nextState, loopId, {
+        paused: true,
+        pausedReason: input.reason,
+        clearPausedReason: input.reason === undefined
+      });
+      const updatedLoop = nextLoops.find((candidate) => candidate.id === loop.id)!;
+      update = { loop: updatedLoop, state: operationalState };
+
+      return {
+        ...nextState,
+        loopStates: upsertLoopOperationalState(nextState.loopStates, operationalState)
+      };
+    });
+
+    return update!;
+  }
+
+  async resumeLoop(loopId: string): Promise<LoopStatusUpdate> {
+    const timestamp = this.now();
+    let update: LoopStatusUpdate | undefined;
+
+    await this.options.store.updateState((state) => {
+      const loop = requireLoop(state, loopId);
+      const nextLoops = state.loops.map((candidate) =>
+        candidate.id === loopId ? { ...candidate, status: "active" as const, updatedAt: timestamp } : candidate
+      );
+      const nextContracts = state.formalContracts.map((contract) =>
+        contract.id === loopId ? { ...contract, status: "active" as const, updatedAt: timestamp } : contract
+      );
+      const nextState = {
+        ...state,
+        loops: nextLoops,
+        formalContracts: nextContracts
+      };
+      const operationalState = buildLoopOperationalState(nextState, loopId, {
+        paused: false,
+        clearPausedReason: true,
+        consecutiveFailures: 0
+      });
+      const updatedLoop = nextLoops.find((candidate) => candidate.id === loop.id)!;
+      update = { loop: updatedLoop, state: operationalState };
+
+      return {
+        ...nextState,
+        loopStates: upsertLoopOperationalState(nextState.loopStates, operationalState)
+      };
+    });
+
+    return update!;
   }
 
   async deleteLoop(loopId: string): Promise<LoopContract> {
@@ -1127,9 +1205,13 @@ export class LoopService {
         ]
       };
 
-      return runStatus === "failed"
-        ? applyFailureStopPolicy(nextState, run.loopId, timestamp)
+      const terminalState = runStatus === "completed" || runStatus === "failed"
+        ? applyTerminalRunState(nextState, run.loopId)
         : nextState;
+
+      return runStatus === "failed"
+        ? applyFailureStopPolicy(terminalState, run.loopId, timestamp)
+        : terminalState;
     });
 
     if (shouldContinueWorkflow && continuationAttemptId) {
@@ -1460,10 +1542,11 @@ export class LoopService {
         ...state,
         runs
       };
+      const terminalState = completedRun ? applyTerminalRunState(nextState, completedRun.loopId) : nextState;
 
       return status === "failed" && completedRun
-        ? applyFailureStopPolicy(nextState, completedRun.loopId, timestamp)
-        : nextState;
+        ? applyFailureStopPolicy(terminalState, completedRun.loopId, timestamp)
+        : terminalState;
     });
 
     return completedRun!;
@@ -3064,8 +3147,21 @@ function appendLoopMemory(memories: LoopMemory[], loopId: string, line: string, 
   return memories.map((memory) => (memory.loopId === loopId ? updated : memory));
 }
 
+function applyTerminalRunState(state: LoopState, loopId: string): LoopState {
+  return {
+    ...state,
+    loopStates: upsertLoopOperationalState(
+      state.loopStates,
+      buildLoopOperationalState(state, loopId, {
+        consecutiveFailures: consecutiveFailuresAfterLatestTerminalRun(state, loopId)
+      })
+    )
+  };
+}
+
 function applyFailureStopPolicy(state: LoopState, loopId: string, timestamp: string): LoopState {
-  const failures = consecutiveFailuresForLoop(state.runs, loopId);
+  const failures = state.loopStates.find((candidate) => candidate.loopId === loopId)?.consecutiveFailures
+    ?? consecutiveFailuresForLoop(state.runs, loopId);
   const threshold = failureThresholdForLoop(state, loopId);
   if (failures < threshold) {
     return state;
@@ -3100,20 +3196,12 @@ function failureThresholdForLoop(state: LoopState, loopId: string): number {
 }
 
 function pausedFailureState(state: LoopState, loopId: string, failures: number): LoopOperationalState {
-  const existing = state.loopStates.find((candidate) => candidate.loopId === loopId);
-  const terminalRuns = terminalRunsForLoop(state.runs, loopId);
-  const latestTerminalRun = terminalRuns.at(-1);
-
-  return {
-    loopId,
-    cursor: existing?.cursor ?? null,
+  return buildLoopOperationalState(state, loopId, {
     consecutiveFailures: failures,
     paused: true,
     pausedReason: "failures",
-    running: false,
-    runCount: Math.max(existing?.runCount ?? 0, terminalRuns.length),
-    ...(latestTerminalRun ? { lastRunAt: Date.parse(latestTerminalRun.completedAt ?? latestTerminalRun.updatedAt ?? latestTerminalRun.createdAt) } : {})
-  };
+    clearPausedReason: false
+  });
 }
 
 function upsertLoopOperationalState(states: LoopOperationalState[], next: LoopOperationalState): LoopOperationalState[] {
@@ -3121,7 +3209,63 @@ function upsertLoopOperationalState(states: LoopOperationalState[], next: LoopOp
     return [...states, next];
   }
 
-  return states.map((state) => (state.loopId === next.loopId ? { ...state, ...next } : state));
+  return states.map((state) => (state.loopId === next.loopId ? next : state));
+}
+
+function consecutiveFailuresAfterLatestTerminalRun(state: LoopState, loopId: string): number {
+  const existing = state.loopStates.find((candidate) => candidate.loopId === loopId);
+  const latestTerminalRun = terminalRunsForLoop(state.runs, loopId).at(-1);
+  if (!latestTerminalRun) {
+    return existing?.consecutiveFailures ?? 0;
+  }
+  if (latestTerminalRun.status === "completed") {
+    return 0;
+  }
+  if (existing?.activeRunId === latestTerminalRun.id) {
+    return existing.consecutiveFailures + 1;
+  }
+  if (existing) {
+    return existing.consecutiveFailures;
+  }
+
+  return consecutiveFailuresForLoop(state.runs, loopId);
+}
+
+function buildLoopOperationalState(
+  state: LoopState,
+  loopId: string,
+  overrides: {
+    consecutiveFailures?: number;
+    paused?: boolean;
+    pausedReason?: LoopPausedReason;
+    clearPausedReason?: boolean;
+  } = {}
+): LoopOperationalState {
+  const loop = requireLoop(state, loopId);
+  const existing = state.loopStates.find((candidate) => candidate.loopId === loopId);
+  const loopRuns = runsForLoopChronological(state.runs, loopId);
+  const latestRun = loopRuns.at(-1);
+  const activeRun = latestRun && latestRun.status !== "completed" && latestRun.status !== "failed" ? latestRun : undefined;
+  const terminalRuns = terminalRunsForLoop(state.runs, loopId);
+  const latestTerminalRun = terminalRuns.at(-1);
+  const paused = overrides.paused ?? (loop.status === "paused" || existing?.paused === true);
+  const pausedReason = paused
+    ? overrides.clearPausedReason
+      ? undefined
+      : overrides.pausedReason ?? existing?.pausedReason
+    : undefined;
+
+  return {
+    loopId,
+    cursor: existing?.cursor ?? null,
+    consecutiveFailures: overrides.consecutiveFailures ?? existing?.consecutiveFailures ?? consecutiveFailuresForLoop(state.runs, loopId),
+    paused,
+    ...(pausedReason ? { pausedReason } : {}),
+    running: Boolean(activeRun),
+    runCount: Math.max(existing?.runCount ?? 0, terminalRuns.length),
+    ...(latestTerminalRun ? { lastRunAt: Date.parse(latestTerminalRun.completedAt ?? latestTerminalRun.updatedAt ?? latestTerminalRun.createdAt) } : {}),
+    ...(activeRun ? { activeRunId: activeRun.id, activeRunStatus: activeRun.status } : {})
+  };
 }
 
 function consecutiveFailuresForLoop(runs: LoopRun[], loopId: string): number {
@@ -3138,10 +3282,15 @@ function consecutiveFailuresForLoop(runs: LoopRun[], loopId: string): number {
   return failures;
 }
 
-function terminalRunsForLoop(runs: LoopRun[], loopId: string): LoopRun[] {
+function runsForLoopChronological(runs: LoopRun[], loopId: string): LoopRun[] {
   return runs
-    .filter((run) => run.loopId === loopId && (run.status === "completed" || run.status === "failed"))
+    .filter((run) => run.loopId === loopId)
     .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+}
+
+function terminalRunsForLoop(runs: LoopRun[], loopId: string): LoopRun[] {
+  return runsForLoopChronological(runs, loopId)
+    .filter((run) => run.status === "completed" || run.status === "failed");
 }
 
 function updateWorkflowContext(

@@ -632,6 +632,131 @@ test("pauses canonical loop after failed Codex session result reaches threshold"
   await expect(service.startCodexSessionRun(formal.id, { goal: "Retry while paused" })).rejects.toThrow(/Loop is paused/);
 });
 
+test("resumes paused canonical loop and clears failure stop state", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Recoverable monitor",
+    goal: "Resume after failure review",
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    },
+    stopPolicy: { rule: "pause after first failed run", maxConsecutiveFailures: 1 }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Fail once" });
+  await service.completeRun(launch.run.id, { status: "failed" });
+
+  const resumed = await service.resumeLoop(formal.id);
+
+  expect(resumed.loop).toMatchObject({ id: formal.id, status: "active" });
+  expect(resumed.state).toMatchObject({
+    loopId: formal.id,
+    consecutiveFailures: 0,
+    paused: false,
+    running: false,
+    runCount: 1,
+    lastRunAt: Date.parse(fixedTime)
+  });
+  expect(resumed.state.pausedReason).toBeUndefined();
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [{ id: formal.id, status: "active" }],
+    formalContracts: [{ id: formal.id, status: "active" }],
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 0,
+        paused: false,
+        running: false,
+        runCount: 1
+      }
+    ]
+  });
+  const files = await service.listLoopFiles(formal.id);
+  const status = JSON.parse(files.find((file) => file.path === "status.json")!.content);
+  expect(status).toMatchObject({
+    loopId: formal.id,
+    consecutiveFailures: 0,
+    paused: false,
+    running: false
+  });
+  expect(status.pausedReason).toBeUndefined();
+
+  const retry = await service.startCodexSessionRun(formal.id, { goal: "Retry after resume" });
+  expect(retry.run).toMatchObject({ id: "run_2", loopId: formal.id, status: "running" });
+});
+
+test("manual pause blocks new loop runs until resume", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+
+  const paused = await service.pauseLoop(formal.id);
+
+  expect(paused.loop).toMatchObject({ id: formal.id, status: "paused" });
+  expect(paused.state).toMatchObject({
+    loopId: formal.id,
+    consecutiveFailures: 0,
+    paused: true,
+    running: false,
+    runCount: 0
+  });
+  expect(paused.state.pausedReason).toBeUndefined();
+  await expect(service.startCodexSessionRun(formal.id, { goal: "Should not start" })).rejects.toThrow(/Loop is paused/);
+
+  const resumed = await service.resumeLoop(formal.id);
+  expect(resumed.state).toMatchObject({
+    loopId: formal.id,
+    consecutiveFailures: 0,
+    paused: false,
+    running: false,
+    runCount: 0
+  });
+  expect(resumed.state.pausedReason).toBeUndefined();
+  await expect(service.startCodexSessionRun(formal.id, { goal: "Run after resume" })).resolves.toMatchObject({
+    run: { id: "run_1", loopId: formal.id, status: "running" }
+  });
+});
+
+test("resume resets the failure counter for subsequent failed runs", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Resettable monitor",
+    goal: "Retry from a clean failure counter",
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    },
+    stopPolicy: { rule: "pause after two consecutive failed runs", maxConsecutiveFailures: 2 }
+  });
+  const first = await service.startCodexSessionRun(formal.id, { goal: "First failure" });
+  await service.completeRun(first.run.id, { status: "failed" });
+  await service.pauseLoop(formal.id);
+  await service.resumeLoop(formal.id);
+
+  const retry = await service.startCodexSessionRun(formal.id, { goal: "Retry after reset" });
+  await service.completeRun(retry.run.id, { status: "failed" });
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [{ id: formal.id, status: "active" }],
+    formalContracts: [{ id: formal.id, status: "active" }],
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 1,
+        paused: false,
+        running: false,
+        runCount: 2
+      }
+    ]
+  });
+});
+
 test("persists canonical loop operational state across run lifecycle", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await createFormalLoop(service);
