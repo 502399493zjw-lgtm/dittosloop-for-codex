@@ -983,17 +983,20 @@ function renderAgentCard(agent) {
   const card = el("div", `agent-card ${agent.threadUrl ? "has-session" : ""}`, [
     el("div", "agent-card-row", [
       el("span", "agent-avatar", agentInitial(agent)),
-      el("span", "agent-name", agent.name),
-      el("span", "agent-spacer", ""),
-      statusChip(agent.status),
-      agent.showSessionLink === false
-        ? null
-        : agent.threadUrl
-          ? openSessionButton(agent.threadUrl, sessionLabel, "agent-open-session")
-          : el("span", "agent-session-link pending", sessionLabel)
-    ]),
-    agent.description ? el("p", "agent-description", agent.description) : null,
-    agent.meta ? el("span", "agent-meta", agent.meta) : null
+      el("div", "agent-main", [
+        el("span", "agent-name", agent.name),
+        agent.description ? el("p", "agent-description", agent.description) : null,
+        agent.meta ? el("span", "agent-meta", agent.meta) : null
+      ]),
+      el("div", "agent-actions", [
+        statusChip(agent.status),
+        agent.showSessionLink === false
+          ? null
+          : agent.threadUrl
+            ? openSessionButton(agent.threadUrl, sessionLabel, "agent-open-session")
+            : el("span", "agent-session-link pending", sessionLabel)
+      ])
+    ])
   ]);
   if (agent.threadId) {
     card.title = `Codex thread: ${agent.threadId}`;

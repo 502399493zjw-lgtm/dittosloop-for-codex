@@ -143,13 +143,21 @@ test("preview script renders run detail as phase rail and agent cards", async ()
 test("preview renders agent cards with minimal avatars and no diamond marker", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
   const styles = await readFile(join(previewDir, "styles.css"), "utf8");
+  const agentCardRule = styles.match(/\.agent-card \{[\s\S]*?\n\}/)?.[0] ?? "";
 
   expect(app).toContain("agent-avatar");
+  expect(app).toContain("agent-main");
   expect(app).toContain("agentInitial(agent)");
   expect(app).not.toContain("agent-diamond");
   expect(styles).toContain(".agent-avatar");
+  expect(styles).toContain(".agent-main");
   expect(styles).toContain("border: 1.5px solid var(--dittos-700)");
   expect(styles).toContain("background: transparent");
+  expect(styles).toContain(".agent-card:not(:last-child)");
+  expect(styles).toContain("border-bottom: 1px solid var(--hair)");
+  expect(styles).not.toContain("margin: 7px 0 0 41px");
+  expect(agentCardRule).toContain("border: 0");
+  expect(agentCardRule).not.toContain("border-radius");
   expect(styles).not.toContain(".agent-diamond");
   expect(styles).not.toContain("box-shadow: 0 5px 18px rgba(107, 91, 208, 0.08)");
 });

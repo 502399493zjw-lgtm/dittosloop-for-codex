@@ -1103,7 +1103,7 @@ a:focus-visible {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
 }
 
 .phase-group-label {
@@ -1115,16 +1115,19 @@ a:focus-visible {
 .agent-card {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--hair);
-  border-radius: 10px;
-  background: var(--surface);
+  border: 0;
+  background: transparent;
   box-shadow: none;
-  padding: 12px 13px;
+  padding: 14px 0;
   text-align: left;
 }
 
+.agent-card:not(:last-child) {
+  border-bottom: 1px solid var(--hair);
+}
+
 .agent-card:hover {
-  background: var(--surface-soft);
+  background: transparent;
 }
 
 .agent-card.has-session {
@@ -1134,8 +1137,8 @@ a:focus-visible {
 .agent-card-row {
   display: flex;
   min-width: 0;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .agent-avatar {
@@ -1152,6 +1155,15 @@ a:focus-visible {
   font-size: 12px;
   font-weight: 750;
   line-height: 1;
+  margin-top: 1px;
+}
+
+.agent-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 5px;
 }
 
 .agent-name {
@@ -1167,8 +1179,12 @@ a:focus-visible {
   white-space: nowrap;
 }
 
-.agent-spacer {
-  flex: 1;
+.agent-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0;
 }
 
 .agent-session-link {
@@ -1202,7 +1218,7 @@ a:focus-visible {
 }
 
 .agent-description {
-  margin: 7px 0 0 41px;
+  margin: 0;
   overflow: hidden;
   color: var(--ink-3);
   font-size: 12.5px;
@@ -1213,7 +1229,7 @@ a:focus-visible {
 
 .agent-meta {
   display: block;
-  margin: 6px 0 0 41px;
+  margin: 0;
   color: var(--ink-4);
   font-family: var(--font-mono);
   font-size: 10.5px;
