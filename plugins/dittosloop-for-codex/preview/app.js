@@ -983,10 +983,7 @@ function renderAgentCard(agent) {
   const card = el("div", `agent-card ${agent.threadUrl ? "has-session" : ""}`, [
     el("div", "agent-card-row", [
       el("span", "agent-avatar", agent.avatar),
-      el("span", "agent-name", [
-        agent.name,
-        el("span", "agent-diamond", "")
-      ]),
+      el("span", "agent-name", agent.name),
       el("span", "agent-spacer", ""),
       statusChip(agent.status),
       agent.showSessionLink === false

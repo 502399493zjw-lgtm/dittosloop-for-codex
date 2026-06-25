@@ -1115,16 +1115,16 @@ a:focus-visible {
 .agent-card {
   width: 100%;
   min-width: 0;
-  border: 1.5px solid var(--dittos-200);
-  border-radius: 13px;
+  border: 1px solid var(--hair);
+  border-radius: 10px;
   background: var(--surface);
-  box-shadow: 0 5px 18px rgba(107, 91, 208, 0.08);
-  padding: 13px;
+  box-shadow: none;
+  padding: 12px 13px;
   text-align: left;
 }
 
 .agent-card:hover {
-  background: #fdfcff;
+  background: var(--surface-soft);
 }
 
 .agent-card.has-session {
@@ -1139,16 +1139,18 @@ a:focus-visible {
 }
 
 .agent-avatar {
-  display: grid;
-  width: 30px;
-  height: 30px;
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
   flex: 0 0 auto;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--dittos-700);
-  color: var(--surface);
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .agent-name {
@@ -1162,15 +1164,6 @@ a:focus-visible {
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agent-diamond {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 1px;
-  background: var(--dittos-700);
-  transform: rotate(45deg);
 }
 
 .agent-spacer {
