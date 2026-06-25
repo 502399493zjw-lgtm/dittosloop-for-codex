@@ -419,6 +419,50 @@ test("normalizes project fields on formal loop creation into the contract bindin
   });
 });
 
+test("renders loop directory files from stored loop state", async () => {
+  const service = await createService();
+  const formal = await service.createLoopContract({
+    title: "AI 开发工具日报",
+    goal: "生成 AI 开发工具中文日报",
+    body: {
+      steps: [{ id: "write-report", kind: "agent", label: "日报 worker", prompt: "生成中文日报。" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "daily-report", label: "中文日报", requirement: "输出中文日报。", severity: "must" }]
+    }
+  });
+  const { run } = await service.startCodexSessionRun(formal.id, { goal: "生成今天的中文日报" });
+  await service.commitMemory(formal.id, { runId: run.id, summary: "保留昨天的来源筛选规则。" });
+  await service.recordVerification(run.id, {
+    status: "passed",
+    summary: "日报通过验证。",
+    checks: [{ name: "中文日报", status: "passed", output: "包含来源" }]
+  });
+
+  const files = await service.listLoopFiles(formal.id);
+
+  expect(files.map((file) => file.path)).toEqual([
+    "flow.js",
+    "memory.md",
+    "workflow.json",
+    "agents.md",
+    "rubrics.md",
+    "runs.json",
+    "contract.json",
+    "session.json"
+  ]);
+  expect(files.every((file) => file.size === Buffer.byteLength(file.content, "utf8"))).toBe(true);
+  expect(files.find((file) => file.path === "flow.js")).toMatchObject({
+    kind: "flow",
+    language: "javascript",
+    content: expect.stringContaining("workflowContractId")
+  });
+  expect(files.find((file) => file.path === "memory.md")?.content).toContain("保留昨天的来源筛选规则。");
+  expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
+  expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("包含来源");
+});
+
 test("proposes workflow revisions from a visible Codex session without replacing the active contract", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await service.createLoopContract({
