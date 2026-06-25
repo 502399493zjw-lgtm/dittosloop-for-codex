@@ -129,21 +129,17 @@ test("preview script includes a real Live Loop directory view", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
   expect(app).toContain("renderLoopDirectory");
+  expect(app).toContain("loadLoopFiles");
   expect(app).toContain("activeLoopTab = \"directory\"");
   expect(app).toContain("readRouteState");
   expect(app).toContain("directory-file-list");
-  expect(app).toContain("flow.js");
-  expect(app).toContain("memory.md");
-  expect(app).toContain("contract.json");
-  expect(app).toContain("session.json");
-  expect(app).toContain("formalWorkflowFlowFile");
+  expect(app).toContain("/api/loops/");
+  expect(app).toContain("/files");
+  expect(app).not.toContain("function buildLoopDirectoryFiles");
+  expect(app).not.toContain("function formalLoopDirectoryFiles");
+  expect(app).not.toContain("formalWorkflowFlowFile");
   expect(app).not.toContain("compatibilityFlowFile");
   expect(app).not.toContain("context.codexApp.createThread(launch.launchRequest)");
-  expect(app).toContain("workflowContractId");
-  expect(app).toContain("runPhase");
-  expect(app).toContain("runParallel");
-  expect(app).toContain("runAgent");
-  expect(app).toContain("verifyRubrics");
 });
 
 test("preview script renders run detail as phase rail and agent cards", async () => {
@@ -218,8 +214,6 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("workspace-closed");
   expect(app).toContain("/codex-session");
   expect(app).toContain("/api/new-loop-session");
-  expect(app).toContain("/codex-thread");
-  expect(app).toContain("record_codex_thread");
   expect(app).toContain("已复制成功，请打开 Codex 新会话粘贴构建。");
   expect(app).toContain("创建 Codex 会话请求");
   expect(app).toContain("sessionActionForRun");
@@ -317,6 +311,41 @@ test("serves the loop snapshot api", async () => {
     loops: [{ id: "loop_1", title: "Daily code health check" }],
     codexProjects: [{ name: "dittos loop" }]
   });
+});
+
+test("serves backend-rendered loop directory files api", async () => {
+  const service = await createService();
+  const contract = await service.createLoopContract({
+    title: "AI 开发工具日报",
+    goal: "生成 AI 开发工具中文日报",
+    body: {
+      steps: [{ id: "write-report", kind: "agent", label: "日报 worker", prompt: "生成中文日报。" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "daily-report", label: "中文日报", requirement: "输出中文日报。", severity: "must" }]
+    }
+  });
+  const { run } = await service.startCodexSessionRun(contract.id, { goal: "生成今天的中文日报" });
+  await service.commitMemory(contract.id, { runId: run.id, summary: "保留昨天的来源筛选规则。" });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/loops/${contract.id}/files`);
+  const files = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(files).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ path: "flow.js", kind: "flow", language: "javascript" }),
+      expect.objectContaining({ path: "memory.md", kind: "memory", language: "markdown" }),
+      expect.objectContaining({ path: "contract.json", kind: "contract", language: "json" })
+    ])
+  );
+  expect(files.find((file: { path: string }) => file.path === "memory.md").content).toContain("保留昨天的来源筛选规则。");
+  const sessionFile = files.find((file: { path: string }) => file.path === "session.json");
+  expect(sessionFile.content).toContain(`/api/runs/${run.id}/codex-thread`);
+  expect(sessionFile.content).toContain("record_codex_thread");
 });
 
 test("creates a host-mediated new loop codex session request", async () => {

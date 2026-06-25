@@ -143,6 +143,14 @@ export interface ArtifactRef {
   createdAt: string;
 }
 
+export interface LoopWorkspaceFile {
+  path: string;
+  kind: "flow" | "memory" | "contract" | "workflow" | "agents" | "rubrics" | "runs" | "session";
+  language: "javascript" | "markdown" | "json";
+  content: string;
+  size: number;
+}
+
 export interface WorkflowRevision {
   id: string;
   loopId: string;

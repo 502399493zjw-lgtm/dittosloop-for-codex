@@ -13,6 +13,7 @@ import type {
   HumanRequest,
   LoopContract,
   LoopRun,
+  LoopWorkspaceFile,
   RunAttempt,
   RunDetail,
   LoopState,
@@ -26,6 +27,7 @@ import type {
   WorkflowRevision
 } from "./types.js";
 import type { LoopStore } from "./store.js";
+import { loopWorkspaceFiles } from "./workspaceFiles.js";
 
 export interface LoopServiceOptions {
   store: LoopStore;
@@ -1465,6 +1467,12 @@ export class LoopService {
       workflowRevisions: state.workflowRevisions.filter((revision) => revision.runId === runId),
       workflowContexts: state.workflowContexts.filter((context) => context.runId === runId)
     };
+  }
+
+  async listLoopFiles(loopId: string): Promise<LoopWorkspaceFile[]> {
+    const state = await this.options.store.readState();
+
+    return loopWorkspaceFiles(state, loopId);
   }
 
   async getSnapshot(): Promise<Snapshot> {
