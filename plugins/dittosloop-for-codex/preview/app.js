@@ -606,23 +606,7 @@ function renderRunBoard({ detail, loop, loopRuns }) {
 
 function buildRunPhases(detail) {
   const run = detail.run;
-  const sessionAgents = run.codexSession
-    ? [
-        {
-          id: `${run.id}-current-session`,
-          avatar: "主",
-          name: "Codex 会话",
-          status: run.codexSession.status === "requested" ? run.status : run.codexSession.status,
-          description: run.codexSession.threadId
-            ? "点击查看这次任务的实际运行结果。"
-            : "等待 Codex App 创建任务会话。",
-          meta: "Codex session",
-          threadId: run.codexSession.threadId,
-          threadTitle: run.codexSession.threadTitle,
-          threadUrl: run.codexSession.threadUrl
-        }
-      ]
-    : [];
+  const sessionAgents = run.codexSession ? codexSessionPhaseAgents(run) : [];
   const attemptAgents = detail.attempts
     .filter(() => !run.codexSession)
     .map((attempt) => ({
@@ -680,6 +664,44 @@ function buildRunPhases(detail) {
   }
 
   return phases;
+}
+
+function codexSessionPhaseAgents(run) {
+  const subagents = Array.isArray(run.codexSession?.subagents) ? run.codexSession.subagents : [];
+  if (subagents.length) {
+    return subagents.map((subagent, index) => ({
+      id: `${run.id}-session-subagent-${index}`,
+      avatar: subagent.role === "loop-runner" ? "主" : "代",
+      name: subagent.role,
+      status: subagent.status === "requested" && run.codexSession.status !== "requested"
+        ? run.codexSession.status
+        : subagent.status,
+      description: subagent.threadId
+        ? "点击查看这一步的实际运行结果。"
+        : "已纳入本次 Codex worker 的 workflow 计划。",
+      meta: subagent.threadTitle ?? "workflow agent",
+      threadId: subagent.threadId ?? run.codexSession.threadId,
+      threadTitle: subagent.threadTitle ?? run.codexSession.threadTitle,
+      threadUrl: subagent.threadUrl ?? run.codexSession.threadUrl,
+      showSessionLink: subagent.threadUrl || run.codexSession.threadUrl ? undefined : false
+    }));
+  }
+
+  return [
+    {
+      id: `${run.id}-current-session`,
+      avatar: "主",
+      name: "Codex 会话",
+      status: run.codexSession.status === "requested" ? run.status : run.codexSession.status,
+      description: run.codexSession.threadId
+        ? "点击查看这次任务的实际运行结果。"
+        : "等待 Codex App 创建任务会话。",
+      meta: "Codex session",
+      threadId: run.codexSession.threadId,
+      threadTitle: run.codexSession.threadTitle,
+      threadUrl: run.codexSession.threadUrl
+    }
+  ];
 }
 
 function timelineSectionPhase(section, fallbackStatus) {
@@ -858,6 +880,8 @@ function buildCodexSessionTimelineAgents(detail) {
   const engineEvents = detail.engineEvents ?? [];
   if (engineEvents.length) {
     agents.push(...workflowAgentCards(detail));
+  } else if (Array.isArray(run.codexSession.subagents) && run.codexSession.subagents.length) {
+    agents.push(...codexSessionPhaseAgents(run));
   }
 
   const latestVerification = detail.verificationResults.at(-1);

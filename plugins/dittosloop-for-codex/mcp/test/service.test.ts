@@ -941,7 +941,7 @@ test("starts a host-mediated Codex session launch request with project binding a
       projectPath: "/Users/edisonzhong/Documents/dittos loop",
       subagents: [
         {
-          role: "loop-runner",
+          role: "Run worker",
           status: "requested"
         }
       ]
@@ -982,7 +982,7 @@ test("starts a host-mediated Codex session launch request with project binding a
             codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
             projectLabel: "dittos loop",
             projectPath: "/Users/edisonzhong/Documents/dittos loop",
-            subagents: [{ role: "loop-runner", status: "requested" }]
+            subagents: [{ role: "Run worker", status: "requested" }]
           }
         }
       },
@@ -1076,7 +1076,11 @@ test("compiles Codex session prompt from formal workflow contract when available
       repairPolicy: { maxAttempts: 3, strategy: "repair_then_retry" }
     }
   });
-  expect(launch.run.codexSession?.subagents?.[0].prompt).toBe(launch.prompt);
+  expect(launch.run.codexSession?.subagents?.[0]).toMatchObject({
+    role: "Collect official updates",
+    status: "requested",
+    prompt: "Collect Claude Code, OpenClaw, Hermes, Codex, and Twitter/X updates."
+  });
 });
 
 test("records a real Codex thread without completing the session run", async () => {
@@ -1102,7 +1106,7 @@ test("records a real Codex thread without completing the session run", async () 
     threadUrl: "codex://thread/019ef4c5-4a52-7653-a862-6f1372f88475",
     subagents: [
       {
-        role: "loop-runner",
+        role: "Run worker",
         status: "running",
         threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
       }
@@ -1180,7 +1184,7 @@ test("recording a session result closes its subagent status", async () => {
     codexSession: {
       subagents: [
         {
-          role: "loop-runner",
+          role: "Run worker",
           status: "running",
           threadId: "019ef7b4-7a0d-74f2-b1a9-10502784e636"
         }
@@ -1204,7 +1208,7 @@ test("recording a session result closes its subagent status", async () => {
       status: "completed",
       subagents: [
         {
-          role: "loop-runner",
+          role: "Run worker",
           status: "completed",
           threadId: "019ef7b4-7a0d-74f2-b1a9-10502784e636"
         }
@@ -1247,7 +1251,7 @@ test("records a Codex session result and completes the session-backed run", asyn
       status: "completed",
       subagents: [
         {
-          role: "loop-runner",
+          role: "Run worker",
           status: "completed",
           threadId: "019ef8f0-7f39-775a-ad9c-63ad6bfe1832"
         }
@@ -1366,7 +1370,7 @@ test("opens and resumes a Codex session backed run without creating a new run", 
           threadId: "019ef91e-0f19-74d5-b14c-bac2f257d269"
         },
         {
-          role: "loop-runner",
+          role: "撰写日报",
           status: "requested"
         }
       ]

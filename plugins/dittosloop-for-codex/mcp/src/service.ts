@@ -555,13 +555,7 @@ export class LoopService {
           mode: "new_session",
           status: "requested",
           ...project,
-          subagents: [
-            {
-              role: "loop-runner",
-              status: "requested",
-              prompt
-            }
-          ],
+          subagents: codexSessionSubagentsForContract(formalContract, prompt),
           prompt
         },
         createdAt: timestamp,
@@ -641,11 +635,7 @@ export class LoopService {
           ...project,
           subagents: [
             ...(run.codexSession?.subagents ?? []),
-            {
-              role: "loop-runner",
-              status: "requested",
-              prompt
-            }
+            ...codexSessionSubagentsForContract(formalContract, prompt)
           ],
           prompt
         }
@@ -1507,6 +1497,7 @@ type CompletedCodexSessionRef = CodexSessionRef & {
   threadUrl?: string;
 };
 type CodexSubagentStatus = NonNullable<NonNullable<LoopRun["codexSession"]>["subagents"]>[number]["status"];
+type CodexSessionSubagent = NonNullable<NonNullable<LoopRun["codexSession"]>["subagents"]>[number];
 
 function isCompletedCodexSession(value: unknown): value is CompletedCodexSessionRef {
   if (!value || typeof value !== "object") return false;
@@ -1522,6 +1513,26 @@ function isCompletedCodexSession(value: unknown): value is CompletedCodexSession
 function codexSubagentStatus(status: CodexSessionRef["status"]): CodexSubagentStatus {
   if (status === "started") return "running";
   return status;
+}
+
+function codexSessionSubagentsForContract(
+  contract: FormalLoopContract | undefined,
+  prompt: string,
+  status: CodexSubagentStatus = "requested"
+): CodexSessionSubagent[] {
+  if (!contract) {
+    return [{ role: "loop-runner", status, prompt }];
+  }
+
+  const agents = flattenWorkflowLaunchSteps(contract.body.steps)
+    .filter((step) => step.kind === "agent")
+    .map((step) => ({
+      role: step.label,
+      status,
+      prompt: step.prompt ?? prompt
+    }));
+
+  return agents.length ? agents : [{ role: "loop-runner", status, prompt }];
 }
 
 function engineEventToMessage(event: EngineEvent): string {
