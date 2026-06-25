@@ -13,6 +13,7 @@ import type {
   HumanRequest,
   LoopContract,
   LoopMemory,
+  LoopMemoryWindow,
   LoopOperationalState,
   LoopPausedReason,
   LoopRun,
@@ -39,6 +40,14 @@ export interface LoopServiceOptions {
   previewBaseUrl?: string;
   codexProjects?: CodexProjectRef[];
   sessionBridge?: CodexSessionBridge;
+}
+
+export const DEFAULT_LOOP_MEMORY_READ_LIMIT = 80;
+export const MAX_LOOP_MEMORY_READ_LIMIT = 200;
+
+export interface ReadLoopMemoryInput {
+  limit?: number;
+  offset?: number;
 }
 
 export type CreateLoopContractInput = Omit<FormalLoopContractInput, "id"> & {
@@ -1440,6 +1449,11 @@ export class LoopService {
     }
 
     return resolvedRequest!;
+  }
+
+  async readLoopMemory(loopId: string, input: ReadLoopMemoryInput = {}): Promise<LoopMemoryWindow> {
+    const state = await this.options.store.readState();
+    return loopMemoryWindow(state, loopId, input);
   }
 
   async commitMemory(loopId: string, input: CommitMemoryInput): Promise<MemoryCommit> {
@@ -3172,11 +3186,69 @@ function updateRun(runs: LoopRun[], runId: string, patch: Partial<LoopRun>): Loo
   return runs.map((run) => (run.id === runId ? { ...run, ...patch } : run));
 }
 
+function loopMemoryWindow(state: LoopState, loopId: string, input: ReadLoopMemoryInput = {}): LoopMemoryWindow {
+  requireLoop(state, loopId);
+  const limit = input.limit ?? DEFAULT_LOOP_MEMORY_READ_LIMIT;
+  const offset = input.offset ?? 0;
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LOOP_MEMORY_READ_LIMIT) {
+    throw new Error(`Memory read limit must be between 1 and ${MAX_LOOP_MEMORY_READ_LIMIT}.`);
+  }
+
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error("Memory read offset must be greater than or equal to 0.");
+  }
+
+  const memory = state.loopMemories.find((candidate) => candidate.loopId === loopId);
+  const lines = memoryLines(memory?.content);
+  const selectedLines = lines.slice(offset, offset + limit);
+  const remainingLines = Math.max(lines.length - offset - selectedLines.length, 0);
+
+  return {
+    loopId,
+    limit,
+    offset,
+    returnedLines: selectedLines.length,
+    totalLines: lines.length,
+    remainingLines,
+    content: memoryWindowContent(loopId, selectedLines, remainingLines, offset + selectedLines.length, limit)
+  };
+}
+
+function memoryLines(content: string | undefined): string[] {
+  return (content ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function memoryWindowContent(
+  loopId: string,
+  lines: string[],
+  remainingLines: number,
+  nextOffset: number,
+  limit: number
+): string {
+  if (!lines.length) {
+    return "暂无长期记忆。";
+  }
+
+  const content = lines.join("\n");
+  if (!remainingLines) {
+    return content;
+  }
+
+  return [
+    content,
+    `还有 ${remainingLines} 条记忆未读取。可调用 read_loop_memory({ loopId: "${loopId}", offset: ${nextOffset}, limit: ${limit} }) 继续读取。`
+  ].join("\n");
+}
+
 function appendLoopMemory(memories: LoopMemory[], loopId: string, line: string, updatedAt: string): LoopMemory[] {
   const existing = memories.find((memory) => memory.loopId === loopId);
   const updated = {
     loopId,
-    content: `${existing?.content ?? ""}${line}\n`,
+    content: `${line}\n${existing?.content ?? ""}`,
     updatedAt
   };
 

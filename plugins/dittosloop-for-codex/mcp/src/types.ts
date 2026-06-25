@@ -155,6 +155,16 @@ export interface LoopMemory {
   updatedAt?: string;
 }
 
+export interface LoopMemoryWindow {
+  loopId: string;
+  limit: number;
+  offset: number;
+  returnedLines: number;
+  totalLines: number;
+  remainingLines: number;
+  content: string;
+}
+
 export interface ArtifactRef {
   id: string;
   runId: string;

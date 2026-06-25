@@ -120,12 +120,12 @@ function deriveLoopMemories(existing: LoopMemory[], commits: MemoryCommit[]): Lo
 
     const loopCommits = commits
       .filter((commit) => commit.loopId === loopId)
-      .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 
     memoriesByLoopId.set(loopId, {
       loopId,
       content: loopCommits.map((commit) => commit.summary).join("\n") + "\n",
-      updatedAt: loopCommits.at(-1)?.createdAt
+      updatedAt: loopCommits.at(0)?.createdAt
     });
   }
 

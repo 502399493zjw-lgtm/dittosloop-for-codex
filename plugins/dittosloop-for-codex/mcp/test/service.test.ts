@@ -1033,7 +1033,7 @@ test("persists canonical loop operational state across run lifecycle", async () 
   });
 });
 
-test("persists append-only loop memory across commits", async () => {
+test("persists newest-first loop memory across commits", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await createFormalLoop(service);
   const launch = await service.startCodexSessionRun(formal.id, { goal: "Run memory updater" });
@@ -1045,7 +1045,7 @@ test("persists append-only loop memory across commits", async () => {
     loopMemories: [
       {
         loopId: formal.id,
-        content: "Prefer official sources.\nIgnore duplicate syndicated posts.\n",
+        content: "Ignore duplicate syndicated posts.\nPrefer official sources.\n",
         updatedAt: fixedTime
       }
     ],
@@ -1056,7 +1056,7 @@ test("persists append-only loop memory across commits", async () => {
   });
 
   const files = await service.listLoopFiles(formal.id);
-  expect(files.find((file) => file.path === "memory.md")?.content).toBe("Prefer official sources.\nIgnore duplicate syndicated posts.\n");
+  expect(files.find((file) => file.path === "memory.md")?.content).toBe("Ignore duplicate syndicated posts.\nPrefer official sources.\n");
   const memoryCommits = JSON.parse(files.find((file) => file.path === "evolution/memory-commits.json")!.content);
   expect(memoryCommits).toMatchObject({
     loopId: formal.id,
@@ -1067,6 +1067,71 @@ test("persists append-only loop memory across commits", async () => {
     ]
   });
   expect(memoryCommits).not.toHaveProperty("memoryRevision");
+});
+
+test("reads loop memory in bounded newest-first windows", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run memory updater" });
+
+  await service.commitMemory(formal.id, { runId: launch.run.id, summary: "First durable lesson." });
+  await service.commitMemory(formal.id, { runId: launch.run.id, summary: "Second durable lesson." });
+  await service.commitMemory(formal.id, { runId: launch.run.id, summary: "Third durable lesson." });
+
+  await expect(service.readLoopMemory(formal.id, { limit: 2 })).resolves.toEqual({
+    loopId: formal.id,
+    limit: 2,
+    offset: 0,
+    returnedLines: 2,
+    totalLines: 3,
+    remainingLines: 1,
+    content:
+      "Third durable lesson.\nSecond durable lesson.\n还有 1 条记忆未读取。可调用 read_loop_memory({ loopId: \"loop_1\", offset: 2, limit: 2 }) 继续读取。"
+  });
+
+  await expect(service.readLoopMemory(formal.id, { limit: 2, offset: 2 })).resolves.toEqual({
+    loopId: formal.id,
+    limit: 2,
+    offset: 2,
+    returnedLines: 1,
+    totalLines: 3,
+    remainingLines: 0,
+    content: "First durable lesson."
+  });
+
+  await expect(service.readLoopMemory(formal.id)).resolves.toMatchObject({
+    loopId: formal.id,
+    limit: 80,
+    offset: 0,
+    returnedLines: 3,
+    totalLines: 3,
+    remainingLines: 0
+  });
+});
+
+test("returns structured empty loop memory windows", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+
+  await expect(service.readLoopMemory(formal.id)).resolves.toEqual({
+    loopId: formal.id,
+    limit: 80,
+    offset: 0,
+    returnedLines: 0,
+    totalLines: 0,
+    remainingLines: 0,
+    content: "暂无长期记忆。"
+  });
+});
+
+test("rejects invalid loop memory window requests", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+
+  await expect(service.readLoopMemory("missing_loop")).rejects.toThrow(/Loop not found/);
+  await expect(service.readLoopMemory(formal.id, { limit: 0 })).rejects.toThrow(/limit must be between 1 and 200/);
+  await expect(service.readLoopMemory(formal.id, { limit: 201 })).rejects.toThrow(/limit must be between 1 and 200/);
+  await expect(service.readLoopMemory(formal.id, { offset: -1 })).rejects.toThrow(/offset must be greater than or equal to 0/);
 });
 
 test("proposes workflow revisions from a visible Codex session without replacing the active contract", async () => {
