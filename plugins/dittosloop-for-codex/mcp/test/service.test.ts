@@ -439,28 +439,98 @@ test("renders loop directory files from stored loop state", async () => {
     summary: "日报通过验证。",
     checks: [{ name: "中文日报", status: "passed", output: "包含来源" }]
   });
+  await service.completeRun(run.id, { status: "completed" });
 
   const files = await service.listLoopFiles(formal.id);
+  const byPath = new Map(files.map((file) => [file.path, file]));
 
   expect(files.map((file) => file.path)).toEqual([
     "flow.js",
     "memory.md",
-    "workflow.json",
-    "agents.md",
-    "rubrics.md",
-    "runs.json",
+    "status.json",
+    "workflow/workflow.json",
+    "workflow/agents.md",
+    "workflow/rubrics.md",
+    "runs/index.json",
+    `runs/${run.id}/status.json`,
+    `runs/${run.id}/attempts.json`,
+    `runs/${run.id}/events.ndjson`,
+    `runs/${run.id}/verification.json`,
+    `runs/${run.id}/human-requests.json`,
+    `runs/${run.id}/codex-session.json`,
+    "evolution/revisions.json",
+    "evolution/memory-commits.json",
     "contract.json",
-    "session.json"
+    "codex/session.json"
   ]);
   expect(files.every((file) => file.size === Buffer.byteLength(file.content, "utf8"))).toBe(true);
-  expect(files.find((file) => file.path === "flow.js")).toMatchObject({
+  expect(byPath.get("flow.js")).toMatchObject({
     kind: "flow",
     language: "javascript",
     content: expect.stringContaining("workflowContractId")
   });
-  expect(files.find((file) => file.path === "memory.md")?.content).toContain("保留昨天的来源筛选规则。");
-  expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
-  expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("包含来源");
+  expect(byPath.get("memory.md")?.content).toContain("保留昨天的来源筛选规则。");
+  expect(byPath.get("contract.json")?.content).toContain("\"formalContract\"");
+  expect(byPath.get("workflow/rubrics.md")?.content).toContain("包含来源");
+  expect(JSON.parse(byPath.get("status.json")!.content)).toMatchObject({
+    loopId: formal.id,
+    lifecycle: "active",
+    runIndex: 1,
+    lastRunId: run.id,
+    lastRunAt: fixedTime,
+    consecutiveFailedRuns: 0,
+    lastOutcome: "succeeded",
+    memoryRevision: "memory_1"
+  });
+  expect(JSON.parse(byPath.get("runs/index.json")!.content)).toMatchObject({
+    loopId: formal.id,
+    runs: [{ id: run.id, status: "succeeded", runIndex: 1 }]
+  });
+  expect(JSON.parse(byPath.get(`runs/${run.id}/status.json`)!.content)).toMatchObject({
+    id: run.id,
+    loopId: formal.id,
+    status: "succeeded",
+    runIndex: 1,
+    trigger: { kind: "manual" }
+  });
+  expect(byPath.get(`runs/${run.id}/events.ndjson`)?.content).toContain("run_created");
+  expect(JSON.parse(byPath.get("evolution/memory-commits.json")!.content)).toMatchObject({
+    commits: [{ id: "memory_1", runId: run.id, summary: "保留昨天的来源筛选规则。" }]
+  });
+});
+
+test("projects canonical status for failed loop history", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Failing monitor",
+    goal: "Show failed status",
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run and fail" });
+  await service.completeRun(launch.run.id, { status: "failed" });
+
+  const files = await service.listLoopFiles(formal.id);
+  const status = JSON.parse(files.find((file) => file.path === "status.json")!.content);
+  const runStatus = JSON.parse(files.find((file) => file.path === `runs/${launch.run.id}/status.json`)!.content);
+
+  expect(status).toMatchObject({
+    lifecycle: "active",
+    runIndex: 1,
+    lastRunId: launch.run.id,
+    lastOutcome: "failed",
+    consecutiveFailedRuns: 1
+  });
+  expect(runStatus).toMatchObject({
+    id: launch.run.id,
+    status: "failed",
+    runIndex: 1
+  });
 });
 
 test("proposes workflow revisions from a visible Codex session without replacing the active contract", async () => {
@@ -606,6 +676,16 @@ test("proposes workflow revisions from a visible Codex session without replacing
     workflowRevisions: [
       { id: revision.id, status: "superseded" },
       { id: followUpRevision.id, status: "promoted" }
+    ]
+  });
+
+  const files = await service.listLoopFiles(formal.id);
+  const revisions = JSON.parse(files.find((file) => file.path === "evolution/revisions.json")!.content);
+  expect(revisions).toMatchObject({
+    activeRevisionId: followUpRevision.id,
+    revisions: [
+      { id: revision.id, status: "superseded", reason: "Missing official sources." },
+      { id: followUpRevision.id, status: "promoted", reason: "Narrow the monitor to official release channels." }
     ]
   });
 });

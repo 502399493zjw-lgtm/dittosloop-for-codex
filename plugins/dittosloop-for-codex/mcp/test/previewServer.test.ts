@@ -365,7 +365,7 @@ test("serves backend-rendered loop directory files api", async () => {
     ])
   );
   expect(files.find((file: { path: string }) => file.path === "memory.md").content).toContain("保留昨天的来源筛选规则。");
-  const sessionFile = files.find((file: { path: string }) => file.path === "session.json");
+  const sessionFile = files.find((file: { path: string }) => file.path === "codex/session.json");
   expect(sessionFile.content).toContain(`/api/runs/${run.id}/codex-thread`);
   expect(sessionFile.content).toContain("record_codex_thread");
 });

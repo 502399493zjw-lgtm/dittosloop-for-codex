@@ -15,10 +15,12 @@ export function loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorksp
   }
 
   const loopRuns = runsForLoop(state, loopId);
+  const chronologicalRuns = runsForLoopChronological(state, loopId);
   const formalContract = state.formalContracts.find((contract) => contract.id === loopId);
   const workflowFiles = formalContract
     ? formalLoopDirectoryFiles({ contract: formalContract, state, loopRuns })
     : [];
+  const latestRun = loopRuns.at(0);
 
   return [
     withSize({
@@ -33,7 +35,12 @@ export function loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorksp
       language: "markdown",
       content: memoryFile({ state, loop })
     }),
+    jsonFile("status.json", "status", loopStatusFile({ state, loop, loopRuns: chronologicalRuns })),
     ...workflowFiles,
+    jsonFile("runs/index.json", "runs", runsIndexFile({ state, loop, loopRuns: chronologicalRuns })),
+    ...chronologicalRuns.flatMap((run, index) => runDirectoryFiles({ state, run, runIndex: index + 1 })),
+    jsonFile("evolution/revisions.json", "evolution", revisionsFile({ state, loop, formalContract })),
+    jsonFile("evolution/memory-commits.json", "evolution", memoryCommitsFile({ state, loop })),
     withSize({
       path: "contract.json",
       kind: "contract",
@@ -41,10 +48,10 @@ export function loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorksp
       content: contractFile({ state, loop, formalContract, loopRuns })
     }),
     withSize({
-      path: "session.json",
+      path: "codex/session.json",
       kind: "session",
       language: "json",
-      content: sessionFile({ loop, latestRun: loopRuns.at(0) })
+      content: sessionFile({ loop, latestRun })
     })
   ];
 }
@@ -53,10 +60,29 @@ function withSize(file: Omit<LoopWorkspaceFile, "size">): LoopWorkspaceFile {
   return { ...file, size: Buffer.byteLength(file.content, "utf8") };
 }
 
+function jsonFile(
+  path: string,
+  kind: Extract<LoopWorkspaceFile["kind"], "status" | "runs" | "run" | "evolution" | "workflow">,
+  value: unknown
+): LoopWorkspaceFile {
+  return withSize({
+    path,
+    kind,
+    language: "json",
+    content: `${JSON.stringify(value, null, 2)}\n`
+  });
+}
+
 function runsForLoop(state: LoopState, loopId: string): LoopRun[] {
   return state.runs
     .filter((run) => run.loopId === loopId)
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+}
+
+function runsForLoopChronological(state: LoopState, loopId: string): LoopRun[] {
+  return state.runs
+    .filter((run) => run.loopId === loopId)
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
 }
 
 function compatibilityFlowFile(loop: LoopContract): string {
@@ -189,7 +215,7 @@ function formalLoopDirectoryFiles(input: {
   state: LoopState;
   loopRuns: LoopRun[];
 }): LoopWorkspaceFile[] {
-  const agentSteps = flattenContractSteps(input.contract.body?.steps ?? []).filter((step) => step.kind === "agent");
+  const agentSteps = flattenContractSteps(input.contract.body?.steps ?? []).filter((step) => step.kind === "agent" || step.kind === "task");
   const latestRun = input.loopRuns.at(0);
   const latestAttempt = latestRun
     ? [...input.state.attempts].reverse().find((attempt) => attempt.runId === latestRun.id)
@@ -201,7 +227,7 @@ function formalLoopDirectoryFiles(input: {
 
   return [
     withSize({
-      path: "workflow.json",
+      path: "workflow/workflow.json",
       kind: "workflow",
       language: "json",
       content: `${JSON.stringify(
@@ -223,7 +249,7 @@ function formalLoopDirectoryFiles(input: {
       )}\n`
     }),
     withSize({
-      path: "agents.md",
+      path: "workflow/agents.md",
       kind: "agents",
       language: "markdown",
       content: [
@@ -242,7 +268,7 @@ function formalLoopDirectoryFiles(input: {
       ].join("\n")
     }),
     withSize({
-      path: "rubrics.md",
+      path: "workflow/rubrics.md",
       kind: "rubrics",
       language: "markdown",
       content: [
@@ -263,53 +289,152 @@ function formalLoopDirectoryFiles(input: {
           ].filter(Boolean)
         )
       ].join("\n")
-    }),
-    withSize({
-      path: "runs.json",
-      kind: "runs",
-      language: "json",
-      content: `${JSON.stringify(
-        {
-          latestRun: latestRun
-            ? {
-                id: latestRun.id,
-                status: latestRun.status,
-                goal: latestRun.goal,
-                createdAt: latestRun.createdAt,
-                completedAt: latestRun.completedAt
-              }
-            : null,
-          latestAttempt: latestAttempt
-            ? {
-                id: latestAttempt.id,
-                status: latestAttempt.status,
-                summary: latestAttempt.summary,
-                createdAt: latestAttempt.createdAt,
-                completedAt: latestAttempt.completedAt
-              }
-            : null,
-          latestVerification: latestVerification
-            ? {
-                id: latestVerification.id,
-                status: latestVerification.status,
-                summary: latestVerification.summary,
-                checks: latestVerification.checks ?? [],
-                createdAt: latestVerification.createdAt
-              }
-            : null,
-          runs: input.loopRuns.map((run) => ({
-            id: run.id,
-            status: run.status,
-            goal: run.goal,
-            createdAt: run.createdAt,
-            completedAt: run.completedAt
-          }))
-        },
-        null,
-        2
-      )}\n`
     })
   ];
+}
+
+function loopStatusFile(input: { state: LoopState; loop: LoopContract; loopRuns: LoopRun[] }) {
+  const latestRun = input.loopRuns.at(-1);
+  const latestMemoryCommit = input.state.memoryCommits
+    .filter((commit) => commit.loopId === input.loop.id)
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+    .at(-1);
+
+  return {
+    loopId: input.loop.id,
+    lifecycle: input.loop.status,
+    runIndex: input.loopRuns.length,
+    lastRunId: latestRun?.id,
+    lastRunAt: latestRun?.completedAt ?? latestRun?.updatedAt ?? latestRun?.createdAt,
+    activeRunId: latestRun && !isTerminalRunStatus(latestRun.status) ? latestRun.id : null,
+    activeRunStatus: latestRun && !isTerminalRunStatus(latestRun.status) ? canonicalRunStatus(latestRun.status) : null,
+    nextWakeAt: null,
+    cursor: null,
+    consecutiveFailedRuns: consecutiveFailedRuns(input.loopRuns),
+    lastOutcome: latestRun && isTerminalRunStatus(latestRun.status) ? canonicalRunOutcome(latestRun.status) : undefined,
+    memoryRevision: latestMemoryCommit?.id
+  };
+}
+
+function runsIndexFile(input: { state: LoopState; loop: LoopContract; loopRuns: LoopRun[] }) {
+  const latestRun = input.loopRuns.at(-1);
+  const latestAttempt = latestRun
+    ? [...input.state.attempts].reverse().find((attempt) => attempt.runId === latestRun.id)
+    : undefined;
+  const latestVerification = latestRun ? latestVerificationForRun(input.state, latestRun.id) : undefined;
+
+  return {
+    loopId: input.loop.id,
+    latestRunId: latestRun?.id ?? null,
+    latestRunStatus: latestRun ? canonicalRunStatus(latestRun.status) : null,
+    latestAttemptId: latestAttempt?.id ?? null,
+    latestAttemptStatus: latestAttempt?.status ?? null,
+    latestVerificationStatus: latestVerification?.status ?? null,
+    runs: input.loopRuns.map((run, index) => ({
+      id: run.id,
+      status: canonicalRunStatus(run.status),
+      runIndex: index + 1,
+      goal: run.goal,
+      trigger: {
+        kind: run.trigger
+      },
+      startedAt: run.createdAt,
+      updatedAt: run.updatedAt,
+      completedAt: run.completedAt,
+      codexSessionStatus: run.codexSession?.status ?? null
+    }))
+  };
+}
+
+function runDirectoryFiles(input: { state: LoopState; run: LoopRun; runIndex: number }): LoopWorkspaceFile[] {
+  const attempts = input.state.attempts.filter((attempt) => attempt.runId === input.run.id);
+  const events = input.state.events.filter((event) => event.runId === input.run.id);
+  const verification = input.state.verificationResults.filter((result) => result.runId === input.run.id);
+  const humanRequests = input.state.humanRequests.filter((request) => request.runId === input.run.id);
+  const basePath = `runs/${input.run.id}`;
+
+  return [
+    jsonFile(`${basePath}/status.json`, "run", {
+      id: input.run.id,
+      loopId: input.run.loopId,
+      status: canonicalRunStatus(input.run.status),
+      runIndex: input.runIndex,
+      trigger: {
+        kind: input.run.trigger
+      },
+      goal: input.run.goal,
+      sessionId: input.run.codexSession?.threadId ?? input.run.codexSession?.subagents?.[0]?.sessionId ?? null,
+      startedAt: input.run.createdAt,
+      updatedAt: input.run.updatedAt,
+      completedAt: input.run.completedAt,
+      result: null
+    }),
+    jsonFile(`${basePath}/attempts.json`, "run", {
+      runId: input.run.id,
+      attempts: attempts.map((attempt, index) => ({
+        ...attempt,
+        attemptIndex: index + 1,
+        sessionId: input.run.codexSession?.threadId ?? null
+      }))
+    }),
+    withSize({
+      path: `${basePath}/events.ndjson`,
+      kind: "run",
+      language: "json",
+      content: events.map((event) => JSON.stringify(event)).join("\n") + (events.length > 0 ? "\n" : "")
+    }),
+    jsonFile(`${basePath}/verification.json`, "run", {
+      runId: input.run.id,
+      verification
+    }),
+    jsonFile(`${basePath}/human-requests.json`, "run", {
+      runId: input.run.id,
+      humanRequests
+    }),
+    jsonFile(`${basePath}/codex-session.json`, "run", {
+      runId: input.run.id,
+      codexSession: input.run.codexSession ?? null
+    })
+  ];
+}
+
+function revisionsFile(input: { state: LoopState; loop: LoopContract; formalContract?: FormalLoopContract }) {
+  const revisions = input.state.workflowRevisions.filter((revision) => revision.loopId === input.loop.id);
+  const promoted = [...revisions].reverse().find((revision) => revision.status === "promoted");
+
+  return {
+    loopId: input.loop.id,
+    activeRevisionId: promoted?.id ?? null,
+    activeContractUpdatedAt: input.formalContract?.updatedAt ?? input.loop.updatedAt,
+    revisions: revisions.map((revision) => ({
+      id: revision.id,
+      loopId: revision.loopId,
+      runId: revision.runId,
+      attemptId: revision.attemptId,
+      authorSessionId: revision.authorSessionId,
+      authorThreadId: revision.authorThreadId,
+      baseRevisionId: revision.baseRevisionId,
+      status: revision.status,
+      reason: revision.reason,
+      createdAt: revision.createdAt,
+      promotedAt: revision.promotedAt,
+      rejectedAt: revision.rejectedAt,
+      rejectionReason: revision.rejectionReason,
+      contract: revision.contract
+    }))
+  };
+}
+
+function memoryCommitsFile(input: { state: LoopState; loop: LoopContract }) {
+  const commits = input.state.memoryCommits
+    .filter((commit) => commit.loopId === input.loop.id)
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+
+  return {
+    loopId: input.loop.id,
+    memoryRevision: commits.at(-1)?.id ?? null,
+    commits
+  };
 }
 
 function contractFile(input: {
@@ -441,6 +566,40 @@ function numberValue(value: unknown): number | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+type CanonicalRunStatus = "running" | "waiting_for_human" | "repairing" | "succeeded" | "failed";
+
+function canonicalRunStatus(status: LoopRun["status"]): CanonicalRunStatus {
+  if (status === "completed") {
+    return "succeeded";
+  }
+  return status;
+}
+
+function isTerminalRunStatus(status: LoopRun["status"]): boolean {
+  return status === "completed" || status === "failed";
+}
+
+function canonicalRunOutcome(status: LoopRun["status"]): "succeeded" | "failed" | undefined {
+  if (status === "completed") {
+    return "succeeded";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  return undefined;
+}
+
+function consecutiveFailedRuns(loopRuns: LoopRun[]): number {
+  let count = 0;
+  for (let index = loopRuns.length - 1; index >= 0; index -= 1) {
+    if (loopRuns[index].status !== "failed") {
+      break;
+    }
+    count += 1;
+  }
+  return count;
 }
 
 function statusText(status: string): string {
