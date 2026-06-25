@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { deriveLoopOperationalStates } from "./loopOperationalState.js";
-import type { LoopState } from "./types.js";
+import type { LoopMemory, LoopState, MemoryCommit } from "./types.js";
 
 const STATE_FILE = "state.json";
 const CURRENT_STATE_VERSION = 2 as const;
@@ -21,6 +21,7 @@ export function createEmptyState(): LoopState {
     verificationResults: [],
     humanRequests: [],
     memoryCommits: [],
+    loopMemories: [],
     artifacts: []
   };
 }
@@ -94,6 +95,7 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
       status: request.status ?? "open"
     })),
     memoryCommits: value?.memoryCommits ?? [],
+    loopMemories: deriveLoopMemories(value?.loopMemories ?? [], value?.memoryCommits ?? []),
     artifacts: value?.artifacts ?? []
   };
 
@@ -105,4 +107,27 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function deriveLoopMemories(existing: LoopMemory[], commits: MemoryCommit[]): LoopMemory[] {
+  const memoriesByLoopId = new Map(existing.map((memory) => [memory.loopId, memory]));
+  const commitLoopIds = [...new Set(commits.map((commit) => commit.loopId))];
+
+  for (const loopId of commitLoopIds) {
+    if (memoriesByLoopId.has(loopId)) {
+      continue;
+    }
+
+    const loopCommits = commits
+      .filter((commit) => commit.loopId === loopId)
+      .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+
+    memoriesByLoopId.set(loopId, {
+      loopId,
+      content: loopCommits.map((commit) => commit.summary).join("\n") + "\n",
+      updatedAt: loopCommits.at(-1)?.createdAt
+    });
+  }
+
+  return [...memoriesByLoopId.values()];
 }

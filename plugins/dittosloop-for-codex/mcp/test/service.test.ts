@@ -641,6 +641,42 @@ test("persists canonical loop operational state across run lifecycle", async () 
   });
 });
 
+test("persists append-only loop memory across commits", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run memory updater" });
+
+  await service.commitMemory(formal.id, { runId: launch.run.id, summary: "Prefer official sources." });
+  await service.commitMemory(formal.id, { runId: launch.run.id, summary: "Ignore duplicate syndicated posts." });
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loopMemories: [
+      {
+        loopId: formal.id,
+        content: "Prefer official sources.\nIgnore duplicate syndicated posts.\n",
+        updatedAt: fixedTime
+      }
+    ],
+    memoryCommits: [
+      { loopId: formal.id, runId: launch.run.id, summary: "Prefer official sources." },
+      { loopId: formal.id, runId: launch.run.id, summary: "Ignore duplicate syndicated posts." }
+    ]
+  });
+
+  const files = await service.listLoopFiles(formal.id);
+  expect(files.find((file) => file.path === "memory.md")?.content).toBe("Prefer official sources.\nIgnore duplicate syndicated posts.\n");
+  const memoryCommits = JSON.parse(files.find((file) => file.path === "evolution/memory-commits.json")!.content);
+  expect(memoryCommits).toMatchObject({
+    loopId: formal.id,
+    latestCommitId: "memory_2",
+    commits: [
+      { id: "memory_1", summary: "Prefer official sources." },
+      { id: "memory_2", summary: "Ignore duplicate syndicated posts." }
+    ]
+  });
+  expect(memoryCommits).not.toHaveProperty("memoryRevision");
+});
+
 test("proposes workflow revisions from a visible Codex session without replacing the active contract", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await service.createLoopContract({

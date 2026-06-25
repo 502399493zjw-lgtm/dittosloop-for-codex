@@ -148,6 +148,12 @@ export interface MemoryCommit {
   createdAt: string;
 }
 
+export interface LoopMemory {
+  loopId: string;
+  content: string;
+  updatedAt?: string;
+}
+
 export interface ArtifactRef {
   id: string;
   runId: string;
@@ -272,6 +278,7 @@ export interface LoopState {
   verificationResults: VerificationResult[];
   humanRequests: HumanRequest[];
   memoryCommits: MemoryCommit[];
+  loopMemories: LoopMemory[];
   artifacts: ArtifactRef[];
 }
 

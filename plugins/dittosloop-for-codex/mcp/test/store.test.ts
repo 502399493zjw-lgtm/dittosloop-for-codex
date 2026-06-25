@@ -214,3 +214,52 @@ test("derives canonical loop operational state while normalizing existing state"
     ]
   });
 });
+
+test("derives append-only loop memory while normalizing legacy memory commits", async () => {
+  const dir = await createTempDir();
+  await writeFile(
+    join(dir, "state.json"),
+    `${JSON.stringify({
+      version: 2,
+      loops: [
+        {
+          id: "loop_1",
+          title: "Daily source monitor",
+          intent: "Remember source filters",
+          trigger: { mode: "manual" },
+          verification: { checks: ["manual"] },
+          status: "active",
+          createdAt: "2026-06-23T00:00:00.000Z",
+          updatedAt: "2026-06-23T00:00:00.000Z"
+        }
+      ],
+      memoryCommits: [
+        {
+          id: "memory_1",
+          loopId: "loop_1",
+          summary: "Prefer official sources.",
+          createdAt: "2026-06-23T00:02:00.000Z"
+        },
+        {
+          id: "memory_2",
+          loopId: "loop_1",
+          summary: "Ignore duplicate syndicated posts.",
+          createdAt: "2026-06-24T00:02:00.000Z"
+        }
+      ]
+    })}\n`,
+    "utf8"
+  );
+
+  const store = new LoopStore(dir);
+
+  await expect(store.readState()).resolves.toMatchObject({
+    loopMemories: [
+      {
+        loopId: "loop_1",
+        content: "Prefer official sources.\nIgnore duplicate syndicated posts.\n",
+        updatedAt: "2026-06-24T00:02:00.000Z"
+      }
+    ]
+  });
+});

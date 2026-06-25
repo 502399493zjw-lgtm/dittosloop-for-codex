@@ -185,28 +185,12 @@ function workflowStepLine(step: Step, indent: string): string[] {
 }
 
 function memoryFile(input: { state: LoopState; loop: LoopContract }): string {
-  const commits = input.state.memoryCommits
-    .filter((commit) => commit.loopId === input.loop.id)
-    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
-
-  if (commits.length === 0) {
-    return [`# ${input.loop.title}`, "", input.loop.intent, "", "## Memory commits", "暂无记忆。", ""].join("\n");
+  const memory = input.state.loopMemories.find((candidate) => candidate.loopId === input.loop.id);
+  if (memory?.content) {
+    return memory.content;
   }
 
-  return [
-    `# ${input.loop.title}`,
-    "",
-    input.loop.intent,
-    "",
-    "## Memory commits",
-    ...commits.map((commit) =>
-      [
-        `- ${commit.createdAt}: ${commit.summary}`,
-        commit.runId ? `  - run: ${commit.runId}` : null
-      ].filter(Boolean).join("\n")
-    ),
-    ""
-  ].join("\n");
+  return "# memory\n\n暂无记忆。\n";
 }
 
 function formalLoopDirectoryFiles(input: {
@@ -417,7 +401,7 @@ function memoryCommitsFile(input: { state: LoopState; loop: LoopContract }) {
 
   return {
     loopId: input.loop.id,
-    memoryRevision: commits.at(-1)?.id ?? null,
+    latestCommitId: commits.at(-1)?.id ?? null,
     commits
   };
 }
@@ -440,6 +424,7 @@ function contractFile(input: {
       verificationResults: input.state.verificationResults.filter((result) => runIds.has(result.runId)),
       humanRequests: input.state.humanRequests.filter((request) => runIds.has(request.runId)),
       memoryCommits: input.state.memoryCommits.filter((commit) => commit.loopId === input.loop.id),
+      memory: input.state.loopMemories.find((memory) => memory.loopId === input.loop.id) ?? null,
       artifacts: input.state.artifacts.filter((artifact) => runIds.has(artifact.runId))
     },
     null,

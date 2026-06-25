@@ -12,6 +12,7 @@ import type {
   EventKind,
   HumanRequest,
   LoopContract,
+  LoopMemory,
   LoopRun,
   LoopWorkspaceFile,
   RunAttempt,
@@ -1350,7 +1351,8 @@ export class LoopService {
 
       return {
         ...state,
-        memoryCommits: [...state.memoryCommits, commit]
+        memoryCommits: [...state.memoryCommits, commit],
+        loopMemories: appendLoopMemory(state.loopMemories, loopId, input.summary, commit.createdAt)
       };
     });
 
@@ -3036,6 +3038,21 @@ function requireHumanRequest(state: LoopState, requestId: string): HumanRequest 
 
 function updateRun(runs: LoopRun[], runId: string, patch: Partial<LoopRun>): LoopRun[] {
   return runs.map((run) => (run.id === runId ? { ...run, ...patch } : run));
+}
+
+function appendLoopMemory(memories: LoopMemory[], loopId: string, line: string, updatedAt: string): LoopMemory[] {
+  const existing = memories.find((memory) => memory.loopId === loopId);
+  const updated = {
+    loopId,
+    content: `${existing?.content ?? ""}${line}\n`,
+    updatedAt
+  };
+
+  if (!existing) {
+    return [...memories, updated];
+  }
+
+  return memories.map((memory) => (memory.loopId === loopId ? updated : memory));
 }
 
 function updateWorkflowContext(
