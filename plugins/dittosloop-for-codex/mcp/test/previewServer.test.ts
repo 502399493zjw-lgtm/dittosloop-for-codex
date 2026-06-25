@@ -472,13 +472,13 @@ test("serves backend-rendered loop directory files api", async () => {
       expect.objectContaining({ path: "memory.md", kind: "memory", language: "markdown" }),
       expect.objectContaining({ path: "workflow.json", kind: "workflow", language: "json" }),
       expect.objectContaining({ path: "skill/dittosloop-for-codex-loop.md", kind: "skill", language: "markdown" }),
-      expect.objectContaining({ path: "tool-list.md", kind: "tools", language: "markdown" }),
       expect.objectContaining({ path: "contract.json", kind: "contract", language: "json" })
     ])
   );
   expect(files.find((file: { path: string }) => file.path === "memory.md").content).toContain("保留昨天的来源筛选规则。");
   expect(files.find((file: { path: string }) => file.path === "flow.js")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "agents.md")).toBeUndefined();
+  expect(files.find((file: { path: string }) => file.path === "tool-list.md")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "session.json")).toBeUndefined();
 });
 

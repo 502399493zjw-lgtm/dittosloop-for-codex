@@ -1,4 +1,4 @@
-import type { FormalLoopContract, Step } from "./contract/types.js";
+import type { FormalLoopContract } from "./contract/types.js";
 import type { LoopContract, LoopRun, LoopState, LoopWorkspaceFile, VerificationResult } from "./types.js";
 
 export function loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorkspaceFile[] {
@@ -39,11 +39,10 @@ function sortLoopWorkspaceFiles(files: LoopWorkspaceFile[]): LoopWorkspaceFile[]
   const rootOrder = new Map([
     ["memory.md", 0],
     ["workflow.json", 1],
-    ["tool-list.md", 2],
-    ["rubrics.md", 3],
-    ["status.json", 4],
-    ["runs.json", 5],
-    ["contract.json", 6]
+    ["rubrics.md", 2],
+    ["status.json", 3],
+    ["runs.json", 4],
+    ["contract.json", 5]
   ]);
 
   return [...files].sort((left, right) => {
@@ -80,7 +79,6 @@ function formalLoopDirectoryFiles(input: {
   loopRuns: LoopRun[];
   loopState?: LoopState["loopStates"][number];
 }): LoopWorkspaceFile[] {
-  const agentSteps = flattenContractSteps(input.contract.body?.steps ?? []).filter(isAgentLikeStep);
   const latestRun = input.loopRuns.at(0);
   const latestAttempt = latestRun
     ? [...input.state.attempts].reverse().find((attempt) => attempt.runId === latestRun.id)
@@ -117,12 +115,6 @@ function formalLoopDirectoryFiles(input: {
       kind: "skill",
       language: "markdown",
       content: loopSkillFile(input.contract)
-    }),
-    withSize({
-      path: "tool-list.md",
-      kind: "tools",
-      language: "markdown",
-      content: toolListFile({ contract: input.contract, agentSteps })
     }),
     withSize({
       path: "rubrics.md",
@@ -231,51 +223,6 @@ function loopSkillFile(contract: FormalLoopContract): string {
   ].join("\n");
 }
 
-function toolListFile(input: { contract: FormalLoopContract; agentSteps: Array<Extract<Step, { kind: "agent" | "task" }>> }): string {
-  const declaredTools = new Set<string>();
-  for (const step of input.agentSteps) {
-    for (const tool of step.subagent?.tools ?? []) {
-      declaredTools.add(tool);
-    }
-  }
-
-  const runtimeTools = [
-    "start_codex_session",
-    "execute_workflow_attempt",
-    "record_session_result",
-    "record_verification",
-    "get_run_detail"
-  ];
-
-  return [
-    `# ${input.contract.title} tool list`,
-    "",
-    "## DittosLoop runtime",
-    "",
-    ...runtimeTools.map((tool) => `- ${tool}`),
-    "",
-    "## Workflow agents",
-    "",
-    ...input.agentSteps.flatMap((step) => {
-      const subagent = step.subagent;
-      return [
-        `### ${step.label}`,
-        "",
-        `- id: \`${step.id}\``,
-        `- role: \`${subagent?.role ?? step.id}\``,
-        `- tools: ${(subagent?.tools ?? []).length > 0 ? subagent?.tools?.map((tool) => `\`${tool}\``).join(", ") : "未声明"}`,
-        `- filesystem: \`${subagent?.permissions?.filesystem ?? "workspace-write"}\``,
-        `- network: \`${subagent?.permissions?.network ?? "enabled"}\``,
-        ""
-      ];
-    }),
-    "## Declared tool names",
-    "",
-    declaredTools.size > 0 ? [...declaredTools].sort().map((tool) => `- ${tool}`).join("\n") : "- 未声明",
-    ""
-  ].join("\n");
-}
-
 function contractFile(input: {
   state: LoopState;
   loop: LoopContract;
@@ -314,21 +261,6 @@ function rubricStatusByLabel(verification: VerificationResult | undefined): Map<
     }
   }
   return statuses;
-}
-
-function flattenContractSteps(steps: Step[]): Step[] {
-  const result: Step[] = [];
-  for (const step of steps) {
-    result.push(step);
-    if (step.kind === "phase" || step.kind === "parallel") {
-      result.push(...flattenContractSteps(step.children));
-    }
-  }
-  return result;
-}
-
-function isAgentLikeStep(step: Step): step is Extract<Step, { kind: "agent" | "task" }> {
-  return step.kind === "agent" || step.kind === "task";
 }
 
 function statusText(status: string): string {

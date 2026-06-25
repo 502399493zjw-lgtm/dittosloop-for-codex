@@ -464,7 +464,6 @@ test("renders loop directory files from stored loop state", async () => {
   expect(files.map((file) => file.path)).toEqual([
     "memory.md",
     "workflow.json",
-    "tool-list.md",
     "rubrics.md",
     "status.json",
     "contract.json",
@@ -473,10 +472,10 @@ test("renders loop directory files from stored loop state", async () => {
   expect(files.every((file) => file.size === Buffer.byteLength(file.content, "utf8"))).toBe(true);
   expect(files.find((file) => file.path === "flow.js")).toBeUndefined();
   expect(files.find((file) => file.path === "agents.md")).toBeUndefined();
+  expect(files.find((file) => file.path === "tool-list.md")).toBeUndefined();
   expect(files.find((file) => file.path === "session.json")).toBeUndefined();
   expect(files.find((file) => file.path === "memory.md")?.content).toContain("保留昨天的来源筛选规则。");
   expect(files.find((file) => file.path === "skill/dittosloop-for-codex-loop.md")?.content).toContain("dittosloop-for-codex:loop");
-  expect(files.find((file) => file.path === "tool-list.md")?.content).toContain("web.run");
   expect(files.find((file) => file.path === "status.json")?.content).toContain("\"latestRun\"");
   expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
   expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("包含来源");
