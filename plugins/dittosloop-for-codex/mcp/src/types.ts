@@ -167,18 +167,7 @@ export interface ArtifactRef {
 
 export interface LoopWorkspaceFile {
   path: string;
-  kind:
-    | "flow"
-    | "memory"
-    | "status"
-    | "contract"
-    | "workflow"
-    | "agents"
-    | "rubrics"
-    | "runs"
-    | "run"
-    | "evolution"
-    | "session";
+  kind: "memory" | "contract" | "workflow" | "skill" | "tools" | "rubrics" | "status" | "runs";
   language: "javascript" | "markdown" | "json";
   content: string;
   size: number;

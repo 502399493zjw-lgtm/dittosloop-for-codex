@@ -152,7 +152,12 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("agent-avatar");
   expect(app).toContain("待 Codex App 创建");
   expect(app).toContain("threadId");
-  expect(app).toContain("Codex 会话");
+  expect(app).toContain("Codex worker 会话");
+  expect(app).toContain("codexSessionRequestAgents");
+  expect(app).toContain("codexWorkflowPlanAgents");
+  expect(app).toContain("工作流计划");
+  expect(app).toContain("hasWorkflowTimeline");
+  expect(app).toContain("phaseDone");
   expect(app).toContain("timelineSectionAgents");
   expect(app).toContain("workflowTimelinePhases");
   expect(app).toContain("mergePhaseTimelineStatus");
@@ -162,7 +167,15 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("session?.threadUrl");
   expect(app).toContain("timelineSectionStatus");
   expect(app).toContain("工作流阶段");
+  expect(app).toContain("workflowOnlyMode");
+  expect(app).toContain("workflowDisplayPhases");
+  expect(app).toContain("shouldShowTimelineSectionAsPhase");
+  expect(app).toContain("isWorkflowRuntimeSection");
+  expect(app).toContain("phaseStatusDot");
+  expect(app).not.toContain("name: section.title");
   expect(app).toContain("renderWorkflowRuntimePanel");
+  expect(app).toContain("renderWorkflowRuntimePanel(detail, isDebugMode())");
+  expect(app).toContain("function isDebugMode()");
   expect(app).toContain("detail.workflowContexts ?? []");
   expect(app).toContain("detail.workflowRevisions ?? []");
   expect(app).toContain("workflow-revisions");
@@ -359,15 +372,17 @@ test("serves backend-rendered loop directory files api", async () => {
   expect(response.status).toBe(200);
   expect(files).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ path: "flow.js", kind: "flow", language: "javascript" }),
       expect.objectContaining({ path: "memory.md", kind: "memory", language: "markdown" }),
+      expect.objectContaining({ path: "workflow.json", kind: "workflow", language: "json" }),
+      expect.objectContaining({ path: "skill/dittosloop-for-codex-loop.md", kind: "skill", language: "markdown" }),
+      expect.objectContaining({ path: "tool-list.md", kind: "tools", language: "markdown" }),
       expect.objectContaining({ path: "contract.json", kind: "contract", language: "json" })
     ])
   );
   expect(files.find((file: { path: string }) => file.path === "memory.md").content).toContain("保留昨天的来源筛选规则。");
-  const sessionFile = files.find((file: { path: string }) => file.path === "codex/session.json");
-  expect(sessionFile.content).toContain(`/api/runs/${run.id}/codex-thread`);
-  expect(sessionFile.content).toContain("record_codex_thread");
+  expect(files.find((file: { path: string }) => file.path === "flow.js")).toBeUndefined();
+  expect(files.find((file: { path: string }) => file.path === "agents.md")).toBeUndefined();
+  expect(files.find((file: { path: string }) => file.path === "session.json")).toBeUndefined();
 });
 
 test("creates a host-mediated new loop codex session request", async () => {

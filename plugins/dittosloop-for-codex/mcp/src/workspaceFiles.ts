@@ -1,17 +1,5 @@
 import type { FormalLoopContract, Step } from "./contract/types.js";
-import {
-  deriveLoopOperationalState,
-  loopRunRecordStatus,
-  runsForLoopChronological
-} from "./loopOperationalState.js";
 import type { LoopContract, LoopRun, LoopState, LoopWorkspaceFile, VerificationResult } from "./types.js";
-
-type DirectoryEngineEvent = Record<string, unknown> & {
-  type?: string;
-  sequence?: number;
-  stepId?: string;
-  nodeId?: string;
-};
 
 export function loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorkspaceFile[] {
   const loop = state.loops.find((candidate) => candidate.id === loopId);
@@ -20,61 +8,53 @@ export function loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorksp
   }
 
   const loopRuns = runsForLoop(state, loopId);
-  const chronologicalRuns = runsForLoopChronological(state.runs, loopId);
   const formalContract = state.formalContracts.find((contract) => contract.id === loopId);
   const workflowFiles = formalContract
     ? formalLoopDirectoryFiles({ contract: formalContract, state, loopRuns })
     : [];
-  const latestRun = loopRuns.at(0);
 
-  return [
-    withSize({
-      path: "flow.js",
-      kind: "flow",
-      language: "javascript",
-      content: formalContract ? formalWorkflowFlowFile(formalContract) : compatibilityFlowFile(loop)
-    }),
+  return sortLoopWorkspaceFiles([
     withSize({
       path: "memory.md",
       kind: "memory",
       language: "markdown",
       content: memoryFile({ state, loop })
     }),
-    jsonFile("status.json", "status", loopStatusFile({ state, loop, loopRuns: chronologicalRuns })),
     ...workflowFiles,
-    jsonFile("runs/index.json", "runs", runsIndexFile({ state, loop, loopRuns: chronologicalRuns })),
-    ...chronologicalRuns.flatMap((run, index) => runDirectoryFiles({ state, run, runIndex: index + 1 })),
-    jsonFile("evolution/revisions.json", "evolution", revisionsFile({ state, loop, formalContract })),
-    jsonFile("evolution/memory-commits.json", "evolution", memoryCommitsFile({ state, loop })),
     withSize({
       path: "contract.json",
       kind: "contract",
       language: "json",
       content: contractFile({ state, loop, formalContract, loopRuns })
-    }),
-    withSize({
-      path: "codex/session.json",
-      kind: "session",
-      language: "json",
-      content: sessionFile({ loop, latestRun })
     })
-  ];
+  ]);
 }
 
 function withSize(file: Omit<LoopWorkspaceFile, "size">): LoopWorkspaceFile {
   return { ...file, size: Buffer.byteLength(file.content, "utf8") };
 }
 
-function jsonFile(
-  path: string,
-  kind: Extract<LoopWorkspaceFile["kind"], "status" | "runs" | "run" | "evolution" | "workflow">,
-  value: unknown
-): LoopWorkspaceFile {
-  return withSize({
-    path,
-    kind,
-    language: "json",
-    content: `${JSON.stringify(value, null, 2)}\n`
+function sortLoopWorkspaceFiles(files: LoopWorkspaceFile[]): LoopWorkspaceFile[] {
+  const rootOrder = new Map([
+    ["memory.md", 0],
+    ["workflow.json", 1],
+    ["tool-list.md", 2],
+    ["rubrics.md", 3],
+    ["status.json", 4],
+    ["runs.json", 5],
+    ["contract.json", 6]
+  ]);
+
+  return [...files].sort((left, right) => {
+    const leftIsSkill = left.path.startsWith("skill/");
+    const rightIsSkill = right.path.startsWith("skill/");
+    if (leftIsSkill !== rightIsSkill) return leftIsSkill ? 1 : -1;
+
+    const leftRank = rootOrder.get(left.path) ?? 100;
+    const rightRank = rootOrder.get(right.path) ?? 100;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+
+    return left.path.localeCompare(right.path);
   });
 }
 
@@ -84,113 +64,29 @@ function runsForLoop(state: LoopState, loopId: string): LoopRun[] {
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 }
 
-function compatibilityFlowFile(loop: LoopContract): string {
+function memoryFile(input: { state: LoopState; loop: LoopContract }): string {
+  const commits = input.state.memoryCommits
+    .filter((commit) => commit.loopId === input.loop.id)
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+
+  if (commits.length === 0) {
+    return [`# ${input.loop.title}`, "", input.loop.intent, "", "## Memory commits", "暂无记忆。", ""].join("\n");
+  }
+
   return [
-    `export const loop = ${JSON.stringify(loop.title)};`,
+    `# ${input.loop.title}`,
     "",
-    "export async function run(context) {",
-    "  const launch = await context.dittosloop.startCodexSession({",
-    "    loopId: context.loop.id,",
-    "    project: context.project,",
-    "    prompt: context.userPrompt",
-    "  });",
+    input.loop.intent,
     "",
-    "  const thread = await context.codexApp.createThread(launch.launchRequest);",
-    "  await context.dittosloop.recordCodexThread({ runId: launch.run.id, ...thread });",
-    "  return thread;",
-    "}",
+    "## Memory commits",
+    ...commits.map((commit) =>
+      [
+        `- ${commit.createdAt}: ${commit.summary}`,
+        commit.runId ? `  - run: ${commit.runId}` : null
+      ].filter(Boolean).join("\n")
+    ),
     ""
   ].join("\n");
-}
-
-function formalWorkflowFlowFile(contract: FormalLoopContract): string {
-  const lines = [
-    `export const loop = ${JSON.stringify(contract.title)};`,
-    `export const workflowContractId = ${JSON.stringify(contract.id)};`,
-    `export const goal = ${JSON.stringify(contract.goal)};`,
-    `export const rubrics = ${JSON.stringify(contract.verification?.rubrics ?? [], null, 2)};`,
-    "",
-    "export async function run(context) {",
-    "  const results = [];",
-    ...workflowStepLines(contract.body?.steps ?? [], "  "),
-    "  const verification = await verifyRubrics(context, results);",
-    "  return { results, verification };",
-    "}",
-    "",
-    "async function runPhase(context, label, body) {",
-    "  await context.dittosloop.phaseStarted(label);",
-    "  const result = await body();",
-    "  await context.dittosloop.phaseCompleted(label);",
-    "  return result;",
-    "}",
-    "",
-    "async function runParallel(context, label, tasks) {",
-    "  await context.dittosloop.parallelStarted(label);",
-    "  return Promise.all(tasks.map((task) => task()));",
-    "}",
-    "",
-    "async function runAgent(context, results, step) {",
-    "  const result = await context.codexSession.runAgent(step);",
-    "  results.push({ stepId: step.id, label: step.label, result });",
-    "  await context.dittosloop.agentCompleted(step.id, result);",
-    "  return result;",
-    "}",
-    "",
-    "async function verifyRubrics(context, results) {",
-    "  return context.verifier.check({ results, rubrics });",
-    "}",
-    ""
-  ];
-  return lines.join("\n");
-}
-
-function workflowStepLines(steps: Step[], indent: string): string[] {
-  return steps.flatMap((step) => workflowStepLine(step, indent));
-}
-
-function workflowStepLine(step: Step, indent: string): string[] {
-  if (step.kind === "phase") {
-    return [
-      `${indent}await runPhase(context, ${JSON.stringify(step.label)}, async () => {`,
-      ...workflowStepLines(step.children ?? [], `${indent}  `),
-      `${indent}});`
-    ];
-  }
-
-  if (step.kind === "parallel") {
-    return [
-      `${indent}await runParallel(context, ${JSON.stringify(step.label)}, [`,
-      ...(step.children ?? []).flatMap((child) => [
-        `${indent}  async () => {`,
-        ...workflowStepLine(child, `${indent}    `),
-        `${indent}  },`
-      ]),
-      `${indent}]);`
-    ];
-  }
-
-  return [
-    `${indent}await runAgent(context, results, ${JSON.stringify(
-      {
-        id: step.id,
-        label: step.label,
-        prompt: step.prompt ?? "",
-        verifierRef: step.verifierRef,
-        sessionPolicy: step.sessionPolicy
-      },
-      null,
-      2
-    ).replaceAll("\n", `\n${indent}`)});`
-  ];
-}
-
-function memoryFile(input: { state: LoopState; loop: LoopContract }): string {
-  const memory = input.state.loopMemories.find((candidate) => candidate.loopId === input.loop.id);
-  if (memory?.content) {
-    return memory.content;
-  }
-
-  return "# memory\n\n暂无记忆。\n";
 }
 
 function formalLoopDirectoryFiles(input: {
@@ -198,19 +94,18 @@ function formalLoopDirectoryFiles(input: {
   state: LoopState;
   loopRuns: LoopRun[];
 }): LoopWorkspaceFile[] {
-  const agentSteps = flattenContractSteps(input.contract.body?.steps ?? []).filter((step) => step.kind === "agent" || step.kind === "task");
+  const agentSteps = flattenContractSteps(input.contract.body?.steps ?? []).filter(isAgentLikeStep);
   const latestRun = input.loopRuns.at(0);
   const latestAttempt = latestRun
     ? [...input.state.attempts].reverse().find((attempt) => attempt.runId === latestRun.id)
     : null;
   const latestVerification = latestRun ? latestVerificationForRun(input.state, latestRun.id) : undefined;
-  const engineEvents = latestRun ? engineEventsForRun(input.state, latestRun.id) : [];
-  const agentStatuses = agentStatusByStepId(engineEvents);
   const rubricStatuses = rubricStatusByLabel(latestVerification);
+  const taskRuns = latestRun?.codexSession?.subagents ?? [];
 
   return [
     withSize({
-      path: "workflow/workflow.json",
+      path: "workflow.json",
       kind: "workflow",
       language: "json",
       content: `${JSON.stringify(
@@ -225,8 +120,6 @@ function formalLoopDirectoryFiles(input: {
           body: input.contract.body,
           repairPolicy: input.contract.repairPolicy,
           stopPolicy: input.contract.stopPolicy,
-          budgetUsd: input.contract.budgetUsd,
-          escalation: input.contract.escalation,
           projectBinding: input.contract.projectBinding
         },
         null,
@@ -234,26 +127,19 @@ function formalLoopDirectoryFiles(input: {
       )}\n`
     }),
     withSize({
-      path: "workflow/agents.md",
-      kind: "agents",
+      path: "skill/dittosloop-for-codex-loop.md",
+      kind: "skill",
       language: "markdown",
-      content: [
-        `# ${input.contract.title} agents`,
-        "",
-        ...agentSteps.flatMap((step, index) => [
-          `## ${index + 1}. ${step.label}`,
-          "",
-          `- id: \`${step.id}\``,
-          `- kind: \`${step.kind}\``,
-          `- status: ${statusText(agentStatuses.get(step.id) ?? "not-run")}`,
-          "",
-          step.prompt,
-          ""
-        ])
-      ].join("\n")
+      content: loopSkillFile(input.contract)
     }),
     withSize({
-      path: "workflow/rubrics.md",
+      path: "tool-list.md",
+      kind: "tools",
+      language: "markdown",
+      content: toolListFile({ contract: input.contract, agentSteps })
+    }),
+    withSize({
+      path: "rubrics.md",
       kind: "rubrics",
       language: "markdown",
       content: [
@@ -274,140 +160,122 @@ function formalLoopDirectoryFiles(input: {
           ].filter(Boolean)
         )
       ].join("\n")
-    })
-  ];
-}
-
-function loopStatusFile(input: { state: LoopState; loop: LoopContract; loopRuns: LoopRun[] }) {
-  return input.state.loopStates.find((state) => state.loopId === input.loop.id)
-    ?? deriveLoopOperationalState({
-      loop: input.loop,
-      runs: input.loopRuns
-    });
-}
-
-function runsIndexFile(input: { state: LoopState; loop: LoopContract; loopRuns: LoopRun[] }) {
-  const latestRun = input.loopRuns.at(-1);
-  const latestAttempt = latestRun
-    ? [...input.state.attempts].reverse().find((attempt) => attempt.runId === latestRun.id)
-    : undefined;
-  const latestVerification = latestRun ? latestVerificationForRun(input.state, latestRun.id) : undefined;
-
-  return {
-    loopId: input.loop.id,
-    latestRunId: latestRun?.id ?? null,
-    latestRunStatus: latestRun ? loopRunRecordStatus(latestRun.status) : null,
-    latestAttemptId: latestAttempt?.id ?? null,
-    latestAttemptStatus: latestAttempt?.status ?? null,
-    latestVerificationStatus: latestVerification?.status ?? null,
-    runs: input.loopRuns.map((run, index) => ({
-      id: run.id,
-      status: loopRunRecordStatus(run.status),
-      pausedReason: run.pausedReason,
-      index: index + 1,
-      goal: run.goal,
-      trigger: {
-        kind: run.trigger
-      },
-      startedAt: run.createdAt,
-      updatedAt: run.updatedAt,
-      completedAt: run.completedAt,
-      codexSessionStatus: run.codexSession?.status ?? null
-    }))
-  };
-}
-
-function runDirectoryFiles(input: { state: LoopState; run: LoopRun; runIndex: number }): LoopWorkspaceFile[] {
-  const attempts = input.state.attempts.filter((attempt) => attempt.runId === input.run.id);
-  const events = input.state.events.filter((event) => event.runId === input.run.id);
-  const verification = input.state.verificationResults.filter((result) => result.runId === input.run.id);
-  const humanRequests = input.state.humanRequests.filter((request) => request.runId === input.run.id);
-  const basePath = `runs/${input.run.id}`;
-
-  return [
-    jsonFile(`${basePath}/status.json`, "run", {
-      id: input.run.id,
-      loopId: input.run.loopId,
-      status: loopRunRecordStatus(input.run.status),
-      pausedReason: input.run.pausedReason,
-      index: input.runIndex,
-      codexRunStatus: input.run.status,
-      trigger: {
-        kind: input.run.trigger
-      },
-      goal: input.run.goal,
-      sessionId: input.run.codexSession?.threadId ?? input.run.codexSession?.subagents?.[0]?.sessionId ?? null,
-      startedAt: input.run.createdAt,
-      updatedAt: input.run.updatedAt,
-      completedAt: input.run.completedAt,
-      result: null
-    }),
-    jsonFile(`${basePath}/attempts.json`, "run", {
-      runId: input.run.id,
-      attempts: attempts.map((attempt, index) => ({
-        ...attempt,
-        attemptIndex: index + 1,
-        sessionId: input.run.codexSession?.threadId ?? null
-      }))
     }),
     withSize({
-      path: `${basePath}/events.ndjson`,
-      kind: "run",
+      path: "status.json",
+      kind: "status",
       language: "json",
-      content: events.map((event) => JSON.stringify(event)).join("\n") + (events.length > 0 ? "\n" : "")
-    }),
-    jsonFile(`${basePath}/verification.json`, "run", {
-      runId: input.run.id,
-      verification
-    }),
-    jsonFile(`${basePath}/human-requests.json`, "run", {
-      runId: input.run.id,
-      humanRequests
-    }),
-    jsonFile(`${basePath}/codex-session.json`, "run", {
-      runId: input.run.id,
-      codexSession: input.run.codexSession ?? null
+      content: `${JSON.stringify(
+        {
+          workflow: {
+            totalTasks: taskRuns.length,
+            completedTasks: taskRuns.filter((task) => task.status === "completed").length,
+            runningTasks: taskRuns.filter((task) => task.status === "running" || task.status === "requested").length,
+            failedTasks: taskRuns.filter((task) => task.status === "failed").length,
+            tasks: taskRuns
+          },
+          latestRun: latestRun
+            ? {
+                id: latestRun.id,
+                status: latestRun.status,
+                goal: latestRun.goal,
+                createdAt: latestRun.createdAt,
+                completedAt: latestRun.completedAt
+              }
+            : null,
+          latestAttempt: latestAttempt
+            ? {
+                id: latestAttempt.id,
+                status: latestAttempt.status,
+                summary: latestAttempt.summary,
+                createdAt: latestAttempt.createdAt,
+                completedAt: latestAttempt.completedAt
+              }
+            : null,
+          latestVerification: latestVerification
+            ? {
+                id: latestVerification.id,
+                status: latestVerification.status,
+                summary: latestVerification.summary,
+                checks: latestVerification.checks ?? [],
+                createdAt: latestVerification.createdAt
+              }
+            : null,
+          runs: input.loopRuns.map((run) => ({
+            id: run.id,
+            status: run.status,
+            goal: run.goal,
+            createdAt: run.createdAt,
+            completedAt: run.completedAt
+          }))
+        },
+        null,
+        2
+      )}\n`
     })
   ];
 }
 
-function revisionsFile(input: { state: LoopState; loop: LoopContract; formalContract?: FormalLoopContract }) {
-  const revisions = input.state.workflowRevisions.filter((revision) => revision.loopId === input.loop.id);
-  const promoted = [...revisions].reverse().find((revision) => revision.status === "promoted");
-
-  return {
-    loopId: input.loop.id,
-    activeRevisionId: promoted?.id ?? null,
-    activeContractUpdatedAt: input.formalContract?.updatedAt ?? input.loop.updatedAt,
-    revisions: revisions.map((revision) => ({
-      id: revision.id,
-      loopId: revision.loopId,
-      runId: revision.runId,
-      attemptId: revision.attemptId,
-      authorSessionId: revision.authorSessionId,
-      authorThreadId: revision.authorThreadId,
-      baseRevisionId: revision.baseRevisionId,
-      status: revision.status,
-      reason: revision.reason,
-      createdAt: revision.createdAt,
-      promotedAt: revision.promotedAt,
-      rejectedAt: revision.rejectedAt,
-      rejectionReason: revision.rejectionReason,
-      contract: revision.contract
-    }))
-  };
+function loopSkillFile(contract: FormalLoopContract): string {
+  return [
+    "# dittosloop-for-codex:loop",
+    "",
+    `Loop: ${contract.title}`,
+    "",
+    "这个 loop 使用 DittosLoop For Codex 的 loop skill 来创建正式 contract、启动可见 Codex worker session、执行 workflow、写回结果，并按 rubrics 做最终验证。",
+    "",
+    "## Runtime role",
+    "",
+    "- Codex worker session 本身承担 orchestrator。",
+    "- workflow body 只描述真正被调度的 specialist/editor/checker agents。",
+    "- verifier/rubrics 属于外部最终验证，不作为普通 agent 文件夹层级展示。",
+    ""
+  ].join("\n");
 }
 
-function memoryCommitsFile(input: { state: LoopState; loop: LoopContract }) {
-  const commits = input.state.memoryCommits
-    .filter((commit) => commit.loopId === input.loop.id)
-    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+function toolListFile(input: { contract: FormalLoopContract; agentSteps: Array<Extract<Step, { kind: "agent" | "task" }>> }): string {
+  const declaredTools = new Set<string>();
+  for (const step of input.agentSteps) {
+    for (const tool of step.subagent?.tools ?? []) {
+      declaredTools.add(tool);
+    }
+  }
 
-  return {
-    loopId: input.loop.id,
-    latestCommitId: commits.at(-1)?.id ?? null,
-    commits
-  };
+  const runtimeTools = [
+    "start_codex_session",
+    "execute_workflow_attempt",
+    "record_session_result",
+    "record_verification",
+    "get_run_detail"
+  ];
+
+  return [
+    `# ${input.contract.title} tool list`,
+    "",
+    "## DittosLoop runtime",
+    "",
+    ...runtimeTools.map((tool) => `- ${tool}`),
+    "",
+    "## Workflow agents",
+    "",
+    ...input.agentSteps.flatMap((step) => {
+      const subagent = step.subagent;
+      return [
+        `### ${step.label}`,
+        "",
+        `- id: \`${step.id}\``,
+        `- role: \`${subagent?.role ?? step.id}\``,
+        `- tools: ${(subagent?.tools ?? []).length > 0 ? subagent?.tools?.map((tool) => `\`${tool}\``).join(", ") : "未声明"}`,
+        `- filesystem: \`${subagent?.permissions?.filesystem ?? "workspace-write"}\``,
+        `- network: \`${subagent?.permissions?.network ?? "enabled"}\``,
+        ""
+      ];
+    }),
+    "## Declared tool names",
+    "",
+    declaredTools.size > 0 ? [...declaredTools].sort().map((tool) => `- ${tool}`).join("\n") : "- 未声明",
+    ""
+  ].join("\n");
 }
 
 function contractFile(input: {
@@ -428,50 +296,7 @@ function contractFile(input: {
       verificationResults: input.state.verificationResults.filter((result) => runIds.has(result.runId)),
       humanRequests: input.state.humanRequests.filter((request) => runIds.has(request.runId)),
       memoryCommits: input.state.memoryCommits.filter((commit) => commit.loopId === input.loop.id),
-      memory: input.state.loopMemories.find((memory) => memory.loopId === input.loop.id) ?? null,
       artifacts: input.state.artifacts.filter((artifact) => runIds.has(artifact.runId))
-    },
-    null,
-    2
-  )}\n`;
-}
-
-function sessionFile(input: { loop: LoopContract; latestRun?: LoopRun }): string {
-  return `${JSON.stringify(
-    {
-      launch: "host-mediated-new-codex-session",
-      projectBinding: {
-        mode: "select-codex-project",
-        codexProjectId: input.latestRun?.codexProjectId ?? input.loop.codexProjectId ?? null,
-        projectLabel: input.latestRun?.projectLabel ?? input.loop.projectLabel ?? null,
-        projectPath: input.latestRun?.projectPath ?? input.loop.projectPath ?? null
-      },
-      execution: {
-        host: "codex-app",
-        worker: "new-codex-session"
-      },
-      launchRequest: input.latestRun?.codexSession
-        ? {
-            runId: input.latestRun.id,
-            loopId: input.latestRun.loopId,
-            title: `DittosLoop: ${input.loop.title}`,
-            prompt: input.latestRun.codexSession.prompt,
-            status: input.latestRun.codexSession.status,
-            threadId: input.latestRun.codexSession.threadId,
-            threadTitle: input.latestRun.codexSession.threadTitle,
-            threadUrl: input.latestRun.codexSession.threadUrl
-          }
-        : null,
-      hostWriteback: {
-        required: true,
-        api: input.latestRun ? `/api/runs/${input.latestRun.id}/codex-thread` : "/api/runs/{runId}/codex-thread",
-        mcpTool: "record_codex_thread",
-        fields: ["threadId", "threadTitle", "threadUrl"]
-      },
-      userPromptInjection: {
-        timing: ["session-start", "context-compaction"],
-        source: ["loopable.md", "loop memory", "latest user confirmation"]
-      }
     },
     null,
     2
@@ -480,32 +305,6 @@ function sessionFile(input: { loop: LoopContract; latestRun?: LoopRun }): string
 
 function latestVerificationForRun(state: LoopState, runId: string): VerificationResult | undefined {
   return [...state.verificationResults].reverse().find((result) => result.runId === runId);
-}
-
-function engineEventsForRun(state: LoopState, runId: string): DirectoryEngineEvent[] {
-  return state.events
-    .filter((event) => event.runId === runId)
-    .map((event) => event.data?.engineEvent)
-    .filter(isRecord)
-    .sort((left, right) => (numberValue(left.sequence) ?? 0) - (numberValue(right.sequence) ?? 0));
-}
-
-function agentStatusByStepId(engineEvents: DirectoryEngineEvent[]): Map<string, string> {
-  const statuses = new Map<string, string>();
-  for (const event of engineEvents) {
-    const stepId = stringValue(event.stepId) ?? stringValue(event.nodeId);
-    if (!stepId) continue;
-    if (event.type === "agent_started") {
-      statuses.set(stepId, "running");
-    }
-    if (event.type === "agent_done") {
-      statuses.set(stepId, "completed");
-    }
-    if (event.type === "agent_failed") {
-      statuses.set(stepId, "failed");
-    }
-  }
-  return statuses;
 }
 
 function rubricStatusByLabel(verification: VerificationResult | undefined): Map<string, string> {
@@ -530,16 +329,8 @@ function flattenContractSteps(steps: Step[]): Step[] {
   return result;
 }
 
-function isRecord(value: unknown): value is DirectoryEngineEvent {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function numberValue(value: unknown): number | undefined {
-  return typeof value === "number" ? value : undefined;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+function isAgentLikeStep(step: Step): step is Extract<Step, { kind: "agent" | "task" }> {
+  return step.kind === "agent" || step.kind === "task";
 }
 
 function statusText(status: string): string {

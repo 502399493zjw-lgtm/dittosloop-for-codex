@@ -18,7 +18,7 @@ let selectedLoopId = null;
 let selectedRunId = null;
 let currentSnapshot = null;
 let activeLoopTab = "history";
-let selectedDirectoryPath = "flow.js";
+let selectedDirectoryPath = "memory.md";
 const loopFilesById = new Map();
 const loopFilesLoading = new Set();
 const loopFilesErrors = new Map();
@@ -524,7 +524,7 @@ function renderLoopDirectory({ loop, loopRuns }) {
   }
 
   const selected = files.find((file) => file.path === selectedDirectoryPath) ?? files[0];
-  selectedDirectoryPath = selected?.path ?? "flow.js";
+  selectedDirectoryPath = selected?.path ?? "memory.md";
 
   return el("section", "directory-browser", [
     renderDirectoryFileList({ files, selectedPath: selected?.path }),
@@ -543,21 +543,48 @@ function renderLoopDirectory({ loop, loopRuns }) {
 }
 
 function renderDirectoryFileList({ files, selectedPath }) {
+  const folders = new Map();
+  const renderedFolders = new Set();
+  for (const file of files) {
+    const [folder, name] = file.path.split("/");
+    if (!name) continue;
+    if (!folders.has(folder)) folders.set(folder, []);
+    folders.get(folder).push({ ...file, displayName: name });
+  }
+
+  const renderFileButton = (file, extraClass = "", displayName = file.path) =>
+    button(`directory-file ${extraClass} ${file.path === selectedPath ? "active" : ""}`, () => {
+      selectedDirectoryPath = file.path;
+      renderLoopStage({ snapshot: currentSnapshot });
+    }, [
+      inlineIcon(file.language === "markdown" ? "fileText" : "fileCode"),
+      el("span", "directory-file-name", displayName),
+      el("span", "directory-file-meta", fileMeta(file))
+    ]);
+
   return el("aside", "directory-file-list", [
     el("div", "directory-file-root", [
       inlineIcon("folder"),
       el("span", "", "Live Loop")
     ]),
-    el("div", "directory-files", files.map((file) =>
-      button(`directory-file ${file.path === selectedPath ? "active" : ""}`, () => {
-        selectedDirectoryPath = file.path;
-        renderLoopStage({ snapshot: currentSnapshot });
-      }, [
-        inlineIcon(file.language === "markdown" ? "fileText" : "fileCode"),
-        el("span", "directory-file-name", file.path),
-        el("span", "directory-file-meta", fileMeta(file))
-      ])
-    ))
+    el("div", "directory-files", files.flatMap((file) => {
+      const [folder, name] = file.path.split("/");
+      if (!name) return [renderFileButton(file)];
+      if (renderedFolders.has(folder)) return [];
+      renderedFolders.add(folder);
+      const children = folders.get(folder) ?? [];
+      return [
+        el("div", "directory-folder-group", [
+          el("div", "directory-folder-row", [
+            inlineIcon("folder"),
+            el("span", "directory-file-name", folder)
+          ]),
+          el("div", "directory-folder-files", children.map((child) =>
+            renderFileButton(child, "nested", child.displayName)
+          ))
+        ])
+      ];
+    }))
   ]);
 }
 
@@ -620,7 +647,7 @@ function renderRunBoard({ detail, loop, loopRuns }) {
   }
   const activePhase = phases.find((phase) => phase.id === selectedRunPhaseId) ?? phases[0];
   const total = phases.length;
-  const done = phases.filter((phase) => phase.status !== "running" && phase.status !== "open").length;
+  const done = phases.filter((phase) => phaseDone(phase.status)).length;
 
   elements.loopStage.replaceChildren(...[
     el("div", "tab-strip run-tabs", [
@@ -669,7 +696,7 @@ function renderRunBoard({ detail, loop, loopRuns }) {
           el("p", "", activeHumanRequest.question)
         ])
       : null,
-    renderWorkflowRuntimePanel(detail),
+    renderWorkflowRuntimePanel(detail, isDebugMode()),
     el("section", "run-board-body", [
       el("aside", "phase-rail", [
         el("div", "phase-rail-title", "工作流阶段"),
@@ -678,7 +705,7 @@ function renderRunBoard({ detail, loop, loopRuns }) {
             selectedRunPhaseId = phase.id;
             renderRunBoard({ detail, loop, loopRuns });
           }, [
-            statusChip(phase.status),
+            phaseStatusDot(phase.status),
             el("span", "phase-copy", phase.name)
           ])
         )
@@ -693,7 +720,9 @@ function renderRunBoard({ detail, loop, loopRuns }) {
   ].filter(Boolean));
 }
 
-function renderWorkflowRuntimePanel(detail) {
+function renderWorkflowRuntimePanel(detail, showDebug) {
+  if (!showDebug) return null;
+
   const workflowContexts = detail.workflowContexts ?? [];
   const workflowRevisions = detail.workflowRevisions ?? [];
   if (!workflowContexts.length && !workflowRevisions.length) return null;
@@ -718,6 +747,10 @@ function renderWorkflowRuntimePanel(detail) {
         : null
     ])
   ]);
+}
+
+function isDebugMode() {
+  return new URLSearchParams(window.location.search).get("debug") === "1";
 }
 
 function renderWorkflowContextRow(context) {
@@ -782,9 +815,12 @@ function renderWorkflowRevisionRow(revision) {
 
 function buildRunPhases(detail) {
   const run = detail.run;
-  const sessionAgents = run.codexSession ? codexSessionPhaseAgents(run) : [];
+  const hasWorkflowTimeline = (detail.timeline ?? []).some((section) => section.id === "workflow");
+  const workflowOnlyMode = hasWorkflowTimeline;
+  const sessionAgents = !workflowOnlyMode && run.codexSession ? codexSessionRequestAgents(run) : [];
+  const workflowPlanAgents = run.codexSession && !hasWorkflowTimeline ? codexWorkflowPlanAgents(run) : [];
   const attemptAgents = detail.attempts
-    .filter(() => !run.codexSession)
+    .filter(() => !workflowOnlyMode && !run.codexSession)
     .map((attempt) => ({
     id: attempt.id,
     avatar: "流",
@@ -809,15 +845,26 @@ function buildRunPhases(detail) {
     phases.push({
       id: "attempts",
       name: "启动执行",
-      status: startAgents.some((agent) => agent.status === "running" || agent.status === "requested") ? "running" : "completed",
+      status: agentsStatus(startAgents, run.status),
       agents: startAgents
     });
   }
 
+  if (workflowPlanAgents.length) {
+    phases.push({
+      id: "workflow-plan",
+      name: "工作流计划",
+      status: agentsStatus(workflowPlanAgents, run.status),
+      agents: workflowPlanAgents
+    });
+  }
+
   for (const section of detail.timeline ?? []) {
-    const sectionPhases = section.id === "workflow"
-      ? workflowTimelinePhases(section, run.status)
-      : [timelineSectionPhase(section, run.status)].filter(Boolean);
+    const sectionPhases = isWorkflowRuntimeSection(section)
+      ? workflowDisplayPhases(section, run.status)
+      : shouldShowTimelineSectionAsPhase(section, workflowOnlyMode)
+        ? [timelineSectionPhase(section, run.status)].filter(Boolean)
+        : [];
     phases.push(...sectionPhases);
   }
 
@@ -842,42 +889,43 @@ function buildRunPhases(detail) {
   return phases;
 }
 
-function codexSessionPhaseAgents(run) {
-  const subagents = Array.isArray(run.codexSession?.subagents) ? run.codexSession.subagents : [];
-  if (subagents.length) {
-    return subagents.map((subagent, index) => ({
-      id: `${run.id}-session-subagent-${index}`,
-      avatar: subagent.role === "loop-runner" ? "主" : "代",
-      name: subagent.role,
-      status: subagent.status === "requested" && run.codexSession.status !== "requested"
-        ? run.codexSession.status
-        : subagent.status,
-      description: subagent.threadId
-        ? "点击查看这一步的实际运行结果。"
-        : "已纳入本次 Codex worker 的 workflow 计划。",
-      meta: subagent.threadTitle || formatSubagentMeta(subagent.subagent) || "workflow agent",
-      threadId: subagent.threadId ?? run.codexSession.threadId,
-      threadTitle: subagent.threadTitle ?? run.codexSession.threadTitle,
-      threadUrl: subagent.threadUrl ?? run.codexSession.threadUrl,
-      showSessionLink: subagent.threadUrl || run.codexSession.threadUrl ? undefined : false
-    }));
-  }
-
+function codexSessionRequestAgents(run) {
   return [
     {
       id: `${run.id}-current-session`,
-      avatar: "主",
-      name: "Codex 会话",
-      status: run.codexSession.status === "requested" ? run.status : run.codexSession.status,
+      avatar: "会",
+      name: "Codex worker 会话",
+      status: run.codexSession.threadId ? "completed" : run.codexSession.status,
       description: run.codexSession.threadId
-        ? "点击查看这次任务的实际运行结果。"
+        ? "已关联真实 Codex worker 会话，可打开查看运行结果。"
         : "等待 Codex App 创建任务会话。",
-      meta: "Codex session",
+      meta: "host-mediated session",
       threadId: run.codexSession.threadId,
       threadTitle: run.codexSession.threadTitle,
       threadUrl: run.codexSession.threadUrl
     }
   ];
+}
+
+function codexWorkflowPlanAgents(run) {
+  const subagents = Array.isArray(run.codexSession?.subagents) ? run.codexSession.subagents : [];
+  return subagents.map((subagent, index) => ({
+    id: `${run.id}-session-subagent-${index}`,
+    name: subagent.role,
+    status: subagent.status === "requested" && run.codexSession.status !== "requested"
+      ? run.codexSession.status
+      : subagent.status,
+    description: subagent.threadId
+      ? "点击查看这一步的实际运行结果。"
+      : "已纳入本次 Codex worker 的 workflow 计划，等待会话接管执行。",
+    meta: subagent.phaseId
+      ? `phase ${subagent.phaseId}`
+      : (subagent.threadTitle || formatSubagentMeta(subagent.subagent) || "workflow agent"),
+    threadId: subagent.threadId ?? run.codexSession.threadId,
+    threadTitle: subagent.threadTitle ?? run.codexSession.threadTitle,
+    threadUrl: subagent.threadUrl ?? run.codexSession.threadUrl,
+    showSessionLink: subagent.threadUrl || run.codexSession.threadUrl ? undefined : false
+  }));
 }
 
 function formatSubagentMeta(subagent) {
@@ -918,65 +966,113 @@ function timelineSectionPhase(section, fallbackStatus) {
   if (!agents.length) return null;
   return {
     id: section.id,
-    name: section.title,
+    name: timelineSectionLabel(section),
     status: timelineSectionStatus(section, fallbackStatus),
     agents
   };
+}
+
+function workflowDisplayPhases(section, fallbackStatus) {
+  return workflowTimelinePhases(section, fallbackStatus);
+}
+
+function shouldShowTimelineSectionAsPhase(section, workflowOnlyMode) {
+  if (isWorkflowRuntimeSection(section)) return false;
+  if (workflowOnlyMode) return section.id === "verification";
+  return true;
+}
+
+function isWorkflowRuntimeSection(section) {
+  return section.id === "workflow";
+}
+
+function timelineSectionLabel(section) {
+  if (section.id === "verification") return "验证";
+  if (section.id === "repair") return "修复";
+  if (section.id === "human") return "人工确认";
+  return section.title || section.id;
 }
 
 function workflowTimelinePhases(section, fallbackStatus) {
   const items = compactTimelineItems(section.items ?? []);
   const phaseOrder = [];
   const phaseMap = new Map();
-  const looseAgents = [];
-  let currentPhaseId = null;
 
   for (const item of items) {
-    if (item.kind === "phase" || item.kind === "parallel") {
-      const phaseId = workflowGroupId(item, phaseOrder.length);
-      const nextStatus = timelineStatus(item.status);
-      currentPhaseId = nextStatus === "completed" || nextStatus === "passed" || nextStatus === "failed" ? null : phaseId;
-      let phase = phaseMap.get(phaseId);
-      if (!phase) {
-        phase = {
-          id: `workflow-${phaseId}`,
-          name: item.label,
-          status: timelineStatus(item.status),
-          agents: []
-        };
-        phaseMap.set(phaseId, phase);
-        phaseOrder.push(phaseId);
-      } else {
-        phase.name = item.label || phase.name;
-        phase.status = mergePhaseTimelineStatus(phase.status, item.status);
-      }
-      continue;
-    }
-
     if (item.kind !== "agent") continue;
-    const agent = timelineItemAgent(section, item, phaseMap.size + looseAgents.length);
-    const phaseId = item.phaseId ?? currentPhaseId;
-    if (!phaseId || !phaseMap.has(phaseId)) {
-      looseAgents.push(agent);
-      continue;
+    const stage = workflowAgentStage(item, phaseMap.size);
+    let phase = phaseMap.get(stage.id);
+    if (!phase) {
+      phase = {
+        id: stage.id,
+        name: stage.name,
+        status: timelineStatus(item.status),
+        agents: []
+      };
+      phaseMap.set(stage.id, phase);
+      phaseOrder.push(stage.id);
+    } else {
+      phase.status = mergePhaseTimelineStatus(phase.status, item.status);
     }
-    phaseMap.get(phaseId).agents.push(agent);
+    phase.agents.push(timelineItemAgent(section, item, phase.agents.length));
   }
 
   const phases = phaseOrder
     .map((phaseId) => phaseMap.get(phaseId))
     .filter((phase) => phase.agents.length);
 
-  if (looseAgents.length) {
+  if (phases.length) {
+    return phases.map((phase) => ({
+      ...phase,
+      status: agentsStatus(phase.agents, phase.status)
+    }));
+  }
+
+  return workflowMarkerPhases(section, fallbackStatus);
+}
+
+function workflowAgentStage(item, fallbackIndex) {
+  const label = item.label ?? "";
+  const stepId = item.stepId ?? "";
+  const phaseId = item.phaseId ?? "";
+  const haystack = `${stepId} ${phaseId} ${label}`.toLowerCase();
+  if (haystack.includes("orchestr") || label.includes("编排") || label.includes("计划")) {
+    return { id: "workflow-orchestrate", name: "编排计划" };
+  }
+  if (haystack.includes("observer") || label.includes("观察")) {
+    return { id: "workflow-observe", name: "并行观察" };
+  }
+  if (haystack.includes("editor") || haystack.includes("writer") || label.includes("编辑") || label.includes("撰写") || label.includes("日报")) {
+    return { id: "workflow-edit", name: "产出编辑" };
+  }
+  if (haystack.includes("review") || haystack.includes("verify") || label.includes("核对") || label.includes("复核") || label.includes("验证")) {
+    return { id: "workflow-review", name: "核对验证" };
+  }
+  const idSeed = item.phaseId ?? item.stepId ?? label ?? `agent-${fallbackIndex}`;
+  return { id: `workflow-${slugifyId(idSeed)}`, name: label || "工作流执行" };
+}
+
+function workflowMarkerPhases(section, fallbackStatus) {
+  const phases = [];
+  const items = compactTimelineItems(section.items ?? []);
+
+  for (const item of items) {
+    if (item.kind !== "phase" && item.kind !== "parallel") continue;
+    const phaseId = workflowGroupId(item, phases.length);
     phases.push({
-      id: "workflow-agents",
-      name: section.title,
-      status: agentsStatus(looseAgents, fallbackStatus),
-      agents: looseAgents
+      id: `workflow-${phaseId}`,
+      name: item.label || "工作流阶段",
+      status: timelineStatus(item.status),
+      agents: [timelineItemAgent(section, item, phases.length)]
     });
   }
 
-  return phases;
+  return phases.length ? phases : [{
+    id: "workflow-runtime",
+    name: "工作流执行",
+    status: fallbackStatus,
+    agents: []
+  }];
 }
 
 function workflowGroupId(item, fallbackIndex) {
@@ -1029,6 +1125,10 @@ function agentsStatus(agents, fallbackStatus) {
   if (statuses.includes("failed")) return "failed";
   if (statuses.includes("repairing")) return "repairing";
   if (statuses.includes("running")) return "running";
+  if (statuses.includes("requested") || statuses.includes("open") || statuses.includes("suspended")) return "requested";
+  if (statuses.length && statuses.every((status) => ["completed", "passed", "skipped"].includes(status))) {
+    return statuses.includes("passed") ? "passed" : "completed";
+  }
   if (statuses.includes("passed")) return "passed";
   if (statuses.includes("completed")) return "completed";
   return fallbackStatus;
@@ -1090,7 +1190,7 @@ function buildCodexSessionTimelineAgents(detail) {
   if (engineEvents.length) {
     agents.push(...workflowAgentCards(detail));
   } else if (Array.isArray(run.codexSession.subagents) && run.codexSession.subagents.length) {
-    agents.push(...codexSessionPhaseAgents(run));
+    agents.push(...codexWorkflowPlanAgents(run));
   }
 
   const latestVerification = detail.verificationResults.at(-1);
@@ -1184,6 +1284,10 @@ function timelineStatus(status) {
     needs_human: "waiting_for_human"
   };
   return aliases[status] ?? status;
+}
+
+function phaseDone(status) {
+  return ["completed", "passed", "failed", "skipped"].includes(timelineStatus(status));
 }
 
 function renderAgentCard(agent) {
@@ -1350,6 +1454,13 @@ function statusText(status) {
 
 function statusChip(status) {
   return el("span", `status ${status}`, statusText(status));
+}
+
+function phaseStatusDot(status) {
+  const normalized = timelineStatus(status);
+  const dot = el("span", `phase-status-dot ${normalized}`, "");
+  dot.title = statusText(normalized);
+  return dot;
 }
 
 function formatClock(date) {
