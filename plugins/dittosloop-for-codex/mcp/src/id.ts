@@ -7,7 +7,9 @@ export type IdPrefix =
   | "human"
   | "memory"
   | "artifact"
-  | "workflow";
+  | "revision"
+  | "workflow"
+  | "task";
 
 export function createId(prefix: IdPrefix): string {
   const timestamp = Date.now().toString(36);

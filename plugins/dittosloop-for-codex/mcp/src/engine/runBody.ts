@@ -12,8 +12,8 @@ export async function runBody(body: ExecutionBody, api: FlowApi): Promise<unknow
 }
 
 async function runStep(step: Step, api: FlowApi, phaseId?: string): Promise<unknown> {
-  if (step.kind === "agent") {
-    return api.agent(step.prompt, { label: step.label, stepId: step.id, phaseId });
+  if (step.kind === "agent" || step.kind === "task") {
+    return api.agent(step.prompt, { label: step.label, stepId: step.id, phaseId, subagent: step.subagent });
   }
 
   if (step.kind === "phase") {

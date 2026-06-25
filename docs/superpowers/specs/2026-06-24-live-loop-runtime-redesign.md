@@ -1,5 +1,7 @@
 # Live Loop Runtime Redesign
 
+> Superseded on 2026-06-25 for launch semantics by `docs/superpowers/specs/2026-06-25-session-first-dynamic-workflow-design.md`. Keep this document as historical runtime-engine context only; user-visible runs now start through the Codex-session-first flow.
+
 ## Status
 
 Approved direction: rebuild the DittosLoop For Codex runtime as an independent, formal Live Loop runtime. Keep this repository as the product boundary. Do not depend on the existing Dittos Loop product repository at runtime. Copy the engine ideas and small source patterns that are needed, then own them inside this plugin project.

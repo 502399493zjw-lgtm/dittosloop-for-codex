@@ -582,6 +582,7 @@ function renderRunBoard({ detail, loop, loopRuns }) {
           el("p", "", activeHumanRequest.question)
         ])
       : null,
+    renderWorkflowRuntimePanel(detail),
     el("section", "run-board-body", [
       el("aside", "phase-rail", [
         el("div", "phase-rail-title", "工作流阶段"),
@@ -603,6 +604,93 @@ function renderRunBoard({ detail, loop, loopRuns }) {
       ] : [el("p", "detail-empty", "当前运行没有可展示的 agent 明细。")])
     ])
   ].filter(Boolean));
+}
+
+function renderWorkflowRuntimePanel(detail) {
+  const workflowContexts = detail.workflowContexts ?? [];
+  const workflowRevisions = detail.workflowRevisions ?? [];
+  if (!workflowContexts.length && !workflowRevisions.length) return null;
+
+  return el("section", "workflow-runtime-panel", [
+    el("div", "workflow-runtime-heading", [
+      el("span", "detail-kicker", "Local workflow"),
+      el("strong", "", "动态工作流状态")
+    ]),
+    el("div", "workflow-runtime-grid", [
+      workflowContexts.length
+        ? el("div", "workflow-runtime-card workflow-contexts", [
+            el("h3", "", "Workflow attempt"),
+            ...workflowContexts.map(renderWorkflowContextRow)
+          ])
+        : null,
+      workflowRevisions.length
+        ? el("div", "workflow-runtime-card workflow-revisions", [
+            el("h3", "", "工作流草稿"),
+            ...workflowRevisions.map(renderWorkflowRevisionRow)
+          ])
+        : null
+    ])
+  ]);
+}
+
+function renderWorkflowContextRow(context) {
+  const taskRuns = context.taskRuns ?? [];
+  const completedTasks = taskRuns.filter((task) => task.status === "completed").length;
+  const pendingSessions = context.pendingSessionIds ?? [];
+  const cursor = context.cursor ?? {};
+  const cursorLabel = [cursor.state, cursor.stepId, cursor.sessionId].filter(Boolean).join(" · ");
+
+  return el("div", "workflow-context-block", [
+    el("div", "workflow-runtime-row", [
+      statusChip(context.status),
+      el("div", "workflow-runtime-copy", [
+        el("p", "", cursorLabel || context.id),
+        el(
+          "span",
+          "detail-meta",
+          `${completedTasks}/${taskRuns.length} tasks · ${context.attemptId}` +
+            (pendingSessions.length ? ` · pending ${pendingSessions.join(", ")}` : "")
+        )
+      ])
+    ]),
+    taskRuns.length
+      ? el("div", "workflow-task-list", taskRuns.map(renderWorkflowTaskRun))
+      : el("div", "workflow-task-empty detail-meta", "暂无 task run"),
+    pendingSessions.length
+      ? el("div", "workflow-pending-sessions detail-meta", `Pending sessions: ${pendingSessions.join(", ")}`)
+      : null
+  ]);
+}
+
+function renderWorkflowTaskRun(taskRun) {
+  const title = taskRun.label || taskRun.stepId || taskRun.id;
+  const sessionLabel = taskRun.sessionId ? `session ${taskRun.sessionId}` : "session pending";
+  const meta = [taskRun.id, taskRun.stepId, taskRun.phaseId, sessionLabel].filter(Boolean).join(" · ");
+  const result = taskRun.result || taskRun.error;
+  const subagent = taskRun.subagent;
+  const subagentMeta = formatSubagentMeta(subagent);
+
+  return el("div", "workflow-task-row", [
+    statusChip(taskRun.status),
+    el("div", "workflow-runtime-copy", [
+      el("p", "", title),
+      el("span", "detail-meta", meta),
+      subagentMeta ? el("span", "detail-meta", subagentMeta) : null,
+      result ? el("span", "workflow-task-result", result) : null
+    ])
+  ]);
+}
+
+function renderWorkflowRevisionRow(revision) {
+  return el("div", "workflow-runtime-row", [
+    statusChip(revision.status),
+    el("div", "workflow-runtime-copy", [
+      el("p", "", revision.reason || revision.contract?.title || revision.id),
+      el("span", "detail-meta", revision.rejectionReason
+        ? `${revision.id} · ${revision.rejectionReason}`
+        : revision.id)
+    ])
+  ]);
 }
 
 function buildRunPhases(detail) {
@@ -680,7 +768,7 @@ function codexSessionPhaseAgents(run) {
       description: subagent.threadId
         ? "点击查看这一步的实际运行结果。"
         : "已纳入本次 Codex worker 的 workflow 计划。",
-      meta: subagent.threadTitle ?? "workflow agent",
+      meta: subagent.threadTitle || formatSubagentMeta(subagent.subagent) || "workflow agent",
       threadId: subagent.threadId ?? run.codexSession.threadId,
       threadTitle: subagent.threadTitle ?? run.codexSession.threadTitle,
       threadUrl: subagent.threadUrl ?? run.codexSession.threadUrl,
@@ -703,6 +791,39 @@ function codexSessionPhaseAgents(run) {
       threadUrl: run.codexSession.threadUrl
     }
   ];
+}
+
+function formatSubagentMeta(subagent) {
+  const envMeta = subagent?.env ? formatKeyValueMeta(subagent.env) : "";
+  const contextMeta = subagent?.context ? formatKeyValueMeta(subagent.context) : "";
+  return subagent
+    ? [
+        subagent.ref,
+        subagent.role,
+        subagent.model,
+        subagent.tools?.length ? `tools ${subagent.tools.join(", ")}` : null,
+        subagent.workdir ? `cwd ${subagent.workdir}` : null,
+        envMeta ? `env ${envMeta}` : null,
+        subagent.permissions?.filesystem ? `fs ${subagent.permissions.filesystem}` : null,
+        subagent.permissions?.network ? `net ${subagent.permissions.network}` : null,
+        subagent.timeoutMs ? `timeout ${subagent.timeoutMs}ms` : null,
+        contextMeta ? `ctx ${contextMeta}` : null
+      ].filter(Boolean).join(" · ")
+    : "";
+}
+
+function formatKeyValueMeta(value) {
+  return Object.entries(value)
+    .map(([key, entry]) => `${key}=${formatMetaValue(entry)}`)
+    .join(", ");
+}
+
+function formatMetaValue(value) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value === null) return "null";
+  return JSON.stringify(value);
 }
 
 function timelineSectionPhase(section, fallbackStatus) {
@@ -1442,11 +1563,15 @@ function statusText(status) {
     failed: "失败",
     passed: "通过",
     repairing: "修复中",
+    ready: "就绪",
+    suspended: "等待会话",
+    executing: "执行中",
     requested: "待创建",
     started: "已创建",
     unavailable: "不可用",
     draft: "候选",
     promoted: "已采用",
+    superseded: "已替代",
     rejected: "已拒绝",
     skipped: "跳过",
     "not-run": "未运行",

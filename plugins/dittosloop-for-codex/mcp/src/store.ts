@@ -4,13 +4,15 @@ import { join } from "node:path";
 import type { LoopState } from "./types.js";
 
 const STATE_FILE = "state.json";
+const CURRENT_STATE_VERSION = 2;
 
 export function createEmptyState(): LoopState {
   return {
-    version: 1,
+    version: CURRENT_STATE_VERSION,
     loops: [],
     formalContracts: [],
     workflowRevisions: [],
+    workflowContexts: [],
     runs: [],
     attempts: [],
     events: [],
@@ -23,6 +25,7 @@ export function createEmptyState(): LoopState {
 
 export class LoopStore {
   private readonly statePath: string;
+  private updateQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly dataDir: string) {
     this.statePath = join(dataDir, STATE_FILE);
@@ -42,12 +45,23 @@ export class LoopStore {
   }
 
   async updateState(mutator: (state: LoopState) => LoopState | Promise<LoopState>): Promise<LoopState> {
-    const current = await this.readState();
-    const next = normalizeState(await mutator(current));
+    const previousUpdate = this.updateQueue;
+    let releaseUpdate!: () => void;
+    this.updateQueue = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
 
-    await this.writeState(next);
+    await previousUpdate;
+    try {
+      const current = await this.readState();
+      const next = normalizeState(await mutator(current));
 
-    return next;
+      await this.writeState(next);
+
+      return next;
+    } finally {
+      releaseUpdate();
+    }
   }
 
   private async writeState(state: LoopState): Promise<void> {
@@ -63,10 +77,11 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
   return {
     ...createEmptyState(),
     ...value,
-    version: 1,
+    version: CURRENT_STATE_VERSION,
     loops: value?.loops ?? [],
     formalContracts: value?.formalContracts ?? [],
     workflowRevisions: value?.workflowRevisions ?? [],
+    workflowContexts: value?.workflowContexts ?? [],
     runs: value?.runs ?? [],
     attempts: value?.attempts ?? [],
     events: value?.events ?? [],

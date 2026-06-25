@@ -1,7 +1,23 @@
 import type { LoopStatus, LoopTrigger } from "../types.js";
 
+export interface CodexSubagentSpec {
+  ref?: string;
+  role?: string;
+  model?: string;
+  tools?: string[];
+  workdir?: string;
+  env?: Record<string, string>;
+  permissions?: {
+    filesystem?: "read-only" | "workspace-write" | "danger-full-access";
+    network?: "enabled" | "disabled";
+  };
+  timeoutMs?: number;
+  context?: Record<string, unknown>;
+}
+
 export type Step =
   | AgentStep
+  | TaskStep
   | ParallelStep
   | PhaseStep;
 
@@ -11,7 +27,20 @@ export interface AgentStep {
   label: string;
   prompt: string;
   verifierRef?: string;
-  sessionPolicy?: "new" | "reuse-run" | "reuse-step";
+  sessionPolicy?: "new";
+  subagent?: CodexSubagentSpec;
+}
+
+export interface TaskStep {
+  id: string;
+  kind: "task";
+  runtime: "codex";
+  label: string;
+  prompt: string;
+  verifierRef?: string;
+  sessionPolicy?: "new";
+  outputSchema?: Record<string, unknown>;
+  subagent?: CodexSubagentSpec;
 }
 
 export interface ParallelStep {

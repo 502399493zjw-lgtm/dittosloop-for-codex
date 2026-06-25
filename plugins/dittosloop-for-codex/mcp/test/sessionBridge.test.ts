@@ -66,6 +66,13 @@ test("host-mediated bridge preserves workflow launch context for the Codex host"
     workflowRuntime: "dittosloop-local-workflow",
     workflowContractId: "loop_1",
     workflowPlan,
+    subagent: {
+      ref: "researcher",
+      role: "Researcher",
+      model: "gpt-5.4-mini",
+      tools: ["rg", "sed"],
+      permissions: { filesystem: "workspace-write", network: "disabled" }
+    },
     projectId: "project_1",
     projectLabel: "dittos loop",
     projectPath: "/tmp/project"
@@ -90,6 +97,13 @@ test("host-mediated bridge preserves workflow launch context for the Codex host"
       workflowPlan: {
         contractId: "loop_1",
         steps: [expect.objectContaining({ id: "research" }), expect.objectContaining({ id: "collect", phaseId: "research" })]
+      },
+      subagent: {
+        ref: "researcher",
+        role: "Researcher",
+        model: "gpt-5.4-mini",
+        tools: ["rg", "sed"],
+        permissions: { filesystem: "workspace-write", network: "disabled" }
       },
       projectLabel: "dittos loop",
       messages: []

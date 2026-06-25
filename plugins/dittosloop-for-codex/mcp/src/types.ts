@@ -1,4 +1,4 @@
-import type { FormalLoopContract } from "./contract/types.js";
+import type { CodexSubagentSpec, FormalLoopContract } from "./contract/types.js";
 
 export type LoopStatus = "active" | "paused" | "archived";
 export type TriggerMode = "manual";
@@ -62,10 +62,14 @@ export interface LoopRun {
     subagents?: Array<{
       role: string;
       status: "requested" | "running" | "completed" | "failed";
+      sessionId?: string;
+      stepId?: string;
+      phaseId?: string;
       threadId?: string;
       threadTitle?: string;
       threadUrl?: string;
       prompt?: string;
+      subagent?: CodexSubagentSpec;
     }>;
     prompt: string;
   };
@@ -109,6 +113,11 @@ export interface VerificationResult {
 export interface HumanRequest {
   id: string;
   runId: string;
+  attemptId?: string;
+  workflowContextId?: string;
+  taskRunId?: string;
+  sessionId?: string;
+  stepId?: string;
   question: string;
   status: HumanRequestStatus;
   response?: string;
@@ -139,17 +148,89 @@ export interface WorkflowRevision {
   loopId: string;
   runId: string;
   attemptId?: string;
-  status: "draft" | "promoted" | "rejected";
+  authorSessionId?: string;
+  authorThreadId?: string;
+  baseRevisionId?: string;
+  status: "draft" | "promoted" | "superseded" | "rejected";
   reason: string;
   contract: FormalLoopContract;
   createdAt: string;
+  promotedAt?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
+}
+
+export type WorkflowContextStatus = "ready" | "running" | "suspended" | "repairing" | "completed" | "failed";
+export type WorkflowCursorState =
+  | "created"
+  | "executing"
+  | "waiting_for_session"
+  | "waiting_for_human"
+  | "repairing"
+  | "completed"
+  | "failed";
+export type WorkflowTaskRunStatus = "running" | "suspended" | "completed" | "failed";
+
+export interface WorkflowCursor {
+  state: WorkflowCursorState;
+  stepId?: string;
+  phaseId?: string;
+  sessionId?: string;
+}
+
+export interface WorkflowStepState {
+  status: WorkflowTaskRunStatus;
+  output?: string;
+  error?: string;
+  sessionId?: string;
+  updatedAt: string;
+}
+
+export interface WorkflowTaskRun {
+  id: string;
+  runId: string;
+  attemptId: string;
+  stepId: string;
+  phaseId?: string;
+  label?: string;
+  prompt?: string;
+  subagent?: CodexSubagentSpec;
+  sessionId?: string;
+  status: WorkflowTaskRunStatus;
+  result?: string;
+  error?: string;
+  idempotencyKey?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkflowContext {
+  id: string;
+  runId: string;
+  loopId: string;
+  attemptId: string;
+  contractId?: string;
+  contractRevisionId?: string;
+  contractSnapshot?: FormalLoopContract;
+  status: WorkflowContextStatus;
+  cursor: WorkflowCursor;
+  vars: Record<string, unknown>;
+  steps: Record<string, WorkflowStepState>;
+  taskRuns: WorkflowTaskRun[];
+  pendingSessionIds: string[];
+  idempotencyKeys: string[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
 }
 
 export interface LoopState {
-  version: 1;
+  version: 2;
   loops: LoopContract[];
   formalContracts: FormalLoopContract[];
   workflowRevisions: WorkflowRevision[];
+  workflowContexts: WorkflowContext[];
   runs: LoopRun[];
   attempts: RunAttempt[];
   events: RunEvent[];
@@ -169,6 +250,7 @@ export interface RunDetail {
   memoryCommits: MemoryCommit[];
   artifacts: ArtifactRef[];
   workflowRevisions: WorkflowRevision[];
+  workflowContexts: WorkflowContext[];
 }
 
 export interface CodexProjectRef {

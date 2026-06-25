@@ -31,16 +31,44 @@ const eventKindSchema = z.enum([
 
 const verificationStatusSchema = z.enum(["passed", "failed", "skipped"]);
 
+const subagentSchema = z.object({
+  ref: z.string().min(1).optional(),
+  role: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  tools: z.array(z.string().min(1)).optional(),
+  workdir: z.string().min(1).optional(),
+  env: z.record(z.string()).optional(),
+  permissions: z.object({
+    filesystem: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
+    network: z.enum(["enabled", "disabled"]).optional()
+  }).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  context: z.record(z.unknown()).optional()
+});
+
 const agentStepSchema = z.object({
   id: z.string().min(1),
   kind: z.literal("agent"),
   label: z.string().min(1),
   prompt: z.string().min(1),
   verifierRef: z.string().optional(),
-  sessionPolicy: z.enum(["new", "reuse-run", "reuse-step"]).optional()
+  sessionPolicy: z.literal("new").optional(),
+  subagent: subagentSchema.optional()
 });
 
-type StepSchema = z.infer<typeof agentStepSchema> | {
+const taskStepSchema = z.object({
+  id: z.string().min(1),
+  kind: z.literal("task"),
+  runtime: z.literal("codex"),
+  label: z.string().min(1),
+  prompt: z.string().min(1),
+  verifierRef: z.string().optional(),
+  sessionPolicy: z.literal("new").optional(),
+  outputSchema: z.record(z.unknown()).optional(),
+  subagent: subagentSchema.optional()
+});
+
+type StepSchema = z.infer<typeof agentStepSchema> | z.infer<typeof taskStepSchema> | {
   id: string;
   kind: "phase" | "parallel";
   label: string;
@@ -50,6 +78,7 @@ type StepSchema = z.infer<typeof agentStepSchema> | {
 const stepSchema: z.ZodType<StepSchema> = z.lazy(() =>
   z.discriminatedUnion("kind", [
     agentStepSchema,
+    taskStepSchema,
     z.object({
       id: z.string().min(1),
       kind: z.literal("phase"),
@@ -95,7 +124,7 @@ const createLoopContractSchema = z.object({
   }).optional()
 });
 
-const startLoopRunSchema = z.object({
+const startCodexSessionSchema = z.object({
   loopId: z.string().min(1),
   goal: z.string().optional(),
   codexProjectId: z.string().optional(),
@@ -103,12 +132,44 @@ const startLoopRunSchema = z.object({
   projectPath: z.string().optional()
 });
 
-const startCodexSessionSchema = z.object({
+const executeWorkflowAttemptSchema = z.object({
+  runId: z.string().min(1),
+  attemptId: z.string().min(1).optional()
+});
+
+const proposeWorkflowRevisionSchema = z.object({
   loopId: z.string().min(1),
-  goal: z.string().optional(),
-  codexProjectId: z.string().optional(),
-  projectLabel: z.string().optional(),
-  projectPath: z.string().optional()
+  runId: z.string().min(1),
+  attemptId: z.string().min(1),
+  authorSessionId: z.string().min(1).optional(),
+  authorThreadId: z.string().min(1).optional(),
+  reason: z.string().min(1).optional(),
+  rationale: z.string().min(1).optional(),
+  contract: createLoopContractSchema.optional(),
+  patch: createLoopContractSchema.partial().optional()
+}).refine((value) => Boolean(value.reason || value.rationale), {
+  message: "reason or rationale is required"
+}).refine((value) => Boolean(value.contract || value.patch), {
+  message: "contract or patch is required"
+});
+
+const listWorkflowRevisionsSchema = z.object({
+  loopId: z.string().min(1)
+});
+
+const promoteWorkflowRevisionSchema = z.object({
+  loopId: z.string().min(1),
+  revisionId: z.string().min(1),
+  runId: z.string().min(1),
+  attemptId: z.string().min(1)
+});
+
+const rejectWorkflowRevisionSchema = z.object({
+  loopId: z.string().min(1),
+  revisionId: z.string().min(1),
+  runId: z.string().min(1),
+  attemptId: z.string().min(1),
+  reason: z.string().min(1)
 });
 
 const recordCodexThreadSchema = z.object({
@@ -120,6 +181,12 @@ const recordCodexThreadSchema = z.object({
 
 const recordSessionResultSchema = z.object({
   runId: z.string().min(1),
+  workflowContextId: z.string().min(1).optional(),
+  attemptId: z.string().min(1).optional(),
+  taskRunId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+  stepId: z.string().min(1).optional(),
+  idempotencyKey: z.string().min(1).optional(),
   status: z.enum(["passed", "failed", "needs_human"]),
   summary: z.string().min(1),
   result: z.string().optional(),
@@ -129,11 +196,6 @@ const recordSessionResultSchema = z.object({
     output: z.string().optional()
   })).optional(),
   humanQuestion: z.string().optional()
-});
-
-const resumeLoopRunSchema = z.object({
-  runId: z.string().min(1),
-  goal: z.string().optional()
 });
 
 const openCodexSessionSchema = z.object({
@@ -180,7 +242,8 @@ const recordHumanRequestSchema = z.object({
 
 const resolveHumanRequestSchema = z.object({
   requestId: z.string().min(1),
-  response: z.string().min(1)
+  response: z.string().min(1),
+  summary: z.string().min(1).optional()
 });
 
 const commitMemorySchema = z.object({
@@ -220,15 +283,6 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
       return toToolResult(await service.createLoopContract(args));
     },
     list_loops: async () => toToolResult(await service.listLoops()),
-    start_loop_run: async (input) => {
-      const args = startLoopRunSchema.parse(input);
-      return toToolResult(await service.runLoopWorkflow(args.loopId, {
-        goal: args.goal,
-        codexProjectId: args.codexProjectId,
-        projectLabel: args.projectLabel,
-        projectPath: args.projectPath
-      }));
-    },
     start_codex_session: async (input) => {
       const args = startCodexSessionSchema.parse(input);
       return toToolResult(await service.startCodexSessionRun(args.loopId, {
@@ -236,6 +290,44 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
         codexProjectId: args.codexProjectId,
         projectLabel: args.projectLabel,
         projectPath: args.projectPath
+      }));
+    },
+    execute_workflow_attempt: async (input) => {
+      const args = executeWorkflowAttemptSchema.parse(input);
+      return toToolResult(await service.executeWorkflowAttempt(args.runId, {
+        attemptId: args.attemptId
+      }));
+    },
+    propose_workflow_revision: async (input) => {
+      const args = proposeWorkflowRevisionSchema.parse(input);
+      return toToolResult(await service.proposeWorkflowRevision(args.loopId, {
+        runId: args.runId,
+        attemptId: args.attemptId,
+        authorSessionId: args.authorSessionId,
+        authorThreadId: args.authorThreadId,
+        reason: args.reason,
+        rationale: args.rationale,
+        contract: args.contract,
+        patch: args.patch
+      }));
+    },
+    list_workflow_revisions: async (input) => {
+      const args = listWorkflowRevisionsSchema.parse(input);
+      return toToolResult(await service.listWorkflowRevisions(args.loopId));
+    },
+    promote_workflow_revision: async (input) => {
+      const args = promoteWorkflowRevisionSchema.parse(input);
+      return toToolResult(await service.promoteWorkflowRevision(args.loopId, args.revisionId, {
+        runId: args.runId,
+        attemptId: args.attemptId
+      }));
+    },
+    reject_workflow_revision: async (input) => {
+      const args = rejectWorkflowRevisionSchema.parse(input);
+      return toToolResult(await service.rejectWorkflowRevision(args.loopId, args.revisionId, {
+        runId: args.runId,
+        attemptId: args.attemptId,
+        reason: args.reason
       }));
     },
     record_codex_thread: async (input) => {
@@ -251,16 +343,18 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     record_session_result: async (input) => {
       const args = recordSessionResultSchema.parse(input);
       return toToolResult(await service.recordSessionResult(args.runId, {
+        workflowContextId: args.workflowContextId,
+        attemptId: args.attemptId,
+        taskRunId: args.taskRunId,
+        sessionId: args.sessionId,
+        stepId: args.stepId,
+        idempotencyKey: args.idempotencyKey,
         status: args.status,
         summary: args.summary,
         result: args.result,
         checks: args.checks,
         humanQuestion: args.humanQuestion
       }));
-    },
-    resume_loop_run: async (input) => {
-      const args = resumeLoopRunSchema.parse(input);
-      return toToolResult(await service.resumeLoopRun(args.runId, { goal: args.goal }));
     },
     open_codex_session: async (input) => {
       const args = openCodexSessionSchema.parse(input);
@@ -293,7 +387,10 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     resolve_human_request: async (input) => {
       const args = resolveHumanRequestSchema.parse(input);
-      return toToolResult(await service.resolveHumanRequest(args.requestId, { response: args.response }));
+      return toToolResult(await service.resolveHumanRequest(args.requestId, {
+        response: args.response,
+        summary: args.summary
+      }));
     },
     commit_memory: async (input) => {
       const args = commitMemorySchema.parse(input);
@@ -370,16 +467,40 @@ const toolDefinitions = [
     schema: emptySchema
   },
   {
-    name: "start_loop_run",
-    title: "Start loop run",
-    description: "Start an engine-backed run for a structured Live Loop contract.",
-    schema: startLoopRunSchema
-  },
-  {
     name: "start_codex_session",
     title: "Start Codex session",
     description: "Request a new Codex session for a loop run and record the launch intent.",
     schema: startCodexSessionSchema
+  },
+  {
+    name: "execute_workflow_attempt",
+    title: "Execute workflow attempt",
+    description: "Execute the structured workflow inside an existing visible Codex session attempt.",
+    schema: executeWorkflowAttemptSchema
+  },
+  {
+    name: "propose_workflow_revision",
+    title: "Propose workflow revision",
+    description: "Create a draft workflow revision from inside a visible Codex session.",
+    schema: proposeWorkflowRevisionSchema
+  },
+  {
+    name: "list_workflow_revisions",
+    title: "List workflow revisions",
+    description: "List draft, promoted, and rejected workflow revisions for a loop.",
+    schema: listWorkflowRevisionsSchema
+  },
+  {
+    name: "promote_workflow_revision",
+    title: "Promote workflow revision",
+    description: "Make a workflow revision the active loop contract.",
+    schema: promoteWorkflowRevisionSchema
+  },
+  {
+    name: "reject_workflow_revision",
+    title: "Reject workflow revision",
+    description: "Reject a draft workflow revision while keeping it in local history.",
+    schema: rejectWorkflowRevisionSchema
   },
   {
     name: "record_codex_thread",
@@ -390,14 +511,8 @@ const toolDefinitions = [
   {
     name: "record_session_result",
     title: "Record session result",
-    description: "Write a Codex session result back to the loop runner and close or pause the run.",
+    description: "Write a targeted Codex session result back to the workflow runner; complete, suspend, or resume the workflow as appropriate.",
     schema: recordSessionResultSchema
-  },
-  {
-    name: "resume_loop_run",
-    title: "Resume loop run",
-    description: "Resume an existing loop run by requesting another Codex session attempt.",
-    schema: resumeLoopRunSchema
   },
   {
     name: "open_codex_session",

@@ -1,8 +1,13 @@
+import type { CodexSubagentSpec } from "../contract/types.js";
+
 export interface AgentRequest {
   prompt: string;
   label?: string;
   stepId?: string;
   phaseId?: string;
+  subagent?: CodexSubagentSpec;
+  attemptId?: string;
+  workflowContextId?: string;
   workflowRuntime?: "dittosloop-local-workflow";
   workflowContractId?: string;
   workflowPlan?: WorkflowExecutionPlan;
@@ -10,12 +15,14 @@ export interface AgentRequest {
 
 export interface WorkflowExecutionPlanStep {
   id: string;
-  kind: "agent" | "parallel" | "phase";
+  kind: "agent" | "task" | "parallel" | "phase";
+  runtime?: "codex";
   label: string;
   depth: number;
   phaseId?: string;
   prompt?: string;
-  sessionPolicy?: "new" | "reuse-run" | "reuse-step";
+  sessionPolicy?: "new";
+  subagent?: CodexSubagentSpec;
 }
 
 export interface WorkflowExecutionPlan {
@@ -102,6 +109,7 @@ export interface AgentOptions {
   label?: string;
   stepId?: string;
   phaseId?: string;
+  subagent?: CodexSubagentSpec;
 }
 
 export interface ParallelOptions {
@@ -113,6 +121,7 @@ export interface RunFlowDeps {
   runId: string;
   executor: Executor;
   workflow?: WorkflowExecutionPlan;
+  completedStepOutputs?: Record<string, string>;
   emit?: (event: EngineEvent) => void;
   now?: () => string;
 }
