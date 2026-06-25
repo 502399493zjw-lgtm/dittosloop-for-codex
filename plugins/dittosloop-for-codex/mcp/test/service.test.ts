@@ -1124,6 +1124,25 @@ test("returns structured empty loop memory windows", async () => {
   });
 });
 
+test("returns an exhausted message when loop memory exists but the offset is past the end", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run memory updater" });
+
+  await service.commitMemory(formal.id, { runId: launch.run.id, summary: "First durable lesson." });
+  await service.commitMemory(formal.id, { runId: launch.run.id, summary: "Second durable lesson." });
+
+  await expect(service.readLoopMemory(formal.id, { limit: 2, offset: 5 })).resolves.toEqual({
+    loopId: formal.id,
+    limit: 2,
+    offset: 5,
+    returnedLines: 0,
+    totalLines: 2,
+    remainingLines: 0,
+    content: "没有更多长期记忆。"
+  });
+});
+
 test("rejects invalid loop memory window requests", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await createFormalLoop(service);

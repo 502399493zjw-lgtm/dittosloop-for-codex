@@ -944,6 +944,36 @@ test("reads loop memory through MCP with bounded newest-first windows", async ()
   });
 });
 
+test("returns an exhausted memory window through MCP when offset is past the end", async () => {
+  const handlers = await createHandlers();
+  const loop = readResult(await handlers.create_loop_contract({
+    title: "Memory loop",
+    goal: "Remember durable lessons",
+    body: {
+      steps: [{ id: "check", kind: "agent", label: "Check", prompt: "Check memory" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Memory can be read", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Run memory update" }));
+
+  await handlers.commit_memory({ loopId: loop.id, runId: launch.run.id, summary: "First lesson." });
+
+  const memory = readResult(await handlers.read_loop_memory({ loopId: loop.id, limit: 2, offset: 3 }));
+
+  expect(memory).toEqual({
+    loopId: loop.id,
+    limit: 2,
+    offset: 3,
+    returnedLines: 0,
+    totalLines: 1,
+    remainingLines: 0,
+    content: "没有更多长期记忆。"
+  });
+});
+
 test("rejects invalid MCP memory read windows", async () => {
   const handlers = await createHandlers();
   const loop = readResult(await handlers.create_loop_contract({

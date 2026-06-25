@@ -3212,7 +3212,7 @@ function loopMemoryWindow(state: LoopState, loopId: string, input: ReadLoopMemor
     returnedLines: selectedLines.length,
     totalLines: lines.length,
     remainingLines,
-    content: memoryWindowContent(loopId, selectedLines, remainingLines, offset + selectedLines.length, limit)
+    content: memoryWindowContent(loopId, selectedLines, lines.length, remainingLines, offset + selectedLines.length, limit)
   };
 }
 
@@ -3226,12 +3226,13 @@ function memoryLines(content: string | undefined): string[] {
 function memoryWindowContent(
   loopId: string,
   lines: string[],
+  totalLines: number,
   remainingLines: number,
   nextOffset: number,
   limit: number
 ): string {
   if (!lines.length) {
-    return "暂无长期记忆。";
+    return totalLines === 0 ? "暂无长期记忆。" : "没有更多长期记忆。";
   }
 
   const content = lines.join("\n");
