@@ -698,11 +698,12 @@ export class LoopService {
       const runId = this.nextId("run");
       const attemptId = this.nextId("attempt");
       const workflowContextId = this.nextId("workflow");
+      const memoryWindow = loopMemoryWindow(state, loopId);
       const prompt = buildCodexSessionPrompt(loop, goal, formalContract, {
         runId,
         attemptId,
         workflowContextId
-      });
+      }, memoryWindow);
       const workflowLaunch = formalContract ? buildWorkflowLaunch(formalContract) : {};
       const attemptSummary = `Request a new Codex session for ${loop.title}`;
       const project = runProjectBinding(input, loop);
@@ -3592,7 +3593,8 @@ function buildCodexSessionPrompt(
   loop: LoopContract,
   goal: string,
   contract?: FormalLoopContract,
-  callbacks?: { runId: string; attemptId: string; workflowContextId: string }
+  callbacks?: { runId: string; attemptId: string; workflowContextId: string },
+  memoryWindow?: LoopMemoryWindow
 ): string {
   const checks = loop.verification.checks.length
     ? loop.verification.checks.map((check) => `- ${check}`).join("\n")
@@ -3618,6 +3620,20 @@ function buildCodexSessionPrompt(
         contract.verification.rubrics
           .map((rubric) => `- [${rubric.severity}] ${rubric.label}: ${rubric.requirement}`)
           .join("\n")
+      ].join("\n")
+    : "";
+  const loopMemory = memoryWindow
+    ? [
+        "",
+        "Loop memory / 长期记忆：",
+        memoryWindow.content,
+        "",
+        "Memory discipline / 记忆写入纪律：",
+        "- 可在需要更多长期上下文时调用 read_loop_memory({ loopId, limit, offset })。",
+        "- workflow task 如发现可复用观察，应通过 task result 回传，不直接负责长期记忆取舍。",
+        "- verifier 只判断结果是否过关，不负责写入长期记忆。",
+        "- 顶层 Codex session 在 verifier 结果可见后决定是否调用 commit_memory。",
+        "- 只记录稳定偏好、长期规则、可复用修复经验、边界条件或 workflow 改进；不要记录一次性进度、临时失败、run id、attempt id 或调试残留。"
       ].join("\n")
     : "";
   const workflowCallbacks = callbacks
@@ -3646,6 +3662,7 @@ function buildCodexSessionPrompt(
     "- 如果提供了 Codex 项目，请在该项目上下文内工作。",
     "- 将进展写回 DittosLoop，包括 attempt、events、verification records。",
     "- 最终输出面向用户的任务结果，不要把 run/attempt/verification id、调试说明或 cite turn 残留写进正文。",
+    loopMemory,
     workflowContract,
     workflowCallbacks,
     "",

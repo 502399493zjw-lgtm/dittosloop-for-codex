@@ -3252,6 +3252,35 @@ test("compiles Codex session prompt from formal workflow contract when available
   });
 });
 
+test("injects a bounded loop memory excerpt into Codex session prompts", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+  const first = await service.startCodexSessionRun(formal.id, { goal: "Seed memory" });
+
+  for (let index = 1; index <= 82; index += 1) {
+    await service.commitMemory(formal.id, { runId: first.run.id, summary: `Memory ${index}` });
+  }
+
+  await service.completeRun(first.run.id, { status: "completed" });
+
+  const second = await service.startCodexSessionRun(formal.id, { goal: "Use memory" });
+  const memorySection = second.prompt
+    .split("Loop memory / 长期记忆：\n")[1]
+    ?.split("\n\nMemory discipline / 记忆写入纪律：")[0]
+    ?.split("\n") ?? [];
+
+  expect(second.prompt).toContain("Loop memory / 长期记忆");
+  expect(second.prompt).toContain("Memory 82");
+  expect(second.prompt).toContain("Memory 3");
+  expect(memorySection).not.toContain("Memory 2");
+  expect(memorySection).not.toContain("Memory 1");
+  expect(second.prompt).toContain(
+    '还有 2 条记忆未读取。可调用 read_loop_memory({ loopId: "loop_1", offset: 80, limit: 80 }) 继续读取。'
+  );
+  expect(second.prompt).toContain("顶层 Codex session 在 verifier 结果可见后决定是否调用 commit_memory");
+  expect(second.prompt).toContain("workflow task 如发现可复用观察，应通过 task result 回传");
+});
+
 test("records a real Codex thread without completing the session run", async () => {
   const service = await createService();
   const loop = await createFormalLoop(service, {
