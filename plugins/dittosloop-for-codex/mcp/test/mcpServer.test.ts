@@ -326,6 +326,19 @@ test("passes codex task subagent tools through the MCP workflow execution path",
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Run scan" }));
 
+  expect(launch.run.codexSession.subagents).toMatchObject([
+    {
+      stepId: "scan",
+      subagent: {
+        ref: "code-searcher",
+        role: "Code searcher",
+        model: "gpt-5.4-mini",
+        tools: ["rg", "sed"],
+        permissions: { filesystem: "workspace-write", network: "disabled" }
+      }
+    }
+  ]);
+
   await handlers.execute_workflow_attempt({
     runId: launch.run.id,
     attemptId: launch.attempt.id
@@ -463,15 +476,26 @@ test("exposes workflow revision proposal, promotion, listing, and rejection as M
   });
   expect(readResult(await handlers.list_workflow_revisions({ loopId: contract.id }))).toHaveLength(1);
 
+  await expect(
+    handlers.promote_workflow_revision({
+      loopId: contract.id,
+      revisionId: draft.id
+    })
+  ).rejects.toThrow(/runId|attemptId|Required/);
+
   const promoted = readResult(await handlers.promote_workflow_revision({
     loopId: contract.id,
-    revisionId: draft.id
+    revisionId: draft.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
   }));
   expect(promoted).toMatchObject({ id: draft.id, status: "promoted", promotedAt: "2026-06-23T00:00:00.000Z" });
   await expect(
     handlers.reject_workflow_revision({
       loopId: contract.id,
       revisionId: draft.id,
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
       reason: "Promoted revisions cannot be rejected."
     })
   ).rejects.toThrow(/Only draft workflow revisions can be rejected/);
@@ -502,6 +526,8 @@ test("exposes workflow revision proposal, promotion, listing, and rejection as M
   const rejected = readResult(await handlers.reject_workflow_revision({
     loopId: contract.id,
     revisionId: secondDraft.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
     reason: "Superseded by another local edit."
   }));
   expect(rejected).toMatchObject({

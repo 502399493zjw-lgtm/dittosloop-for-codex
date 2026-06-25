@@ -35,7 +35,7 @@ Do not use this for hidden background automation. In this MVP, loop work should 
 6. From that Codex session, use `execute_workflow_attempt` with the returned `runId` and `attemptId` to run the local workflow engine in the same context.
 7. When a Codex task session finishes outside the immediate engine call, use `record_session_result` with `workflowContextId`, `attemptId`, `taskRunId` or `sessionId` or `stepId`, and an `idempotencyKey` to write back the exact task result. When multiple locators are provided, they must identify the same task run. `needs_human` suspends the exact task and opens a linked human request when possible.
 8. When a task needs a local Codex specialist, put the desired `subagent` role/model/tools/permissions on the task. DittosLoop records and passes these hints to the Codex host bridge; it does not enforce tool allowlists itself.
-9. When the active Codex session discovers that the workflow should change, use the workflow revision tools from that same visible session: propose a revision, list drafts, then promote or reject it explicitly.
+9. When the active Codex session discovers that the workflow should change, use the workflow revision tools from that same visible session with the current `runId` and `attemptId`: propose a revision, list drafts, then promote or reject it explicitly.
 10. Do not create new compatibility runs. Old compatibility runs may still appear in preview state, but new user-visible runs should start with a Codex session request.
 11. Use `start_attempt` only for substantive manual follow-up work outside the normal workflow attempt.
 12. Use `append_event` for meaningful progress notes.

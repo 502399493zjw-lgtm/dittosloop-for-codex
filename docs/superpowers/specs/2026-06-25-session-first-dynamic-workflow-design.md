@@ -159,12 +159,12 @@ Parallel execution uses an all-settle barrier. If multiple Codex task branches s
 
 The active Codex session can edit the local workflow through revision tools:
 
-- `propose_workflow_revision(loopId, patch, rationale)`
+- `propose_workflow_revision(loopId, runId, attemptId, patch, rationale)`
 - `list_workflow_revisions(loopId)`
-- `promote_workflow_revision(loopId, revisionId)`
-- `reject_workflow_revision(loopId, revisionId, reason)`
+- `promote_workflow_revision(loopId, revisionId, runId, attemptId)`
+- `reject_workflow_revision(loopId, revisionId, runId, attemptId, reason)`
 
-Revisions are immutable records. Only one promoted revision becomes the active contract. Draft and rejected revisions remain visible in preview for auditability.
+Revisions are immutable records. Revision writes must be scoped to the visible Codex session's `runId` and `attemptId`; there is no latest-run fallback for mutating the active workflow. Only one promoted revision becomes the active contract. Draft and rejected revisions remain visible in preview for auditability.
 
 ## Acceptance Checks
 
@@ -178,6 +178,7 @@ Revisions are immutable records. Only one promoted revision becomes the active c
 - Parallel suspension uses an all-settle barrier so sibling pending sessions are recorded before the call returns.
 - Suspended workflows resume from persisted state after service restart without relaunching completed steps.
 - Promoted workflow revision records keep their original contract snapshots immutable while the active formal contract receives the promotion timestamp.
+- Workflow revision write tools require the visible session's `runId` and `attemptId`.
 - Suspended workflow contexts continue from their launch snapshot after a revision is promoted.
 - Completed workflow contexts are idempotent and do not relaunch task sessions on repeated execution.
 - `sessionPolicy` only accepts `"new"` in the current public contract.

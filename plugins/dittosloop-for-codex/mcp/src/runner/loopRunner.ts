@@ -15,6 +15,7 @@ export interface LoopRunnerOptions {
 export interface LoopRunRequest {
   contract: FormalLoopContract;
   runId: string;
+  attemptId?: string;
   attemptNumber?: number;
   emit?: (event: EngineEvent) => void;
 }
@@ -61,7 +62,7 @@ export class LoopRunner {
         now
       }
     );
-    const attemptId = `attempt_${request.attemptNumber ?? 1}`;
+    const attemptId = request.attemptId ?? `attempt_${request.attemptNumber ?? 1}`;
     emitRuntimeEvent({ type: "verification_started", attemptId });
     const verification = await this.verify(request.contract, flowResult.result);
     emitRuntimeEvent({ type: "verification_done", attemptId, decision: verification });

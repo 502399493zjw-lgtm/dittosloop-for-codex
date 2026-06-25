@@ -178,6 +178,10 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("workflow-pending-sessions");
   expect(app).toContain("subagent.tools?.length");
   expect(app).toContain("subagent.permissions?.filesystem");
+  expect(app).toContain("subagent.workdir");
+  expect(app).toContain("subagent.env");
+  expect(app).toContain("subagent.timeoutMs");
+  expect(app).toContain("subagent.context");
   expect(app).toContain("superseded: \"已替代\"");
   expect(app).not.toContain("阶段暂无 agent 明细");
 });
@@ -469,7 +473,10 @@ test("serves workflow runtime detail for suspended tasks and promoted revisions"
       }
     }
   });
-  await service.promoteWorkflowRevision(contract.id, draft.id);
+  await service.promoteWorkflowRevision(contract.id, draft.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
   servers.push(server);
 

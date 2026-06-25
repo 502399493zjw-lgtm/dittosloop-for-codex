@@ -668,16 +668,7 @@ function renderWorkflowTaskRun(taskRun) {
   const meta = [taskRun.id, taskRun.stepId, taskRun.phaseId, sessionLabel].filter(Boolean).join(" · ");
   const result = taskRun.result || taskRun.error;
   const subagent = taskRun.subagent;
-  const subagentMeta = subagent
-    ? [
-        subagent.ref,
-        subagent.role,
-        subagent.model,
-        subagent.tools?.length ? `tools ${subagent.tools.join(", ")}` : null,
-        subagent.permissions?.filesystem ? `fs ${subagent.permissions.filesystem}` : null,
-        subagent.permissions?.network ? `net ${subagent.permissions.network}` : null
-      ].filter(Boolean).join(" · ")
-    : "";
+  const subagentMeta = formatSubagentMeta(subagent);
 
   return el("div", "workflow-task-row", [
     statusChip(taskRun.status),
@@ -777,7 +768,7 @@ function codexSessionPhaseAgents(run) {
       description: subagent.threadId
         ? "点击查看这一步的实际运行结果。"
         : "已纳入本次 Codex worker 的 workflow 计划。",
-      meta: subagent.threadTitle ?? "workflow agent",
+      meta: subagent.threadTitle || formatSubagentMeta(subagent.subagent) || "workflow agent",
       threadId: subagent.threadId ?? run.codexSession.threadId,
       threadTitle: subagent.threadTitle ?? run.codexSession.threadTitle,
       threadUrl: subagent.threadUrl ?? run.codexSession.threadUrl,
@@ -800,6 +791,39 @@ function codexSessionPhaseAgents(run) {
       threadUrl: run.codexSession.threadUrl
     }
   ];
+}
+
+function formatSubagentMeta(subagent) {
+  const envMeta = subagent?.env ? formatKeyValueMeta(subagent.env) : "";
+  const contextMeta = subagent?.context ? formatKeyValueMeta(subagent.context) : "";
+  return subagent
+    ? [
+        subagent.ref,
+        subagent.role,
+        subagent.model,
+        subagent.tools?.length ? `tools ${subagent.tools.join(", ")}` : null,
+        subagent.workdir ? `cwd ${subagent.workdir}` : null,
+        envMeta ? `env ${envMeta}` : null,
+        subagent.permissions?.filesystem ? `fs ${subagent.permissions.filesystem}` : null,
+        subagent.permissions?.network ? `net ${subagent.permissions.network}` : null,
+        subagent.timeoutMs ? `timeout ${subagent.timeoutMs}ms` : null,
+        contextMeta ? `ctx ${contextMeta}` : null
+      ].filter(Boolean).join(" · ")
+    : "";
+}
+
+function formatKeyValueMeta(value) {
+  return Object.entries(value)
+    .map(([key, entry]) => `${key}=${formatMetaValue(entry)}`)
+    .join(", ");
+}
+
+function formatMetaValue(value) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value === null) return "null";
+  return JSON.stringify(value);
 }
 
 function timelineSectionPhase(section, fallbackStatus) {

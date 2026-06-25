@@ -510,10 +510,17 @@ test("proposes workflow revisions from a visible Codex session without replacing
     prompt: "Collect notable updates with official sources"
   });
 
-  const promoted = await service.promoteWorkflowRevision(formal.id, revision.id);
+  const promoted = await service.promoteWorkflowRevision(formal.id, revision.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
   expect(promoted.status).toBe("promoted");
   await expect(
-    service.rejectWorkflowRevision(formal.id, revision.id, { reason: "Do not mutate the active revision." })
+    service.rejectWorkflowRevision(formal.id, revision.id, {
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
+      reason: "Do not mutate the active revision."
+    })
   ).rejects.toThrow(/Only draft workflow revisions can be rejected/);
 
   const followUpRevision = await service.proposeWorkflowRevision(formal.id, {
@@ -538,7 +545,10 @@ test("proposes workflow revisions from a visible Codex session without replacing
       stopPolicy: formal.stopPolicy
     }
   });
-  await service.promoteWorkflowRevision(formal.id, followUpRevision.id);
+  await service.promoteWorkflowRevision(formal.id, followUpRevision.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
 
   await expect(service.getSnapshot()).resolves.toMatchObject({
     formalContracts: [
@@ -554,6 +564,44 @@ test("proposes workflow revisions from a visible Codex session without replacing
       { id: followUpRevision.id, status: "promoted" }
     ]
   });
+});
+
+test("requires visible run and attempt context for workflow revision mutations", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Check today updates" });
+
+  await expect(
+    service.proposeWorkflowRevision(formal.id, {
+      reason: "Tighten the workflow.",
+      patch: { goal: "Check official updates" }
+    } as any)
+  ).rejects.toThrow(/runId and attemptId/);
+  await expect(
+    service.proposeWorkflowRevision(formal.id, {
+      runId: launch.run.id,
+      reason: "Tighten the workflow.",
+      patch: { goal: "Check official updates" }
+    } as any)
+  ).rejects.toThrow(/runId and attemptId/);
+
+  const draft = await service.proposeWorkflowRevision(formal.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    reason: "Tighten the workflow.",
+    patch: { goal: "Check official updates" }
+  });
+
+  await expect((service.promoteWorkflowRevision as any)(formal.id, draft.id)).rejects.toThrow(/runId and attemptId/);
+  await expect(
+    (service.promoteWorkflowRevision as any)(formal.id, draft.id, {
+      runId: launch.run.id,
+      attemptId: "attempt_from_another_session"
+    })
+  ).rejects.toThrow(/Attempt not found|Attempt does not belong/);
+  await expect((service.rejectWorkflowRevision as any)(formal.id, draft.id, { reason: "Needs more work." })).rejects.toThrow(
+    /runId and attemptId/
+  );
 });
 
 test("keeps promoted workflow revision contract snapshots immutable", async () => {
@@ -604,7 +652,10 @@ test("keeps promoted workflow revision contract snapshots immutable", async () =
   });
   const proposedContract = JSON.parse(JSON.stringify(revision.contract));
 
-  const promoted = await service.promoteWorkflowRevision(formal.id, revision.id);
+  const promoted = await service.promoteWorkflowRevision(formal.id, revision.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
   const snapshot = await service.getSnapshot();
 
   expect(promoted.contract).toEqual(proposedContract);
@@ -1229,7 +1280,10 @@ test("executes a session run against the workflow snapshot captured at launch", 
       }
     }
   });
-  await service.promoteWorkflowRevision(loop.id, revision.id);
+  await service.promoteWorkflowRevision(loop.id, revision.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
 
   await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
 
@@ -1777,7 +1831,10 @@ test("continues a suspended workflow against its launch snapshot after a revisio
       }
     }
   });
-  await service.promoteWorkflowRevision(loop.id, revision.id);
+  await service.promoteWorkflowRevision(loop.id, revision.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
 
   const resumed = await service.recordSessionResult(launch.run.id, {
     workflowContextId: launch.launchRequest.workflowContextId,
@@ -2842,6 +2899,129 @@ test("records failed verification against an attempt and marks run repairing whe
     runs: [{ id: run.id, status: "repairing", updatedAt: fixedTime }],
     verificationResults: [{ id: "verification_1", attemptId: attempt.id }]
   });
+});
+
+test("recording a repairable verification moves the visible workflow context to repairing", async () => {
+  const service = await createService();
+  const loop = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+
+  await service.recordVerification(launch.run.id, {
+    attemptId: launch.attempt.id,
+    status: "failed",
+    summary: "Build failed",
+    repair: true,
+    checks: [{ name: "npm run build", status: "failed", output: "TS error" }]
+  });
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    runs: [{ id: launch.run.id, status: "repairing" }],
+    workflowContexts: [
+      {
+        id: launch.launchRequest.workflowContextId,
+        runId: launch.run.id,
+        attemptId: launch.attempt.id,
+        status: "repairing",
+        cursor: { state: "repairing" },
+        vars: { repairReason: "Build failed" },
+        pendingSessionIds: []
+      }
+    ],
+    verificationResults: [{ id: "verification_1", attemptId: launch.attempt.id, status: "failed" }]
+  });
+});
+
+test("marking a session run repairing moves its visible workflow context to repairing", async () => {
+  const service = await createService();
+  const loop = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+
+  await service.markRunRepairing(launch.run.id, { reason: "Apply reviewer feedback" });
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    runs: [{ id: launch.run.id, status: "repairing" }],
+    workflowContexts: [
+      {
+        id: launch.launchRequest.workflowContextId,
+        runId: launch.run.id,
+        attemptId: launch.attempt.id,
+        status: "repairing",
+        cursor: { state: "repairing" },
+        vars: { repairReason: "Apply reviewer feedback" },
+        pendingSessionIds: []
+      }
+    ]
+  });
+});
+
+test("keeps a workflow attempt repairable when verifier failure still has repair attempts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return prefix === "attempt" ? `persisted_attempt_${next}` : `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888"
+  });
+  const loop = await service.createLoopContract({
+    title: "Repairable workflow",
+    goal: "Produce sourced notes",
+    body: {
+      steps: [{ id: "collect", kind: "agent", label: "Collect", prompt: "Collect official sources" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Includes an official source", severity: "must" }]
+    },
+    repairPolicy: { maxAttempts: 2, strategy: "repair_then_retry" }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run repairable workflow" });
+
+  const run = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id,
+    executor: {
+      async run() {
+        return { text: "Collected notes without an official source." };
+      }
+    },
+    verifier: async () => ({
+      status: "failed",
+      summary: "Missing official source.",
+      repairInstructions: "Add one official source and retry.",
+      checks: [{ rubricId: "source", status: "failed" }]
+    })
+  });
+
+  const detail = await service.getRunDetail(launch.run.id);
+  const engineAttemptIds = detail.events.flatMap((event) => {
+    const engineEvent = event.data?.engineEvent;
+    return engineEvent && typeof engineEvent === "object" && "attemptId" in engineEvent
+      ? [(engineEvent as { attemptId: string }).attemptId]
+      : [];
+  });
+
+  expect(run.status).toBe("repairing");
+  expect(detail.attempts).toMatchObject([{ id: launch.attempt.id, status: "running" }]);
+  expect(detail.workflowContexts).toMatchObject([
+    {
+      id: launch.launchRequest.workflowContextId,
+      status: "repairing",
+      cursor: { state: "repairing" }
+    }
+  ]);
+  expect(detail.verificationResults).toMatchObject([
+    { attemptId: launch.attempt.id, status: "failed", summary: "Missing official source." }
+  ]);
+  expect(engineAttemptIds).toEqual([
+    launch.attempt.id,
+    launch.attempt.id,
+    launch.attempt.id
+  ]);
 });
 
 test("resolves a human request with a response", async () => {

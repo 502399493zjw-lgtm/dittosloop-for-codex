@@ -139,8 +139,8 @@ const executeWorkflowAttemptSchema = z.object({
 
 const proposeWorkflowRevisionSchema = z.object({
   loopId: z.string().min(1),
-  runId: z.string().min(1).optional(),
-  attemptId: z.string().min(1).optional(),
+  runId: z.string().min(1),
+  attemptId: z.string().min(1),
   authorSessionId: z.string().min(1).optional(),
   authorThreadId: z.string().min(1).optional(),
   reason: z.string().min(1).optional(),
@@ -159,12 +159,16 @@ const listWorkflowRevisionsSchema = z.object({
 
 const promoteWorkflowRevisionSchema = z.object({
   loopId: z.string().min(1),
-  revisionId: z.string().min(1)
+  revisionId: z.string().min(1),
+  runId: z.string().min(1),
+  attemptId: z.string().min(1)
 });
 
 const rejectWorkflowRevisionSchema = z.object({
   loopId: z.string().min(1),
   revisionId: z.string().min(1),
+  runId: z.string().min(1),
+  attemptId: z.string().min(1),
   reason: z.string().min(1)
 });
 
@@ -313,11 +317,18 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     promote_workflow_revision: async (input) => {
       const args = promoteWorkflowRevisionSchema.parse(input);
-      return toToolResult(await service.promoteWorkflowRevision(args.loopId, args.revisionId));
+      return toToolResult(await service.promoteWorkflowRevision(args.loopId, args.revisionId, {
+        runId: args.runId,
+        attemptId: args.attemptId
+      }));
     },
     reject_workflow_revision: async (input) => {
       const args = rejectWorkflowRevisionSchema.parse(input);
-      return toToolResult(await service.rejectWorkflowRevision(args.loopId, args.revisionId, { reason: args.reason }));
+      return toToolResult(await service.rejectWorkflowRevision(args.loopId, args.revisionId, {
+        runId: args.runId,
+        attemptId: args.attemptId,
+        reason: args.reason
+      }));
     },
     record_codex_thread: async (input) => {
       const args = recordCodexThreadSchema.parse(input);

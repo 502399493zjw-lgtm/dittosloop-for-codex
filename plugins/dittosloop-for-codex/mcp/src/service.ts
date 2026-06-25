@@ -50,8 +50,8 @@ export interface ExecuteWorkflowAttemptInput {
 }
 
 export interface ProposeWorkflowRevisionInput {
-  runId?: string;
-  attemptId?: string;
+  runId: string;
+  attemptId: string;
   authorSessionId?: string;
   authorThreadId?: string;
   reason?: string;
@@ -61,7 +61,14 @@ export interface ProposeWorkflowRevisionInput {
 }
 
 export interface RejectWorkflowRevisionInput {
+  runId: string;
+  attemptId: string;
   reason: string;
+}
+
+export interface PromoteWorkflowRevisionInput {
+  runId: string;
+  attemptId: string;
 }
 
 export interface StartAttemptInput {
@@ -339,6 +346,7 @@ export class LoopService {
       result = await runner.run({
         contract,
         runId,
+        attemptId: attempt.id,
         attemptNumber,
         emit: (event) => engineEvents.push(event)
       });
@@ -368,6 +376,11 @@ export class LoopService {
       checks: verificationDecisionChecksToResults(contract, result.verification),
       repair: result.shouldRepair
     });
+
+    if (result.shouldRepair) {
+      await this.markWorkflowContextRepairing(workflowContext.id, result.verification.repairInstructions ?? result.verification.summary);
+      return (await this.getRunDetail(runId)).run;
+    }
 
     if (result.verification.status === "passed") {
       await this.completeWorkflowContext(workflowContext.id);
@@ -509,7 +522,8 @@ export class LoopService {
         threadId: undefined,
         threadTitle: undefined,
         threadUrl: undefined,
-        prompt: session.prompt
+        prompt: session.prompt,
+        subagent: session.subagent
       };
       const existingSubagents = run.codexSession?.subagents ?? [];
       let matchedSubagent = false;
@@ -1189,19 +1203,28 @@ export class LoopService {
 
     await this.options.store.updateState((state) => {
       requireRun(state, runId);
+      const shouldRepair = input.repair && input.status === "failed";
       if (input.attemptId) {
         const attempt = requireAttempt(state, input.attemptId);
         if (attempt.runId !== runId) {
           throw new Error(`Attempt does not belong to run: ${input.attemptId}`);
         }
       }
+      const repairContext = shouldRepair ? findWorkflowContextForRepair(state, runId, input.attemptId) : undefined;
 
       return {
         ...state,
         runs:
-          input.repair && input.status === "failed"
+          shouldRepair
             ? updateRun(state.runs, runId, { status: "repairing", updatedAt: timestamp })
             : state.runs,
+        workflowContexts: repairContext
+          ? updateWorkflowContext(
+              state.workflowContexts,
+              repairContext.id,
+              repairWorkflowContext(repairContext, input.summary, timestamp)
+            )
+          : state.workflowContexts,
         verificationResults: [...state.verificationResults, result]
       };
     });
@@ -1353,6 +1376,7 @@ export class LoopService {
 
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
+      const repairContext = findWorkflowContextForRepair(state, runId);
       repairingRun = {
         ...run,
         status: "repairing",
@@ -1362,6 +1386,13 @@ export class LoopService {
       return {
         ...state,
         runs: updateRun(state.runs, runId, { status: "repairing", updatedAt: timestamp }),
+        workflowContexts: repairContext
+          ? updateWorkflowContext(
+              state.workflowContexts,
+              repairContext.id,
+              repairWorkflowContext(repairContext, input.reason, timestamp)
+            )
+          : state.workflowContexts,
         events: input.reason
           ? [...state.events, lifecycleEvent(this.nextId("event"), runId, "note", input.reason, timestamp)]
           : state.events
@@ -1454,19 +1485,7 @@ export class LoopService {
     const timestamp = this.now();
     const state = await this.options.store.readState();
     const baseContract = requireFormalContract(state, loopId);
-    const run = input.runId ? requireRun(state, input.runId) : latestRunForLoop(state, loopId);
-    if (!run) {
-      throw new Error(`No run found for workflow revision: ${loopId}`);
-    }
-    if (run.loopId !== loopId) {
-      throw new Error(`Run does not belong to loop: ${run.id}`);
-    }
-    if (input.attemptId) {
-      const attempt = requireAttempt(state, input.attemptId);
-      if (attempt.runId !== run.id) {
-        throw new Error(`Attempt does not belong to run: ${input.attemptId}`);
-      }
-    }
+    const { run, attempt } = requireWorkflowRevisionSessionContext(state, loopId, input);
     const reason = input.rationale ?? input.reason;
     if (!reason) {
       throw new Error("Workflow revision rationale is required");
@@ -1495,7 +1514,7 @@ export class LoopService {
     );
     validateContract(contract);
 
-    return this.recordWorkflowRevision(run.id, input.attemptId, loopId, {
+    return this.recordWorkflowRevision(run.id, attempt.id, loopId, {
       status: "draft",
       reason,
       contract,
@@ -1510,13 +1529,18 @@ export class LoopService {
     return state.workflowRevisions.filter((revision) => revision.loopId === loopId);
   }
 
-  async promoteWorkflowRevision(loopId: string, revisionId: string): Promise<WorkflowRevision> {
+  async promoteWorkflowRevision(
+    loopId: string,
+    revisionId: string,
+    input: PromoteWorkflowRevisionInput
+  ): Promise<WorkflowRevision> {
     const timestamp = this.now();
     let promotedRevision: WorkflowRevision | undefined;
 
     await this.options.store.updateState((state) => {
       requireLoop(state, loopId);
       const revision = requireWorkflowRevision(state, loopId, revisionId);
+      const { attempt } = requireWorkflowRevisionSessionContext(state, loopId, input, revision);
       if (revision.status === "rejected") {
         throw new Error(`Cannot promote rejected workflow revision: ${revisionId}`);
       }
@@ -1559,7 +1583,7 @@ export class LoopService {
             "note",
             "Promoted workflow revision",
             timestamp,
-            { workflowRevisionId: revision.id, loopId, activeRevisionId: revision.id }
+            { workflowRevisionId: revision.id, loopId, activeRevisionId: revision.id, attemptId: attempt.id }
           )
         ]
       };
@@ -1579,6 +1603,7 @@ export class LoopService {
     await this.options.store.updateState((state) => {
       requireLoop(state, loopId);
       const revision = requireWorkflowRevision(state, loopId, revisionId);
+      const { attempt } = requireWorkflowRevisionSessionContext(state, loopId, input, revision);
       if (revision.status !== "draft") {
         throw new Error(`Only draft workflow revisions can be rejected: ${revisionId}`);
       }
@@ -1602,7 +1627,7 @@ export class LoopService {
             "note",
             "Rejected workflow revision",
             timestamp,
-            { workflowRevisionId: revision.id, loopId, reason: input.reason }
+            { workflowRevisionId: revision.id, loopId, attemptId: attempt.id, reason: input.reason }
           )
         ]
       };
@@ -1637,7 +1662,8 @@ export class LoopService {
         threadId: session.threadId,
         threadTitle: session.threadTitle,
         threadUrl: session.threadUrl,
-        prompt: session.prompt
+        prompt: session.prompt,
+        subagent: session.subagent
       }));
 
       updatedRun = {
@@ -2105,6 +2131,23 @@ export class LoopService {
     });
   }
 
+  private async markWorkflowContextRepairing(workflowContextId: string, reason: string): Promise<void> {
+    const timestamp = this.now();
+
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(
+          state.workflowContexts,
+          workflowContextId,
+          repairWorkflowContext(context, reason, timestamp)
+        )
+      };
+    });
+  }
+
   private async failWorkflowContext(workflowContextId: string, error: string): Promise<void> {
     const timestamp = this.now();
 
@@ -2256,6 +2299,41 @@ function requireWorkflowRevision(state: LoopState, loopId: string, revisionId: s
   return revision;
 }
 
+function requireWorkflowRevisionSessionContext(
+  state: LoopState,
+  loopId: string,
+  input: { runId?: string; attemptId?: string } | undefined,
+  revision?: WorkflowRevision
+): { run: LoopRun; attempt: RunAttempt } {
+  if (!input?.runId || !input.attemptId) {
+    throw new Error("Workflow revision context requires runId and attemptId");
+  }
+
+  const run = requireRun(state, input.runId);
+  if (run.loopId !== loopId) {
+    throw new Error(`Run does not belong to loop: ${run.id}`);
+  }
+  if (!run.codexSession) {
+    throw new Error(`Workflow revision context must be a Codex session run: ${run.id}`);
+  }
+
+  const attempt = requireAttempt(state, input.attemptId);
+  if (attempt.runId !== run.id) {
+    throw new Error(`Attempt does not belong to run: ${attempt.id}`);
+  }
+
+  if (revision) {
+    if (revision.runId !== run.id) {
+      throw new Error(`Workflow revision does not belong to run: ${revision.id}`);
+    }
+    if (revision.attemptId && revision.attemptId !== attempt.id) {
+      throw new Error(`Workflow revision does not belong to attempt: ${revision.id}`);
+    }
+  }
+
+  return { run, attempt };
+}
+
 function normalizeFormalContractInput(input: CreateLoopContractInput, id: string): FormalLoopContractInput {
   const { codexProjectId, projectLabel, projectPath, projectBinding, ...contractInput } = input;
   const normalizedProjectBinding = {
@@ -2374,7 +2452,8 @@ function codexSessionSubagentsForContract(
       phaseId: step.phaseId,
       role: step.label,
       status,
-      prompt: step.prompt ?? prompt
+      prompt: step.prompt ?? prompt,
+      subagent: step.subagent
     }));
 
   return agents.length ? agents : [{ role: "loop-runner", status, prompt }];
@@ -2866,10 +2945,6 @@ function requireRun(state: LoopState, runId: string): LoopRun {
   return run;
 }
 
-function latestRunForLoop(state: LoopState, loopId: string): LoopRun | undefined {
-  return state.runs.filter((run) => run.loopId === loopId).at(-1);
-}
-
 function firstCodexSubagentSessionId(run: LoopRun): string | undefined {
   return run.codexSession?.subagents?.find((subagent) => subagent.sessionId)?.sessionId;
 }
@@ -2890,6 +2965,39 @@ function requireWorkflowContext(state: LoopState, workflowContextId: string): Wo
   }
 
   return context;
+}
+
+function findWorkflowContextForRepair(
+  state: LoopState,
+  runId: string,
+  attemptId?: string
+): WorkflowContext | undefined {
+  const contexts = state.workflowContexts.filter((context) => context.runId === runId);
+  if (attemptId) {
+    return contexts.find((context) => context.attemptId === attemptId);
+  }
+
+  return contexts.at(-1);
+}
+
+function repairWorkflowContext(context: WorkflowContext, reason: string | undefined, timestamp: string): WorkflowContext {
+  return {
+    ...context,
+    status: "repairing",
+    cursor: {
+      ...context.cursor,
+      state: "repairing"
+    },
+    vars: reason
+      ? {
+          ...context.vars,
+          repairReason: reason
+        }
+      : context.vars,
+    pendingSessionIds: [],
+    updatedAt: timestamp,
+    completedAt: undefined
+  };
 }
 
 function requireWorkflowTaskRun(context: WorkflowContext, taskRunId: string): WorkflowTaskRun {

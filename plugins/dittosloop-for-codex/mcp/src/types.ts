@@ -69,6 +69,7 @@ export interface LoopRun {
       threadTitle?: string;
       threadUrl?: string;
       prompt?: string;
+      subagent?: CodexSubagentSpec;
     }>;
     prompt: string;
   };
@@ -159,12 +160,13 @@ export interface WorkflowRevision {
   rejectionReason?: string;
 }
 
-export type WorkflowContextStatus = "ready" | "running" | "suspended" | "completed" | "failed";
+export type WorkflowContextStatus = "ready" | "running" | "suspended" | "repairing" | "completed" | "failed";
 export type WorkflowCursorState =
   | "created"
   | "executing"
   | "waiting_for_session"
   | "waiting_for_human"
+  | "repairing"
   | "completed"
   | "failed";
 export type WorkflowTaskRunStatus = "running" | "suspended" | "completed" | "failed";

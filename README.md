@@ -112,8 +112,8 @@ Open `http://127.0.0.1:47888` and select `Release Readiness Loop`.
 3. `record_codex_thread` links the real Codex App thread once the host creates it. This is a top-level run/thread binding, not per-task workflow result writeback.
 4. `execute_workflow_attempt` runs the formal workflow from inside that visible session. Codex-owned workflow steps can request local Codex tasks and suspend while waiting for precise results.
 5. `record_session_result` writes back the result for a specific `workflowContextId`, `attemptId`, `sessionId`, `taskRunId`, or `stepId`. If multiple task locators are provided, they must all identify the same task run. Completed workflow steps are reused when execution resumes, while `needs_human` suspends the context without caching a completed task result and opens a linked human request when possible.
-6. `propose_workflow_revision`, `promote_workflow_revision`, and `reject_workflow_revision` let the visible session edit the local workflow contract and keep revision history.
-7. `record_verification` can attach verifier results to `attemptId`; failed verification with `repair: true` moves the run to `repairing`.
+6. `propose_workflow_revision`, `promote_workflow_revision`, and `reject_workflow_revision` let the visible session edit the local workflow contract and keep revision history. Each write requires the current `runId` and `attemptId`.
+7. `record_verification` can attach verifier results to `attemptId`; failed verification with `repair: true` moves the run and workflow context to `repairing`.
 8. `record_human_request` keeps user decisions visible when work pauses.
 9. `resolve_human_request` closes a user decision with the response. If the request belongs to a suspended workflow task, the response is written back as that task result and the workflow continues.
 10. `commit_memory` stores durable lessons or preferences.
