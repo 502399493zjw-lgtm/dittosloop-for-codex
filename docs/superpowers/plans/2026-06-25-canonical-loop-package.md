@@ -162,5 +162,6 @@ Expected: Only canonical loop package files and tests changed; no whitespace err
 
 - [x] Persist memory as a first-class append-only loop surface shaped like `<loopId>.md`, while keeping `evolution/memory-commits.json` as a history projection.
 - [ ] Add explicit pause/resume controls that update `paused`, `pausedReason`, and `consecutiveFailures` like the engine API.
-- [ ] Add threshold-driven pausing for repeated failed Codex runs, budget stops, and escalation stops.
+- [x] Add threshold-driven pausing for repeated failed Codex runs.
+- [ ] Add budget stops and escalation stops.
 - [ ] Split run history more cleanly from detailed run event timelines, matching the engine's `LoopRunStore` plus per-run event stream distinction.

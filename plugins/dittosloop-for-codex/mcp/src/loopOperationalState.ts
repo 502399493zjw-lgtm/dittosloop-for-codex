@@ -15,7 +15,7 @@ export function deriveLoopOperationalState(input: {
   const activeRun = latestRun && !isTerminalRunStatus(latestRun.status) ? latestRun : undefined;
   const terminalRuns = loopRuns.filter((run) => isTerminalRunStatus(run.status));
   const latestTerminalRun = terminalRuns.at(-1);
-  const paused = input.existing?.paused ?? input.loop.status === "paused";
+  const paused = input.loop.status === "paused" || input.existing?.paused === true;
 
   return {
     loopId: input.loop.id,

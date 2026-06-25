@@ -535,6 +535,103 @@ test("projects canonical status for failed loop history", async () => {
   });
 });
 
+test("pauses canonical loop after stop policy failure threshold", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Fragile monitor",
+    goal: "Pause after repeated failures",
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    },
+    stopPolicy: { rule: "pause after two failed runs", maxConsecutiveFailures: 2 }
+  });
+
+  const first = await service.startCodexSessionRun(formal.id, { goal: "First failing run" });
+  await service.completeRun(first.run.id, { status: "failed" });
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [{ id: formal.id, status: "active" }],
+    formalContracts: [{ id: formal.id, status: "active" }],
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 1,
+        paused: false,
+        running: false,
+        runCount: 1
+      }
+    ]
+  });
+
+  const second = await service.startCodexSessionRun(formal.id, { goal: "Second failing run" });
+  await service.completeRun(second.run.id, { status: "failed" });
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [{ id: formal.id, status: "paused" }],
+    formalContracts: [{ id: formal.id, status: "paused" }],
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 2,
+        paused: true,
+        pausedReason: "failures",
+        running: false,
+        runCount: 2
+      }
+    ]
+  });
+  await expect(service.startCodexSessionRun(formal.id, { goal: "Third run" })).rejects.toThrow(/Loop is paused/);
+
+  const files = await service.listLoopFiles(formal.id);
+  expect(JSON.parse(files.find((file) => file.path === "status.json")!.content)).toMatchObject({
+    loopId: formal.id,
+    consecutiveFailures: 2,
+    paused: true,
+    pausedReason: "failures",
+    running: false
+  });
+});
+
+test("pauses canonical loop after failed Codex session result reaches threshold", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Failing session monitor",
+    goal: "Pause from session result",
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Run the loop workflow." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow result is acceptable.", severity: "must" }]
+    },
+    stopPolicy: { rule: "pause after first failed session", maxConsecutiveFailures: 1 }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run through Codex session" });
+
+  await service.recordSessionResult(launch.run.id, {
+    status: "failed",
+    summary: "Codex session failed verification."
+  });
+
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    loops: [{ id: formal.id, status: "paused" }],
+    loopStates: [
+      {
+        loopId: formal.id,
+        consecutiveFailures: 1,
+        paused: true,
+        pausedReason: "failures",
+        running: false,
+        runCount: 1
+      }
+    ]
+  });
+  await expect(service.startCodexSessionRun(formal.id, { goal: "Retry while paused" })).rejects.toThrow(/Loop is paused/);
+});
+
 test("persists canonical loop operational state across run lifecycle", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await createFormalLoop(service);

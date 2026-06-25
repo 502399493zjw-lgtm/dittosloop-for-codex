@@ -13,6 +13,7 @@ import type {
   HumanRequest,
   LoopContract,
   LoopMemory,
+  LoopOperationalState,
   LoopRun,
   LoopWorkspaceFile,
   RunAttempt,
@@ -1060,7 +1061,7 @@ export class LoopService {
           )
         : state.workflowContexts;
 
-      return {
+      const nextState = {
         ...state,
         runs: state.runs.map((candidate) => (candidate.id === runId ? updatedRun! : candidate)),
         attempts,
@@ -1125,6 +1126,10 @@ export class LoopService {
             : [])
         ]
       };
+
+      return runStatus === "failed"
+        ? applyFailureStopPolicy(nextState, run.loopId, timestamp)
+        : nextState;
     });
 
     if (shouldContinueWorkflow && continuationAttemptId) {
@@ -1451,10 +1456,14 @@ export class LoopService {
         return completedRun;
       });
 
-      return {
+      const nextState = {
         ...state,
         runs
       };
+
+      return status === "failed" && completedRun
+        ? applyFailureStopPolicy(nextState, completedRun.loopId, timestamp)
+        : nextState;
     });
 
     return completedRun!;
@@ -3053,6 +3062,86 @@ function appendLoopMemory(memories: LoopMemory[], loopId: string, line: string, 
   }
 
   return memories.map((memory) => (memory.loopId === loopId ? updated : memory));
+}
+
+function applyFailureStopPolicy(state: LoopState, loopId: string, timestamp: string): LoopState {
+  const failures = consecutiveFailuresForLoop(state.runs, loopId);
+  const threshold = failureThresholdForLoop(state, loopId);
+  if (failures < threshold) {
+    return state;
+  }
+
+  return {
+    ...state,
+    loops: state.loops.map((loop) =>
+      loop.id === loopId
+        ? { ...loop, status: "paused", updatedAt: timestamp }
+        : loop
+    ),
+    formalContracts: state.formalContracts.map((contract) =>
+      contract.id === loopId
+        ? { ...contract, status: "paused", updatedAt: timestamp }
+        : contract
+    ),
+    loopStates: upsertLoopOperationalState(
+      state.loopStates,
+      pausedFailureState(state, loopId, failures)
+    )
+  };
+}
+
+function failureThresholdForLoop(state: LoopState, loopId: string): number {
+  const configured = state.formalContracts.find((contract) => contract.id === loopId)?.stopPolicy.maxConsecutiveFailures;
+  if (configured !== undefined && Number.isInteger(configured) && configured >= 0) {
+    return configured;
+  }
+
+  return 3;
+}
+
+function pausedFailureState(state: LoopState, loopId: string, failures: number): LoopOperationalState {
+  const existing = state.loopStates.find((candidate) => candidate.loopId === loopId);
+  const terminalRuns = terminalRunsForLoop(state.runs, loopId);
+  const latestTerminalRun = terminalRuns.at(-1);
+
+  return {
+    loopId,
+    cursor: existing?.cursor ?? null,
+    consecutiveFailures: failures,
+    paused: true,
+    pausedReason: "failures",
+    running: false,
+    runCount: Math.max(existing?.runCount ?? 0, terminalRuns.length),
+    ...(latestTerminalRun ? { lastRunAt: Date.parse(latestTerminalRun.completedAt ?? latestTerminalRun.updatedAt ?? latestTerminalRun.createdAt) } : {})
+  };
+}
+
+function upsertLoopOperationalState(states: LoopOperationalState[], next: LoopOperationalState): LoopOperationalState[] {
+  if (!states.some((state) => state.loopId === next.loopId)) {
+    return [...states, next];
+  }
+
+  return states.map((state) => (state.loopId === next.loopId ? { ...state, ...next } : state));
+}
+
+function consecutiveFailuresForLoop(runs: LoopRun[], loopId: string): number {
+  const loopRuns = terminalRunsForLoop(runs, loopId);
+
+  let failures = 0;
+  for (let index = loopRuns.length - 1; index >= 0; index -= 1) {
+    if (loopRuns[index].status !== "failed") {
+      break;
+    }
+    failures += 1;
+  }
+
+  return failures;
+}
+
+function terminalRunsForLoop(runs: LoopRun[], loopId: string): LoopRun[] {
+  return runs
+    .filter((run) => run.loopId === loopId && (run.status === "completed" || run.status === "failed"))
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
 }
 
 function updateWorkflowContext(
