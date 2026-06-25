@@ -22,6 +22,7 @@ afterEach(async () => {
 async function createHandlers() {
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-mcp-"));
   tempDirs.push(dir);
+  const counters = new Map<string, number>();
   const sessionRequests: CodexSessionRequest[] = [];
   const sessionBridge: CodexSessionBridge = {
     async createSession(request) {
@@ -53,7 +54,11 @@ async function createHandlers() {
   const service = new LoopService({
     store: new LoopStore(dir),
     now: () => "2026-06-23T00:00:00.000Z",
-    createId: (prefix) => `${prefix}_1`,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
     previewBaseUrl: "http://127.0.0.1:47888",
     sessionBridge
   });
@@ -64,12 +69,21 @@ async function createHandlers() {
 test("exposes loop operations as MCP content", async () => {
   const handlers = await createHandlers();
 
-  const loop = readResult(await handlers.create_loop({
+  expect(handlers.create_loop).toBeUndefined();
+  expect(handlers.trigger_run).toBeUndefined();
+
+  const loop = readResult(await handlers.create_loop_contract({
     title: "Daily code health check",
-    intent: "Keep the project healthy",
-    verificationChecks: ["npm test"]
+    goal: "Keep the project healthy",
+    body: {
+      steps: [{ id: "check", kind: "agent", label: "Run checks", prompt: "Run npm test" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "tests", label: "Tests", requirement: "npm test passes", severity: "must" }]
+    }
   }));
-  const run = readResult(await handlers.trigger_run({ loopId: loop.id, goal: "Check tests" }));
+  const run = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Check tests" })).run;
   await handlers.append_event({ runId: run.id, message: "Started checks" });
   await handlers.record_verification({ runId: run.id, status: "passed", summary: "Tests passed" });
 
@@ -78,9 +92,11 @@ test("exposes loop operations as MCP content", async () => {
   expect(snapshot).toMatchObject({
     loops: [{ id: "loop_1", title: "Daily code health check" }],
     runs: [{ id: "run_1", loopId: "loop_1" }],
-    events: [{ id: "event_1", message: "Started checks" }],
     verificationResults: [{ id: "verification_1", status: "passed" }]
   });
+  expect(snapshot.events).toEqual(expect.arrayContaining([
+    expect.objectContaining({ message: "Started checks" })
+  ]));
 });
 
 test("exposes formal contract and engine run operations as MCP content", async () => {
@@ -150,8 +166,18 @@ test("exposes formal contract and engine run operations as MCP content", async (
 
 test("exposes attempt and run detail operations as MCP content", async () => {
   const handlers = await createHandlers();
-  const loop = readResult(await handlers.create_loop({ title: "Code health", intent: "Keep checks visible" }));
-  const run = readResult(await handlers.trigger_run({ loopId: loop.id, goal: "Run checks" }));
+  const loop = readResult(await handlers.create_loop_contract({
+    title: "Code health",
+    goal: "Keep checks visible",
+    body: {
+      steps: [{ id: "check", kind: "agent", label: "Run checks", prompt: "Run checks" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "checks", label: "Checks", requirement: "Checks pass", severity: "must" }]
+    }
+  }));
+  const run = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Run checks" })).run;
 
   const attempt = readResult(await handlers.start_attempt({ runId: run.id, summary: "First pass" }));
   await handlers.complete_attempt({ attemptId: attempt.id, status: "failed", summary: "Build failed" });
@@ -170,15 +196,27 @@ test("exposes attempt and run detail operations as MCP content", async () => {
 
   expect(detail).toMatchObject({
     run: { id: run.id, status: "repairing" },
-    attempts: [{ id: attempt.id, status: "failed" }],
     verificationResults: [{ attemptId: attempt.id }],
     humanRequests: [{ id: request.id, status: "resolved", response: "Continue." }]
   });
+  expect(detail.attempts).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: attempt.id, status: "failed" })
+  ]));
 });
 
 test("exposes codex session launch as MCP content", async () => {
   const handlers = await createHandlers();
-  const loop = readResult(await handlers.create_loop({ title: "Monitor", intent: "Watch updates" }));
+  const loop = readResult(await handlers.create_loop_contract({
+    title: "Monitor",
+    goal: "Watch updates",
+    body: {
+      steps: [{ id: "monitor", kind: "agent", label: "Monitor updates", prompt: "Watch updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "updates", label: "Updates", requirement: "Summarize updates", severity: "must" }]
+    }
+  }));
 
   const launch = readResult(await handlers.start_codex_session({
     loopId: loop.id,
@@ -208,7 +246,17 @@ test("exposes codex session launch as MCP content", async () => {
 
 test("exposes codex thread writeback as MCP content", async () => {
   const handlers = await createHandlers();
-  const loop = readResult(await handlers.create_loop({ title: "Monitor", intent: "Watch updates" }));
+  const loop = readResult(await handlers.create_loop_contract({
+    title: "Monitor",
+    goal: "Watch updates",
+    body: {
+      steps: [{ id: "monitor", kind: "agent", label: "Monitor updates", prompt: "Watch updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "updates", label: "Updates", requirement: "Summarize updates", severity: "must" }]
+    }
+  }));
   const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Check today" }));
 
   const run = readResult(await handlers.record_codex_thread({
@@ -235,7 +283,17 @@ test("exposes codex thread writeback as MCP content", async () => {
 
 test("exposes codex session result writeback as MCP content", async () => {
   const handlers = await createHandlers();
-  const loop = readResult(await handlers.create_loop({ title: "Monitor", intent: "Watch updates" }));
+  const loop = readResult(await handlers.create_loop_contract({
+    title: "Monitor",
+    goal: "Watch updates",
+    body: {
+      steps: [{ id: "monitor", kind: "agent", label: "Monitor updates", prompt: "Watch updates" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "updates", label: "Updates", requirement: "Summarize updates", severity: "must" }]
+    }
+  }));
   const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Check today" }));
   await handlers.record_codex_thread({
     runId: launch.run.id,
@@ -326,10 +384,8 @@ test("registers the DittosLoop tool surface", () => {
   registerDittosLoopTools(fakeServer, {} as ReturnType<typeof createToolHandlers>);
 
   expect(registeredTools).toEqual([
-    "create_loop",
     "create_loop_contract",
     "list_loops",
-    "trigger_run",
     "start_loop_run",
     "start_codex_session",
     "record_codex_thread",

@@ -31,15 +31,6 @@ const eventKindSchema = z.enum([
 
 const verificationStatusSchema = z.enum(["passed", "failed", "skipped"]);
 
-const createLoopSchema = z.object({
-  title: z.string().min(1),
-  intent: z.string().min(1),
-  verificationChecks: z.array(z.string().min(1)).optional(),
-  codexProjectId: z.string().optional(),
-  projectLabel: z.string().optional(),
-  projectPath: z.string().optional()
-});
-
 const agentStepSchema = z.object({
   id: z.string().min(1),
   kind: z.literal("agent"),
@@ -104,15 +95,13 @@ const createLoopContractSchema = z.object({
   }).optional()
 });
 
-const triggerRunSchema = z.object({
+const startLoopRunSchema = z.object({
   loopId: z.string().min(1),
   goal: z.string().optional(),
   codexProjectId: z.string().optional(),
   projectLabel: z.string().optional(),
   projectPath: z.string().optional()
 });
-
-const startLoopRunSchema = triggerRunSchema;
 
 const startCodexSessionSchema = z.object({
   loopId: z.string().min(1),
@@ -226,24 +215,11 @@ const emptySchema = z.object({});
 
 export function createToolHandlers(service: LoopService): ToolHandlerMap {
   return {
-    create_loop: async (input) => {
-      const args = createLoopSchema.parse(input);
-      return toToolResult(await service.createLoop(args));
-    },
     create_loop_contract: async (input) => {
       const args = createLoopContractSchema.parse(input);
       return toToolResult(await service.createLoopContract(args));
     },
     list_loops: async () => toToolResult(await service.listLoops()),
-    trigger_run: async (input) => {
-      const args = triggerRunSchema.parse(input);
-      return toToolResult(await service.triggerRun(args.loopId, {
-        goal: args.goal,
-        codexProjectId: args.codexProjectId,
-        projectLabel: args.projectLabel,
-        projectPath: args.projectPath
-      }));
-    },
     start_loop_run: async (input) => {
       const args = startLoopRunSchema.parse(input);
       return toToolResult(await service.runLoopWorkflow(args.loopId, {
@@ -382,12 +358,6 @@ function toToolResult(payload: unknown): TextToolResult {
 
 const toolDefinitions = [
   {
-    name: "create_loop",
-    title: "Create loop",
-    description: "Create a local Dittos loop contract.",
-    schema: createLoopSchema
-  },
-  {
     name: "create_loop_contract",
     title: "Create formal loop contract",
     description: "Create a structured Live Loop contract with workflow body and verification rubrics.",
@@ -398,12 +368,6 @@ const toolDefinitions = [
     title: "List loops",
     description: "List local Dittos loop contracts.",
     schema: emptySchema
-  },
-  {
-    name: "trigger_run",
-    title: "Trigger run",
-    description: "Start a manual run for a loop.",
-    schema: triggerRunSchema
   },
   {
     name: "start_loop_run",

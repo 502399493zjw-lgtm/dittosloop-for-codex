@@ -1054,7 +1054,7 @@ function buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks }) {
       path: "flow.js",
       language: "javascript",
       meta: "JS",
-      content: formalContract ? formalWorkflowFlowFile(formalContract) : compatibilityFlowFile(loop)
+      content: formalContract ? formalWorkflowFlowFile(formalContract) : legacyLoopFlowNoticeFile(loop)
     },
     {
       path: "memory.md",
@@ -1129,21 +1129,13 @@ function buildLoopDirectoryFiles({ snapshot, loop, loopRuns, checks }) {
   ];
 }
 
-function compatibilityFlowFile(loop) {
+function legacyLoopFlowNoticeFile(loop) {
   return [
     `export const loop = ${JSON.stringify(loop.title)};`,
     "",
-    "export async function run(context) {",
-    "  const launch = await context.dittosloop.startCodexSession({",
-    "    loopId: context.loop.id,",
-    "    project: context.project,",
-    "    prompt: context.userPrompt",
-    "  });",
-    "",
-    "  const thread = await context.codexApp.createThread(launch.launchRequest);",
-    "  await context.dittosloop.recordCodexThread({ runId: launch.run.id, ...thread });",
-    "  return thread;",
-    "}"
+    "// 这个旧版 loop 没有正式 workflow contract。",
+    "// 它只保留历史记录，不伪装成可执行 workflow。",
+    "export const workflow = null;"
   ].join("\n");
 }
 

@@ -28,12 +28,12 @@ Do not use this for hidden background automation. In this MVP, loop work should 
 ## Workflow
 
 1. Shape the loop contract: title, goal or intent, manual trigger, verification expectations, and whether it needs a structured workflow body.
-2. Use `create_loop_contract` when the loop needs engine-backed workflow steps, rubrics, repair policy, or stop policy.
-3. Use `create_loop` only for compatibility-style manual loops with simple verification checks.
+2. For a formal contract, choose a workflow style before writing `body.steps`.
+3. Use `create_loop_contract` for every new loop. New loops should be formal runtime contracts, even when the workflow is compact.
 4. Use `list_loops` before reusing an existing loop.
-5. Use `start_loop_run` for formal engine-backed contracts.
-6. Use `trigger_run` for legacy manual runs.
-7. Use `start_codex_session` when the user should open or inspect a visible Codex worker session; this records a host-mediated session request.
+5. Use `start_loop_run` for formal engine-backed contracts when the run should execute in the local workflow runtime.
+6. Use `start_codex_session` when the user should open or inspect a visible Codex worker session; this records a host-mediated session request.
+7. Do not create new compatibility runs. Old compatibility runs may still appear in preview state, but new user-visible runs should be associated with a Codex session request.
 8. Use `start_attempt` before doing substantive manual loop work.
 9. Use `append_event` for meaningful progress notes.
 10. Use `complete_attempt` when an attempt completes or fails.
@@ -51,11 +51,9 @@ Do not use this for hidden background automation. In this MVP, loop work should 
 
 | Need | Tool |
 | --- | --- |
-| New compatibility loop contract | `create_loop` |
 | New formal runtime contract | `create_loop_contract` |
 | Existing loops | `list_loops` |
 | Start a formal engine-backed run | `start_loop_run` |
-| Start a compatibility run | `trigger_run` |
 | Request visible Codex worker session | `start_codex_session` |
 | Attach created Codex thread | `record_codex_thread` |
 | Start visible work under a run | `start_attempt` |
@@ -74,18 +72,10 @@ Do not use this for hidden background automation. In this MVP, loop work should 
 
 ## Contract Shape
 
-Keep the first contract small and actionable:
+Keep the first formal contract small and actionable:
 
 ```text
 Title: short responsibility name
-Intent: why this loop exists
-Trigger: manual for the MVP
-Verification checks: commands, review steps, or observable outcomes
-```
-
-For formal runtime contracts, include:
-
-```text
 Goal: what the loop is responsible for
 Body: ordered phase, agent, and parallel steps
 Verification rubrics: must/should checks
@@ -94,11 +84,30 @@ Stop policy: when the loop should stop
 Project binding: optional Codex project id, label, and path
 ```
 
+## Workflow Style Selection
+
+Workflow style describes how the loop produces the candidate result. Verification is a separate outer layer: every formal loop should still define rubrics, repair policy, and stop policy.
+
+Choose one style before building `body.steps`, then make the chosen style visible in the step labels and final summary.
+
+| Style | Use when | Body shape |
+| --- | --- | --- |
+| `Pipeline` | Work has natural dependencies or ordered stages | Sequential `phase` or `agent` steps, each consuming the prior output |
+| `Fan-out/Fan-in` | Work can be split by source, module, object, or domain | A planning or setup step, a `parallel` step with named specialist agents, then a merge/synthesis agent |
+| `Multi-perspective Vote` | The loop needs judgment, tradeoff analysis, risk review, or subjective quality calls | Multiple independent perspective agents, then an arbiter/judge agent that compares, weighs, or votes |
+| `Single Expert` | The task is small, low-risk, and does not benefit from decomposition | One agent step; only use this when the compact shape is intentional |
+
+When the request involves monitoring, reports, research, audits, multiple sources, multiple files, or competing judgments, do not collapse it into `Single Expert` without explaining why. Prefer `Fan-out/Fan-in` for separable evidence gathering and `Multi-perspective Vote` for judgment-heavy review.
+
+The final response after creating a formal loop should state the selected workflow style, the agent names and responsibilities, the verifier rubrics, and the repair/stop policy.
+
 If the user gives a vague request, propose one compact contract and ask only for missing safety-critical details.
 
 ## Common Mistakes
 
 - Creating a loop without verification checks
+- Treating verifier/repair as a workflow style instead of the outer validation layer
+- Collapsing multi-source, multi-module, or judgment-heavy formal loops into one generic worker agent
 - Completing a run before recording what was verified
 - Recording verification without `attemptId` when an attempt produced the result
 - Treating the preview as editable state

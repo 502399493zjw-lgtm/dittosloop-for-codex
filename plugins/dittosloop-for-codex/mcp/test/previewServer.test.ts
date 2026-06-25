@@ -32,6 +32,40 @@ async function createService(options: Partial<Pick<LoopServiceOptions, "codexPro
   });
 }
 
+async function createFormalLoop(
+  service: LoopService,
+  input: {
+    title?: string;
+    goal?: string;
+  } = {}
+) {
+  return service.createLoopContract({
+    title: input.title ?? "Code health",
+    goal: input.goal ?? "Keep checks visible",
+    body: {
+      steps: [
+        {
+          id: "run-worker",
+          kind: "agent",
+          label: "Run worker",
+          prompt: "Run the loop workflow."
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "done",
+          label: "Done",
+          requirement: "The workflow result satisfies the loop goal.",
+          severity: "must"
+        }
+      ]
+    }
+  });
+}
+
 test("serves the preview shell", async () => {
   const service = await createService();
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
@@ -68,6 +102,8 @@ test("preview script includes a real Live Loop directory view", async () => {
   expect(app).toContain("contract.json");
   expect(app).toContain("session.json");
   expect(app).toContain("formalWorkflowFlowFile");
+  expect(app).not.toContain("compatibilityFlowFile");
+  expect(app).not.toContain("context.codexApp.createThread(launch.launchRequest)");
   expect(app).toContain("workflowContractId");
   expect(app).toContain("runPhase");
   expect(app).toContain("runParallel");
@@ -194,10 +230,14 @@ test("serves the loop snapshot api", async () => {
       }
     ]
   });
-  await service.createLoop({
+  await service.createLoopContract({
     title: "Daily code health check",
-    intent: "Keep the project healthy",
-    verificationChecks: ["npm test"]
+    goal: "Keep the project healthy",
+    body: { steps: [{ id: "check", kind: "agent", label: "Run checks", prompt: "Run npm test" }] },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "tests", label: "Tests", requirement: "npm test passes", severity: "must" }]
+    }
   });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
   servers.push(server);
@@ -243,11 +283,11 @@ test("creates a host-mediated new loop codex session request", async () => {
 
 test("deletes a loop from the preview api", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "Daily code health check",
-    intent: "Keep the project healthy"
+    goal: "Keep the project healthy"
   });
-  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const run = await service.startLoopRun(loop.id, { goal: "Run checks" });
   const attempt = await service.startAttempt(run.id, { summary: "First pass" });
   await service.recordVerification(run.id, { attemptId: attempt.id, status: "passed", summary: "Tests passed" });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
@@ -268,8 +308,8 @@ test("deletes a loop from the preview api", async () => {
 
 test("serves composed run detail api", async () => {
   const service = await createService();
-  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
-  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const loop = await createFormalLoop(service);
+  const run = await service.startLoopRun(loop.id, { goal: "Run checks" });
   const attempt = await service.startAttempt(run.id, { summary: "First pass" });
   await service.recordVerification(run.id, { attemptId: attempt.id, status: "passed", summary: "Tests passed" });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
@@ -500,9 +540,9 @@ test("serves formal engine event sections without invented verification records"
 
 test("starts a codex session run from the preview api", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "AI Dev Tools Update Monitor",
-    intent: "Watch release updates"
+    goal: "Watch release updates"
   });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
   servers.push(server);
@@ -549,9 +589,9 @@ test("starts a codex session run from the preview api", async () => {
 
 test("records a codex thread from the preview api", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "AI Dev Tools Update Monitor",
-    intent: "Watch release updates"
+    goal: "Watch release updates"
   });
   const launch = await service.startCodexSessionRun(loop.id, { goal: "Check today updates" });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
@@ -586,9 +626,9 @@ test("records a codex thread from the preview api", async () => {
 
 test("opens a codex session from the preview api when the host thread is attached", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "AI Dev Tools Update Monitor",
-    intent: "Watch release updates"
+    goal: "Watch release updates"
   });
   const launch = await service.startCodexSessionRun(loop.id, { goal: "Check today updates" });
   await service.recordCodexThread(launch.run.id, {

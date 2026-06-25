@@ -6,6 +6,7 @@ import { afterEach, expect, test } from "vitest";
 
 import { LoopService } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
+import type { LoopContract, LoopRun } from "../src/types.js";
 import type {
   CodexSessionBridge,
   CodexSessionRef,
@@ -47,6 +48,120 @@ async function createServiceWithSequentialIds() {
     },
     previewBaseUrl: "http://127.0.0.1:47888"
   });
+}
+
+async function createFormalLoop(
+  service: LoopService,
+  input: {
+    title?: string;
+    goal?: string;
+    codexProjectId?: string;
+    projectLabel?: string;
+    projectPath?: string;
+  } = {}
+) {
+  return service.createLoopContract({
+    title: input.title ?? "Code health",
+    goal: input.goal ?? "Keep checks visible",
+    codexProjectId: input.codexProjectId,
+    projectLabel: input.projectLabel,
+    projectPath: input.projectPath,
+    body: {
+      steps: [
+        {
+          id: "run-worker",
+          kind: "agent",
+          label: "Run worker",
+          prompt: "Run the loop workflow."
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [
+        {
+          id: "done",
+          label: "Done",
+          requirement: "The workflow result satisfies the loop goal.",
+          severity: "must"
+        }
+      ]
+    }
+  });
+}
+
+async function startFormalRun(
+  service: LoopService,
+  input: {
+    title?: string;
+    goal?: string;
+    codexProjectId?: string;
+    projectLabel?: string;
+    projectPath?: string;
+  } = {}
+) {
+  const loop = await createFormalLoop(service, input);
+  const run = await service.startLoopRun(loop.id, { goal: input.goal ?? "Run checks" });
+
+  return { loop, run };
+}
+
+async function seedLegacyLoop(
+  service: LoopService,
+  input: {
+    title?: string;
+    intent?: string;
+    codexProjectId?: string;
+    projectLabel?: string;
+    projectPath?: string;
+  } = {}
+): Promise<LoopContract> {
+  const loop: LoopContract = {
+    id: "loop_1",
+    title: input.title ?? "Legacy Monitor",
+    intent: input.intent ?? "Watch updates",
+    trigger: { mode: "manual" },
+    verification: { checks: [] },
+    status: "active",
+    codexProjectId: input.codexProjectId,
+    projectLabel: input.projectLabel,
+    projectPath: input.projectPath,
+    createdAt: fixedTime,
+    updatedAt: fixedTime
+  };
+
+  await (service as any).options.store.updateState((state) => ({
+    ...state,
+    loops: [...state.loops, loop]
+  }));
+
+  return loop;
+}
+
+async function seedLegacyRun(
+  service: LoopService,
+  loop: LoopContract,
+  input: { goal?: string } = {}
+): Promise<LoopRun> {
+  const run: LoopRun = {
+    id: "run_1",
+    loopId: loop.id,
+    status: "running",
+    goal: input.goal ?? "Run checks",
+    trigger: "manual",
+    codexProjectId: loop.codexProjectId,
+    projectLabel: loop.projectLabel,
+    projectPath: loop.projectPath,
+    createdAt: fixedTime,
+    updatedAt: fixedTime
+  };
+
+  await (service as any).options.store.updateState((state) => ({
+    ...state,
+    runs: [...state.runs, run]
+  }));
+
+  return run;
 }
 
 function createCompletedSessionBridge(resultText: string) {
@@ -120,13 +235,17 @@ function createPendingSessionBridge() {
   return { bridge, requests };
 }
 
-test("creates a loop contract with manual trigger defaults", async () => {
+test("creates a formal loop contract with manual trigger defaults", async () => {
   const service = await createService();
 
-  const loop = await service.createLoop({
+  const loop = await service.createLoopContract({
     title: "Daily code health check",
-    intent: "Keep the project healthy",
-    verificationChecks: ["npm test"]
+    goal: "Keep the project healthy",
+    body: { steps: [{ id: "check", kind: "agent", label: "Run checks", prompt: "Run npm test" }] },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "tests", label: "Tests", requirement: "npm test passes", severity: "must" }]
+    }
   });
 
   await expect(service.listLoops()).resolves.toEqual([
@@ -135,13 +254,20 @@ test("creates a loop contract with manual trigger defaults", async () => {
       title: "Daily code health check",
       intent: "Keep the project healthy",
       trigger: { mode: "manual" },
-      verification: { checks: ["npm test"] },
+      verification: { checks: ["npm test passes"] },
       status: "active",
       createdAt: fixedTime,
       updatedAt: fixedTime
     }
   ]);
   expect(loop.id).toBe("loop_1");
+});
+
+test("does not expose legacy simple loop creation or run methods", async () => {
+  const service = await createService();
+
+  expect("createLoop" in service).toBe(false);
+  expect("triggerRun" in service).toBe(false);
 });
 
 test("creates a formal loop contract and starts an engine-backed run", async () => {
@@ -411,6 +537,27 @@ test("uses the configured Codex session bridge as the default formal workflow ex
   });
 
   expect(run).toMatchObject({ loopId: formal.id, status: "completed" });
+  expect(run.codexSession).toMatchObject({
+    mode: "new_session",
+    status: "completed",
+    threadId: "thread_1",
+    threadTitle: "DittosLoop: Worker",
+    threadUrl: "codex://thread/thread_1",
+    codexProjectId: "project-dittos-loop",
+    projectLabel: "dittos loop",
+    projectPath: "/Users/edisonzhong/Documents/dittos loop",
+    subagents: [
+      {
+        role: "日报 worker",
+        status: "completed",
+        threadId: "thread_1",
+        threadTitle: "DittosLoop: Worker",
+        threadUrl: "codex://thread/thread_1",
+        prompt: "生成 OpenClaw、Claude Code、Codex、Hermes 的中文日报。"
+      }
+    ],
+    prompt: "生成 OpenClaw、Claude Code、Codex、Hermes 的中文日报。"
+  });
   expect(requests).toMatchObject([
     {
       runId: run.id,
@@ -614,13 +761,17 @@ test("keeps a formal workflow waiting when verifier needs human input", async ()
 
 test("records a run lifecycle in the snapshot", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await service.createLoopContract({
     title: "Daily code health check",
-    intent: "Keep the project healthy",
-    verificationChecks: ["npm test"]
+    goal: "Keep the project healthy",
+    body: { steps: [{ id: "check", kind: "agent", label: "Run checks", prompt: "Run npm test" }] },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "tests", label: "Tests", requirement: "npm test passes", severity: "must" }]
+    }
   });
 
-  const run = await service.triggerRun(loop.id, { goal: "Check current tests" });
+  const run = await service.startLoopRun(loop.id, { goal: "Check current tests" });
   await service.appendEvent(run.id, { kind: "note", message: "Started local checks" });
   await service.recordVerification(run.id, {
     status: "passed",
@@ -642,7 +793,9 @@ test("records a run lifecycle in the snapshot", async () => {
   await expect(service.getSnapshot()).resolves.toMatchObject({
     loops: [{ id: "loop_1", title: "Daily code health check" }],
     runs: [{ id: "run_1", loopId: "loop_1", status: "completed", completedAt: fixedTime }],
-    events: [{ id: "event_1", runId: "run_1", kind: "note", message: "Started local checks" }],
+    events: expect.arrayContaining([
+      { id: "event_1", runId: "run_1", kind: "note", message: "Started local checks", createdAt: fixedTime }
+    ]),
     verificationResults: [{ id: "verification_1", runId: "run_1", status: "passed" }],
     humanRequests: [{ id: "human_1", runId: "run_1", question: "Should this loop run every morning?" }],
     memoryCommits: [{ id: "memory_1", loopId: "loop_1", runId: "run_1" }],
@@ -716,15 +869,15 @@ test("deletes a loop and its run history", async () => {
 
 test("binds loop runs to the Codex project selected for the loop", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "Project monitor",
-    intent: "Watch a Codex project",
+    goal: "Watch a Codex project",
     codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
     projectLabel: "dittos loop",
     projectPath: "/Users/edisonzhong/Documents/dittos loop"
   });
 
-  const run = await service.triggerRun(loop.id, { goal: "Run scheduled check" });
+  const run = await service.startLoopRun(loop.id, { goal: "Run scheduled check" });
 
   expect(run).toMatchObject({
     codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
@@ -735,8 +888,7 @@ test("binds loop runs to the Codex project selected for the loop", async () => {
 
 test("starts and completes an attempt under a run", async () => {
   const service = await createService();
-  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
-  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const { run } = await startFormalRun(service);
 
   const attempt = await service.startAttempt(run.id, { summary: "First pass" });
   const completed = await service.completeAttempt(attempt.id, {
@@ -753,19 +905,18 @@ test("starts and completes an attempt under a run", async () => {
   });
   await expect(service.getSnapshot()).resolves.toMatchObject({
     attempts: [{ id: "attempt_1", runId: run.id, status: "completed" }],
-    events: [
-      { kind: "attempt_started", runId: run.id, message: "First pass" },
-      { kind: "attempt_completed", runId: run.id, message: "Tests passed" }
-    ]
+    events: expect.arrayContaining([
+      expect.objectContaining({ kind: "attempt_started", runId: run.id, message: "First pass" }),
+      expect.objectContaining({ kind: "attempt_completed", runId: run.id, message: "Tests passed" })
+    ])
   });
 });
 
 test("starts a host-mediated Codex session launch request with project binding and prompt intent", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "AI Dev Tools Update Monitor",
-    intent: "Watch release updates and Twitter/X signals",
-    verificationChecks: ["official changelog checked"]
+    goal: "Watch release updates and Twitter/X signals"
   });
 
   const launch = await service.startCodexSessionRun(loop.id, {
@@ -813,7 +964,7 @@ test("starts a host-mediated Codex session launch request with project binding a
   });
   expect(launch.prompt).toContain("AI Dev Tools Update Monitor");
   expect(launch.prompt).toContain("Check today updates");
-  expect(launch.prompt).toContain("official changelog checked");
+  expect(launch.prompt).toContain("The workflow result satisfies the loop goal");
   await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
     run: { codexSession: { status: "requested" } },
     loop: {
@@ -930,9 +1081,9 @@ test("compiles Codex session prompt from formal workflow contract when available
 
 test("records a real Codex thread without completing the session run", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "AI Dev Tools Update Monitor",
-    intent: "Watch release updates and Twitter/X signals"
+    goal: "Watch release updates and Twitter/X signals"
   });
   const launch = await service.startCodexSessionRun(loop.id, {
     goal: "Check today updates"
@@ -1012,9 +1163,9 @@ test("records a real Codex thread without completing the session run", async () 
 
 test("recording a session result closes its subagent status", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "Chinese Daily Report",
-    intent: "Write a daily report"
+    goal: "Write a daily report"
   });
   const launch = await service.startCodexSessionRun(loop.id, {
     goal: "Start worker session"
@@ -1064,9 +1215,9 @@ test("recording a session result closes its subagent status", async () => {
 
 test("records a Codex session result and completes the session-backed run", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await createFormalLoop(service, {
     title: "AI 开发工具更新日报",
-    intent: "生成中文日报"
+    goal: "生成中文日报"
   });
   const launch = await service.startCodexSessionRun(loop.id, {
     goal: "生成今天的中文日报"
@@ -1271,11 +1422,11 @@ test("opens and resumes a Codex session backed run without creating a new run", 
 
 test("records a default subagent when older session runs have none", async () => {
   const service = await createService();
-  const loop = await service.createLoop({
+  const loop = await seedLegacyLoop(service, {
     title: "Legacy Monitor",
     intent: "Watch updates"
   });
-  const run = await service.triggerRun(loop.id, { goal: "Check today updates" });
+  const run = await seedLegacyRun(service, loop, { goal: "Check today updates" });
   await service.appendEvent(run.id, { message: "legacy setup" });
   await (service as any).options.store.updateState((state) => ({
     ...state,
@@ -1335,8 +1486,7 @@ test("does not mark a Codex session ready without an openable thread URL", async
 
 test("records failed verification against an attempt and marks run repairing when requested", async () => {
   const service = await createService();
-  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
-  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const { run } = await startFormalRun(service);
   const attempt = await service.startAttempt(run.id);
 
   const result = await service.recordVerification(run.id, {
@@ -1356,8 +1506,7 @@ test("records failed verification against an attempt and marks run repairing whe
 
 test("resolves a human request with a response", async () => {
   const service = await createService();
-  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
-  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const { run } = await startFormalRun(service);
   const request = await service.recordHumanRequest(run.id, { question: "Continue with repair?" });
 
   const resolved = await service.resolveHumanRequest(request.id, { response: "Yes, continue." });
@@ -1372,8 +1521,7 @@ test("resolves a human request with a response", async () => {
 
 test("returns composed run detail", async () => {
   const service = await createService();
-  const loop = await service.createLoop({ title: "Code health", intent: "Keep checks visible" });
-  const run = await service.triggerRun(loop.id, { goal: "Run checks" });
+  const { loop, run } = await startFormalRun(service);
   const attempt = await service.startAttempt(run.id, { summary: "First pass" });
   await service.appendEvent(run.id, { message: "Checked package scripts" });
   await service.recordVerification(run.id, { attemptId: attempt.id, status: "passed", summary: "Tests passed" });

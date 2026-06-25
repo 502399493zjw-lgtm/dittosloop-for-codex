@@ -34,28 +34,12 @@ export interface LoopServiceOptions {
   sessionBridge?: CodexSessionBridge;
 }
 
-export interface CreateLoopInput {
-  title: string;
-  intent: string;
-  verificationChecks?: string[];
-  codexProjectId?: string;
-  projectLabel?: string;
-  projectPath?: string;
-}
-
 export type CreateLoopContractInput = Omit<FormalLoopContractInput, "id"> & {
   id?: string;
   codexProjectId?: string;
   projectLabel?: string;
   projectPath?: string;
 };
-
-export interface TriggerRunInput {
-  goal?: string;
-  codexProjectId?: string;
-  projectLabel?: string;
-  projectPath?: string;
-}
 
 export interface StartLoopRunInput {
   goal?: string;
@@ -237,30 +221,6 @@ export class LoopService {
     this.previewBaseUrl = options.previewBaseUrl ?? "http://127.0.0.1:47888";
   }
 
-  async createLoop(input: CreateLoopInput): Promise<LoopContract> {
-    const timestamp = this.now();
-    const loop: LoopContract = {
-      id: this.nextId("loop"),
-      title: input.title,
-      intent: input.intent,
-      trigger: { mode: "manual" },
-      verification: { checks: input.verificationChecks ?? [] },
-      status: "active",
-      codexProjectId: input.codexProjectId,
-      projectLabel: input.projectLabel,
-      projectPath: input.projectPath,
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
-
-    await this.options.store.updateState((state) => ({
-      ...state,
-      loops: [...state.loops, loop]
-    }));
-
-    return loop;
-  }
-
   async createLoopContract(input: CreateLoopContractInput): Promise<FormalLoopContract> {
     const timestamp = this.now();
     const contract = compileContract(normalizeFormalContractInput(input, input.id ?? this.nextId("loop")), timestamp);
@@ -324,34 +284,15 @@ export class LoopService {
     return deletedLoop!;
   }
 
-  async triggerRun(loopId: string, input: TriggerRunInput = {}): Promise<LoopRun> {
-    const timestamp = this.now();
-    let run: LoopRun | undefined;
-
-    await this.options.store.updateState((state) => {
-      const loop = requireLoop(state, loopId);
-      const project = runProjectBinding(input, loop);
-      run = {
-        id: this.nextId("run"),
-        loopId,
-        status: "running",
-        goal: input.goal ?? "Manual loop run",
-        trigger: "manual",
-        ...project,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      };
-
-      return {
-        ...state,
-        runs: [...state.runs, run]
-      };
-    });
-
-    return run!;
+  async startLoopRun(loopId: string, input: StartLoopRunInput = {}): Promise<LoopRun> {
+    return this.createFormalWorkflowRun(loopId, input, { recordEngineStart: true });
   }
 
-  async startLoopRun(loopId: string, input: StartLoopRunInput = {}): Promise<LoopRun> {
+  private async createFormalWorkflowRun(
+    loopId: string,
+    input: StartLoopRunInput = {},
+    options: { recordEngineStart: boolean }
+  ): Promise<LoopRun> {
     const timestamp = this.now();
     let run: LoopRun | undefined;
 
@@ -375,12 +316,14 @@ export class LoopService {
         ...state,
         loops: state.loops.some((candidate) => candidate.id === loopId) ? state.loops : [...state.loops, loop],
         runs: [...state.runs, run],
-        events: [
-          ...state.events,
-          lifecycleEvent(this.nextId("event"), run.id, "run_created", `Started ${contract.title}`, timestamp, {
-            engineEvent: { ...engineEvent, runId: run.id }
-          })
-        ]
+        events: options.recordEngineStart
+          ? [
+              ...state.events,
+              lifecycleEvent(this.nextId("event"), run.id, "run_created", `Started ${contract.title}`, timestamp, {
+                engineEvent: { ...engineEvent, runId: run.id }
+              })
+            ]
+          : state.events
       };
     });
 
@@ -390,12 +333,12 @@ export class LoopService {
   async runLoopWorkflow(loopId: string, input: RunLoopWorkflowInput): Promise<LoopRun> {
     const initialState = await this.options.store.readState();
     const baseContract = requireFormalContract(initialState, loopId);
-    const run = await this.triggerRun(loopId, {
+    const run = await this.createFormalWorkflowRun(loopId, {
       goal: input.goal ?? baseContract.goal,
       codexProjectId: input.codexProjectId,
       projectLabel: input.projectLabel,
       projectPath: input.projectPath
-    });
+    }, { recordEngineStart: false });
     let activeContract = baseContract;
     let finalRun: LoopRun = run;
 
@@ -424,6 +367,7 @@ export class LoopService {
         throw error;
       }
 
+      finalRun = await this.recordCompletedCodexSessions(run.id, engineEvents);
       await this.recordEngineEvents(run.id, engineEvents);
       await this.recordVerification(run.id, {
         attemptId: attempt.id,
@@ -1353,6 +1297,69 @@ export class LoopService {
     return this.previewBaseUrl;
   }
 
+  private async recordCompletedCodexSessions(runId: string, engineEvents: EngineEvent[]): Promise<LoopRun> {
+    const sessions = engineEvents
+      .filter((event): event is Extract<EngineEvent, { type: "agent_done" }> => event.type === "agent_done")
+      .map((event) => event.session)
+      .filter(isCompletedCodexSession);
+
+    if (sessions.length === 0) {
+      return (await this.getRunDetail(runId)).run;
+    }
+
+    const timestamp = this.now();
+    let updatedRun: LoopRun | undefined;
+
+    await this.options.store.updateState((state) => {
+      const run = requireRun(state, runId);
+      const latestSession = sessions.at(-1)!;
+      const existingSubagents = run.codexSession?.subagents ?? [];
+      const completedSubagents = sessions.map((session) => ({
+        role: session.title,
+        status: codexSubagentStatus(session.status),
+        threadId: session.threadId,
+        threadTitle: session.threadTitle,
+        threadUrl: session.threadUrl,
+        prompt: session.prompt
+      }));
+
+      updatedRun = {
+        ...run,
+        codexSession: {
+          mode: "new_session",
+          status: latestSession.status,
+          threadId: latestSession.threadId ?? run.codexSession?.threadId,
+          threadTitle: latestSession.threadTitle ?? run.codexSession?.threadTitle,
+          threadUrl: latestSession.threadUrl ?? run.codexSession?.threadUrl,
+          codexProjectId: latestSession.projectId ?? run.codexSession?.codexProjectId ?? run.codexProjectId,
+          projectLabel: latestSession.projectLabel ?? run.codexSession?.projectLabel ?? run.projectLabel,
+          projectPath: latestSession.projectPath ?? run.codexSession?.projectPath ?? run.projectPath,
+          subagents: [...existingSubagents, ...completedSubagents],
+          prompt: latestSession.prompt ?? run.codexSession?.prompt ?? run.goal
+        },
+        updatedAt: timestamp
+      };
+
+      return {
+        ...state,
+        runs: updateRun(state.runs, runId, updatedRun),
+        events: [
+          ...state.events,
+          lifecycleEvent(
+            this.nextId("event"),
+            runId,
+            "note",
+            "Codex worker session completed and attached to this run",
+            timestamp,
+            { codexSessions: sessions }
+          )
+        ]
+      };
+    });
+
+    return updatedRun!;
+  }
+
   private async recordEngineEvents(runId: string, engineEvents: EngineEvent[]): Promise<void> {
     if (engineEvents.length === 0) return;
     await this.options.store.updateState((state) => {
@@ -1492,6 +1499,29 @@ function verificationDecisionChecksToResults(
       output: check.evidence
     };
   });
+}
+
+type CompletedCodexSessionRef = CodexSessionRef & {
+  threadId?: string;
+  threadTitle?: string;
+  threadUrl?: string;
+};
+type CodexSubagentStatus = NonNullable<NonNullable<LoopRun["codexSession"]>["subagents"]>[number]["status"];
+
+function isCompletedCodexSession(value: unknown): value is CompletedCodexSessionRef {
+  if (!value || typeof value !== "object") return false;
+  const session = value as Partial<CompletedCodexSessionRef>;
+  return (
+    typeof session.sessionId === "string" &&
+    typeof session.runId === "string" &&
+    typeof session.title === "string" &&
+    (session.status === "completed" || session.status === "failed")
+  );
+}
+
+function codexSubagentStatus(status: CodexSessionRef["status"]): CodexSubagentStatus {
+  if (status === "started") return "running";
+  return status;
 }
 
 function engineEventToMessage(event: EngineEvent): string {
@@ -1762,7 +1792,7 @@ function buildNewLoopSessionPrompt(project: Pick<LoopRun, "codexProjectId" | "pr
   return [
     "你正在为 DittosLoop For Codex 创建一个新的 Live Loop。",
     "",
-    "请根据用户意图创建正式 workflow 版 loop contract，不要使用兼容版 create_loop，除非用户明确要求简单记录型 loop。",
+    "请根据用户意图创建正式 workflow 版 loop contract；新 loop 一律使用正式 contract。",
     "创建正式 loop 时请调用 DittosLoop MCP 工具 create_loop_contract。",
     ...projectLines,
     "",
