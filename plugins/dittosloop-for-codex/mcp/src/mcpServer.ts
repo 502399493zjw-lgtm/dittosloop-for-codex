@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { LoopService } from "./service.js";
+import { MAX_LOOP_MEMORY_READ_LIMIT, type LoopService } from "./service.js";
 
 export interface TextToolResult {
   content: Array<{
@@ -266,6 +266,12 @@ const commitMemorySchema = z.object({
   summary: z.string().min(1)
 });
 
+const readLoopMemorySchema = z.object({
+  loopId: z.string().min(1),
+  limit: z.number().int().min(1).max(MAX_LOOP_MEMORY_READ_LIMIT).optional(),
+  offset: z.number().int().nonnegative().optional()
+});
+
 const addArtifactSchema = z.object({
   runId: z.string().min(1),
   title: z.string().min(1),
@@ -414,6 +420,13 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
       return toToolResult(await service.resolveHumanRequest(args.requestId, {
         response: args.response,
         summary: args.summary
+      }));
+    },
+    read_loop_memory: async (input) => {
+      const args = readLoopMemorySchema.parse(input);
+      return toToolResult(await service.readLoopMemory(args.loopId, {
+        limit: args.limit,
+        offset: args.offset
       }));
     },
     commit_memory: async (input) => {
@@ -591,6 +604,12 @@ const toolDefinitions = [
     title: "Resolve human request",
     description: "Resolve a user question with the user's response.",
     schema: resolveHumanRequestSchema
+  },
+  {
+    name: "read_loop_memory",
+    title: "Read loop memory",
+    description: "Read a bounded newest-first window of durable loop memory.",
+    schema: readLoopMemorySchema
   },
   {
     name: "commit_memory",

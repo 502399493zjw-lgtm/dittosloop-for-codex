@@ -912,6 +912,57 @@ test("exposes codex session open operation as MCP content", async () => {
   expect(handlers.resume_loop_run).toBeUndefined();
 });
 
+test("reads loop memory through MCP with bounded newest-first windows", async () => {
+  const handlers = await createHandlers();
+  const loop = readResult(await handlers.create_loop_contract({
+    title: "Memory loop",
+    goal: "Remember durable lessons",
+    body: {
+      steps: [{ id: "check", kind: "agent", label: "Check", prompt: "Check memory" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Memory can be read", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Run memory update" }));
+
+  await handlers.commit_memory({ loopId: loop.id, runId: launch.run.id, summary: "First lesson." });
+  await handlers.commit_memory({ loopId: loop.id, runId: launch.run.id, summary: "Second lesson." });
+
+  const memory = readResult(await handlers.read_loop_memory({ loopId: loop.id, limit: 1 }));
+
+  expect(memory).toEqual({
+    loopId: loop.id,
+    limit: 1,
+    offset: 0,
+    returnedLines: 1,
+    totalLines: 2,
+    remainingLines: 1,
+    content:
+      "Second lesson.\n还有 1 条记忆未读取。可调用 read_loop_memory({ loopId: \"loop_1\", offset: 1, limit: 1 }) 继续读取。"
+  });
+});
+
+test("rejects invalid MCP memory read windows", async () => {
+  const handlers = await createHandlers();
+  const loop = readResult(await handlers.create_loop_contract({
+    title: "Memory loop",
+    goal: "Remember durable lessons",
+    body: {
+      steps: [{ id: "check", kind: "agent", label: "Check", prompt: "Check memory" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Memory can be read", severity: "must" }]
+    }
+  }));
+
+  await expect(handlers.read_loop_memory({ loopId: loop.id, limit: 0 })).rejects.toThrow();
+  await expect(handlers.read_loop_memory({ loopId: loop.id, limit: 201 })).rejects.toThrow();
+  await expect(handlers.read_loop_memory({ loopId: loop.id, offset: -1 })).rejects.toThrow();
+});
+
 test("registers the DittosLoop tool surface", () => {
   const registeredTools: string[] = [];
   const toolMetadata: Record<string, { title: string; description: string }> = {};
@@ -944,6 +995,7 @@ test("registers the DittosLoop tool surface", () => {
     "record_verification",
     "record_human_request",
     "resolve_human_request",
+    "read_loop_memory",
     "commit_memory",
     "add_artifact",
     "mark_run_repairing",
