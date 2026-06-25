@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -425,7 +425,20 @@ test("renders loop directory files from stored loop state", async () => {
     title: "AI 开发工具日报",
     goal: "生成 AI 开发工具中文日报",
     body: {
-      steps: [{ id: "write-report", kind: "agent", label: "日报 worker", prompt: "生成中文日报。" }]
+      steps: [
+        {
+          id: "write-report",
+          kind: "task",
+          runtime: "codex",
+          label: "日报 worker",
+          prompt: "生成中文日报。",
+          subagent: {
+            role: "report-writer",
+            tools: ["web.run", "rg"],
+            permissions: { filesystem: "workspace-write", network: "enabled" }
+          }
+        }
+      ]
     },
     verification: {
       mode: "after_workflow",
@@ -439,28 +452,43 @@ test("renders loop directory files from stored loop state", async () => {
     summary: "日报通过验证。",
     checks: [{ name: "中文日报", status: "passed", output: "包含来源" }]
   });
+  const dataDir = (service as any).options.store.dataDir as string;
+  const loopDir = join(dataDir, "loops", formal.id);
+  await mkdir(join(loopDir, "skill"), { recursive: true });
+  await writeFile(join(loopDir, "flow.js"), "stale", "utf8");
+  await writeFile(join(loopDir, "session.json"), "stale", "utf8");
+  await writeFile(join(loopDir, "skill", "old.md"), "stale", "utf8");
 
   const files = await service.listLoopFiles(formal.id);
 
   expect(files.map((file) => file.path)).toEqual([
-    "flow.js",
     "memory.md",
     "workflow.json",
-    "agents.md",
+    "tool-list.md",
     "rubrics.md",
-    "runs.json",
+    "status.json",
     "contract.json",
-    "session.json"
+    "skill/dittosloop-for-codex-loop.md"
   ]);
   expect(files.every((file) => file.size === Buffer.byteLength(file.content, "utf8"))).toBe(true);
-  expect(files.find((file) => file.path === "flow.js")).toMatchObject({
-    kind: "flow",
-    language: "javascript",
-    content: expect.stringContaining("workflowContractId")
-  });
+  expect(files.find((file) => file.path === "flow.js")).toBeUndefined();
+  expect(files.find((file) => file.path === "agents.md")).toBeUndefined();
+  expect(files.find((file) => file.path === "session.json")).toBeUndefined();
   expect(files.find((file) => file.path === "memory.md")?.content).toContain("保留昨天的来源筛选规则。");
+  expect(files.find((file) => file.path === "skill/dittosloop-for-codex-loop.md")?.content).toContain("dittosloop-for-codex:loop");
+  expect(files.find((file) => file.path === "tool-list.md")?.content).toContain("web.run");
+  expect(files.find((file) => file.path === "status.json")?.content).toContain("\"latestRun\"");
   expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
   expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("包含来源");
+
+  await expect(readFile(join(loopDir, "memory.md"), "utf8")).resolves.toContain("保留昨天的来源筛选规则。");
+  await expect(readFile(join(loopDir, "workflow.json"), "utf8")).resolves.toContain("AI 开发工具日报");
+  await expect(readFile(join(loopDir, "skill", "dittosloop-for-codex-loop.md"), "utf8")).resolves.toContain(
+    "dittosloop-for-codex:loop"
+  );
+  await expect(readFile(join(loopDir, "flow.js"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(join(loopDir, "session.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(join(loopDir, "skill", "old.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("proposes workflow revisions from a visible Codex session without replacing the active contract", async () => {

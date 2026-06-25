@@ -28,6 +28,7 @@ import type {
 } from "./types.js";
 import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
+import { syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
 
 export interface LoopServiceOptions {
   store: LoopStore;
@@ -1472,7 +1473,7 @@ export class LoopService {
   async listLoopFiles(loopId: string): Promise<LoopWorkspaceFile[]> {
     const state = await this.options.store.readState();
 
-    return loopWorkspaceFiles(state, loopId);
+    return syncLoopWorkspaceDirectory(this.options.store.dataDir, loopId, loopWorkspaceFiles(state, loopId));
   }
 
   async getSnapshot(): Promise<Snapshot> {
