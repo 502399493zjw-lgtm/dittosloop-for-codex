@@ -174,7 +174,7 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("/api/new-loop-session");
   expect(app).toContain("/codex-thread");
   expect(app).toContain("record_codex_thread");
-  expect(app).toContain("已复制新建循环提示词");
+  expect(app).toContain("已复制成功，请打开 Codex 新会话粘贴构建。");
   expect(app).toContain("创建 Codex 会话请求");
   expect(app).toContain("sessionActionForRun");
   expect(app).toContain("等待 Codex App 创建");
@@ -210,6 +210,19 @@ test("preview keeps the workspace closed on initial history load", async () => {
   expect(app).toContain("const route = readRouteState()");
   expect(app).toContain("route.runId");
   expect(app).not.toContain("selectedLoopId = newestLoopId(loops, runs)");
+});
+
+test("new loop prompt copy uses a centered toast without changing the workspace", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+  const styles = await readFile(join(previewDir, "styles.css"), "utf8");
+
+  expect(app).toContain("showToast(\"已复制成功，请打开 Codex 新会话粘贴构建。\")");
+  expect(app).toContain("function showToast(message)");
+  expect(app).toContain("dittos-toast");
+  expect(app).not.toContain("renderNotice(\"已复制新建循环提示词");
+  expect(styles).toContain(".dittos-toast");
+  expect(styles).toContain("position: fixed");
+  expect(styles).toContain("left: 50%");
 });
 
 test("preview shell uses the new loop button as a session launch action", async () => {

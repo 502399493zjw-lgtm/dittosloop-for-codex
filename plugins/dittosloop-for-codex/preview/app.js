@@ -346,7 +346,7 @@ async function copyNewLoopPrompt() {
   const launch = await response.json();
   window.__dittosloopNewLoopPrompt = launch.prompt;
   await copyText(launch.prompt);
-  renderNotice("已复制新建循环提示词，请粘贴到 Codex 新会话中创建正式 workflow loop。");
+  showToast("已复制成功，请打开 Codex 新会话粘贴构建。");
 }
 
 async function copyText(text) {
@@ -1481,6 +1481,18 @@ function renderError(message) {
 
 function renderNotice(message) {
   elements.loopStage.replaceChildren(el("div", "stage-notice", message));
+}
+
+function showToast(message) {
+  document.querySelector(".dittos-toast")?.remove();
+  const toast = el("div", "dittos-toast", message);
+  toast.setAttribute("role", "status");
+  toast.setAttribute("aria-live", "polite");
+  document.body.append(toast);
+  window.setTimeout(() => {
+    toast.classList.add("leaving");
+    window.setTimeout(() => toast.remove(), 180);
+  }, 2400);
 }
 
 function button(className, onClick, content) {
