@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { MAX_LOOP_MEMORY_READ_LIMIT, type LoopService } from "./service.js";
+import type { ArtifactRef, LoopRun, RunDetail, VerificationResult, WorkflowTaskRun } from "./types.js";
 
 export interface TextToolResult {
   content: Array<{
@@ -12,6 +13,30 @@ export interface TextToolResult {
 
 export type ToolHandler = (input: unknown) => Promise<TextToolResult>;
 export type ToolHandlerMap = Record<string, ToolHandler>;
+
+type WorkflowSessionResultStatus = Extract<LoopRun["status"], "completed" | "failed" | "waiting_for_human">;
+
+interface WorkflowSessionResultEnvelope {
+  status: WorkflowSessionResultStatus;
+  finalAnswer: string;
+  summary: string;
+  result?: unknown;
+  verification?: {
+    status: VerificationResult["status"];
+    summary: string;
+    checks: VerificationResult["checks"];
+  };
+  artifacts: ArtifactRef[];
+  humanRequest?: {
+    id: string;
+    question: string;
+  };
+}
+
+type WorkflowToolResponse = LoopRun & {
+  run: LoopRun;
+  sessionResult?: WorkflowSessionResultEnvelope;
+};
 
 export interface ToolRegistrar {
   registerTool(name: string, ...args: any[]): unknown;
@@ -323,9 +348,10 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     execute_workflow_attempt: async (input) => {
       const args = executeWorkflowAttemptSchema.parse(input);
-      return toToolResult(await service.executeWorkflowAttempt(args.runId, {
+      const run = await service.executeWorkflowAttempt(args.runId, {
         attemptId: args.attemptId
-      }));
+      });
+      return toToolResult(await toWorkflowToolResponse(service, run));
     },
     propose_workflow_revision: async (input) => {
       const args = proposeWorkflowRevisionSchema.parse(input);
@@ -371,7 +397,7 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     record_session_result: async (input) => {
       const args = recordSessionResultSchema.parse(input);
-      return toToolResult(await service.recordSessionResult(args.runId, {
+      const run = await service.recordSessionResult(args.runId, {
         workflowContextId: args.workflowContextId,
         attemptId: args.attemptId,
         taskRunId: args.taskRunId,
@@ -384,7 +410,8 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
         result: args.result,
         checks: args.checks,
         humanQuestion: args.humanQuestion
-      }));
+      });
+      return toToolResult(await toWorkflowToolResponse(service, run));
     },
     open_codex_session: async (input) => {
       const args = openCodexSessionSchema.parse(input);
@@ -488,6 +515,76 @@ function toToolResult(payload: unknown): TextToolResult {
       }
     ]
   };
+}
+
+async function toWorkflowToolResponse(service: LoopService, run: LoopRun): Promise<WorkflowToolResponse> {
+  if (!isWorkflowSessionResultStatus(run.status)) {
+    return { ...run, run };
+  }
+
+  const detail = await service.getRunDetail(run.id);
+  return {
+    ...detail.run,
+    run: detail.run,
+    sessionResult: buildWorkflowSessionResultEnvelope(detail, run.status)
+  };
+}
+
+function isWorkflowSessionResultStatus(status: LoopRun["status"]): status is WorkflowSessionResultStatus {
+  return status === "completed" || status === "failed" || status === "waiting_for_human";
+}
+
+function buildWorkflowSessionResultEnvelope(
+  detail: RunDetail,
+  status: WorkflowSessionResultStatus
+): WorkflowSessionResultEnvelope {
+  const latestTaskRun = latestCompletedTaskRunWithResult(detail);
+  const latestVerification = detail.verificationResults.at(-1);
+  const latestAttempt = detail.attempts.at(-1);
+  const latestOpenHumanRequest = [...detail.humanRequests].reverse().find((request) => request.status === "open");
+  const result = latestTaskRun?.result;
+  const finalAnswer =
+    status === "waiting_for_human"
+      ? latestOpenHumanRequest?.question ?? result ?? latestVerification?.summary ?? latestAttempt?.summary ?? detail.run.goal
+      : result ?? latestVerification?.summary ?? latestAttempt?.summary ?? detail.run.goal;
+  const summary = latestVerification?.summary ?? latestAttempt?.summary ?? result ?? finalAnswer;
+
+  return {
+    status,
+    finalAnswer,
+    summary,
+    ...(result === undefined ? {} : { result }),
+    ...(latestVerification
+      ? {
+          verification: {
+            status: latestVerification.status,
+            summary: latestVerification.summary,
+            checks: latestVerification.checks
+          }
+        }
+      : {}),
+    artifacts: detail.artifacts,
+    ...(latestOpenHumanRequest
+      ? {
+          humanRequest: {
+            id: latestOpenHumanRequest.id,
+            question: latestOpenHumanRequest.question
+          }
+        }
+      : {})
+  };
+}
+
+function latestCompletedTaskRunWithResult(detail: RunDetail): WorkflowTaskRun | undefined {
+  return detail.workflowContexts
+    .flatMap((context) => context.taskRuns)
+    .filter((taskRun) => taskRun.status === "completed" && taskRun.result !== undefined)
+    .sort((left, right) => workflowTaskRunTimestamp(left).localeCompare(workflowTaskRunTimestamp(right)))
+    .at(-1);
+}
+
+function workflowTaskRunTimestamp(taskRun: WorkflowTaskRun): string {
+  return taskRun.completedAt ?? taskRun.updatedAt ?? taskRun.createdAt;
 }
 
 const toolDefinitions = [

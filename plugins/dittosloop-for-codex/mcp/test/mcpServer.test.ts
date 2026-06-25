@@ -413,7 +413,10 @@ test("exposes workflow execution and precise session result writeback as MCP con
     }
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
-  const run = readResult(await handlers.execute_workflow_attempt({
+  const run = readResult<{
+    run: { id: string; status: string; codexSession?: { status: string; subagents?: Array<{ role: string; status: string }> } };
+    sessionResult?: unknown;
+  }>(await handlers.execute_workflow_attempt({
     runId: launch.run.id,
     attemptId: launch.attempt.id
   }));
@@ -421,13 +424,28 @@ test("exposes workflow execution and precise session result writeback as MCP con
   expect(run).toMatchObject({
     id: launch.run.id,
     status: "running",
-    codexSession: {
-      status: "requested",
-      subagents: [{ role: "Scan", status: "requested" }]
+    run: {
+      id: launch.run.id,
+      status: "running",
+      codexSession: {
+        status: "requested",
+        subagents: [{ role: "Scan", status: "requested" }]
+      }
     }
   });
+  expect(run.sessionResult).toBeUndefined();
 
-  const completed = readResult(await handlers.record_session_result({
+  const completed = readResult<{
+    run: { id: string; status: string };
+    sessionResult?: {
+      status: string;
+      finalAnswer: string;
+      summary: string;
+      result?: unknown;
+      verification?: { status: string; summary: string };
+      artifacts: unknown[];
+    };
+  }>(await handlers.record_session_result({
     runId: launch.run.id,
     workflowContextId: launch.launchRequest.workflowContextId,
     attemptId: launch.attempt.id,
@@ -441,7 +459,22 @@ test("exposes workflow execution and precise session result writeback as MCP con
 
   expect(completed).toMatchObject({
     id: launch.run.id,
-    status: "completed"
+    status: "completed",
+    run: {
+      id: launch.run.id,
+      status: "completed"
+    },
+    sessionResult: {
+      status: "completed",
+      finalAnswer: "Daily report body",
+      summary: "Worker result passed verification",
+      result: "Daily report body",
+      verification: {
+        status: "passed",
+        summary: "Worker result passed verification"
+      },
+      artifacts: []
+    }
   });
   const snapshot = readResult(await handlers.get_snapshot({}));
   expect(snapshot.workflowContexts).toMatchObject([

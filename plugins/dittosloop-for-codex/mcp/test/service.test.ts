@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -425,7 +425,20 @@ test("renders loop directory files from stored loop state", async () => {
     title: "AI 开发工具日报",
     goal: "生成 AI 开发工具中文日报",
     body: {
-      steps: [{ id: "write-report", kind: "agent", label: "日报 worker", prompt: "生成中文日报。" }]
+      steps: [
+        {
+          id: "write-report",
+          kind: "task",
+          runtime: "codex",
+          label: "日报 worker",
+          prompt: "生成中文日报。",
+          subagent: {
+            role: "report-writer",
+            tools: ["web.run", "rg"],
+            permissions: { filesystem: "workspace-write", network: "enabled" }
+          }
+        }
+      ]
     },
     verification: {
       mode: "after_workflow",
@@ -439,64 +452,43 @@ test("renders loop directory files from stored loop state", async () => {
     summary: "日报通过验证。",
     checks: [{ name: "中文日报", status: "passed", output: "包含来源" }]
   });
-  await service.completeRun(run.id, { status: "completed" });
+  const dataDir = (service as any).options.store.dataDir as string;
+  const loopDir = join(dataDir, "loops", formal.id);
+  await mkdir(join(loopDir, "skill"), { recursive: true });
+  await writeFile(join(loopDir, "flow.js"), "stale", "utf8");
+  await writeFile(join(loopDir, "session.json"), "stale", "utf8");
+  await writeFile(join(loopDir, "skill", "old.md"), "stale", "utf8");
 
   const files = await service.listLoopFiles(formal.id);
-  const byPath = new Map(files.map((file) => [file.path, file]));
 
   expect(files.map((file) => file.path)).toEqual([
-    "flow.js",
     "memory.md",
+    "workflow.json",
+    "tool-list.md",
+    "rubrics.md",
     "status.json",
-    "workflow/workflow.json",
-    "workflow/agents.md",
-    "workflow/rubrics.md",
-    "runs/index.json",
-    `runs/${run.id}/status.json`,
-    `runs/${run.id}/attempts.json`,
-    `runs/${run.id}/events.ndjson`,
-    `runs/${run.id}/verification.json`,
-    `runs/${run.id}/human-requests.json`,
-    `runs/${run.id}/codex-session.json`,
-    "evolution/revisions.json",
-    "evolution/memory-commits.json",
     "contract.json",
-    "codex/session.json"
+    "skill/dittosloop-for-codex-loop.md"
   ]);
   expect(files.every((file) => file.size === Buffer.byteLength(file.content, "utf8"))).toBe(true);
-  expect(byPath.get("flow.js")).toMatchObject({
-    kind: "flow",
-    language: "javascript",
-    content: expect.stringContaining("workflowContractId")
-  });
-  expect(byPath.get("memory.md")?.content).toContain("保留昨天的来源筛选规则。");
-  expect(byPath.get("contract.json")?.content).toContain("\"formalContract\"");
-  expect(byPath.get("workflow/rubrics.md")?.content).toContain("包含来源");
-  expect(JSON.parse(byPath.get("status.json")!.content)).toMatchObject({
-    loopId: formal.id,
-    cursor: null,
-    consecutiveFailures: 0,
-    paused: false,
-    running: false,
-    runCount: 1,
-    lastRunAt: Date.parse(fixedTime)
-  });
-  expect(JSON.parse(byPath.get("runs/index.json")!.content)).toMatchObject({
-    loopId: formal.id,
-    runs: [{ id: run.id, status: "completed", index: 1 }]
-  });
-  expect(JSON.parse(byPath.get(`runs/${run.id}/status.json`)!.content)).toMatchObject({
-    id: run.id,
-    loopId: formal.id,
-    status: "completed",
-    index: 1,
-    codexRunStatus: "completed",
-    trigger: { kind: "manual" }
-  });
-  expect(byPath.get(`runs/${run.id}/events.ndjson`)?.content).toContain("run_created");
-  expect(JSON.parse(byPath.get("evolution/memory-commits.json")!.content)).toMatchObject({
-    commits: [{ id: "memory_1", runId: run.id, summary: "保留昨天的来源筛选规则。" }]
-  });
+  expect(files.find((file) => file.path === "flow.js")).toBeUndefined();
+  expect(files.find((file) => file.path === "agents.md")).toBeUndefined();
+  expect(files.find((file) => file.path === "session.json")).toBeUndefined();
+  expect(files.find((file) => file.path === "memory.md")?.content).toContain("保留昨天的来源筛选规则。");
+  expect(files.find((file) => file.path === "skill/dittosloop-for-codex-loop.md")?.content).toContain("dittosloop-for-codex:loop");
+  expect(files.find((file) => file.path === "tool-list.md")?.content).toContain("web.run");
+  expect(files.find((file) => file.path === "status.json")?.content).toContain("\"latestRun\"");
+  expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
+  expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("包含来源");
+
+  await expect(readFile(join(loopDir, "memory.md"), "utf8")).resolves.toContain("保留昨天的来源筛选规则。");
+  await expect(readFile(join(loopDir, "workflow.json"), "utf8")).resolves.toContain("AI 开发工具日报");
+  await expect(readFile(join(loopDir, "skill", "dittosloop-for-codex-loop.md"), "utf8")).resolves.toContain(
+    "dittosloop-for-codex:loop"
+  );
+  await expect(readFile(join(loopDir, "flow.js"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(join(loopDir, "session.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(readFile(join(loopDir, "skill", "old.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("projects canonical status for failed loop history", async () => {
@@ -517,9 +509,10 @@ test("projects canonical status for failed loop history", async () => {
 
   const files = await service.listLoopFiles(formal.id);
   const status = JSON.parse(files.find((file) => file.path === "status.json")!.content);
-  const runStatus = JSON.parse(files.find((file) => file.path === `runs/${launch.run.id}/status.json`)!.content);
+  const runStatus = status.runs.find((run: { id: string }) => run.id === launch.run.id);
 
   expect(status).toMatchObject({
+    loopId: formal.id,
     cursor: null,
     paused: false,
     running: false,
@@ -529,9 +522,7 @@ test("projects canonical status for failed loop history", async () => {
   });
   expect(runStatus).toMatchObject({
     id: launch.run.id,
-    status: "failed",
-    index: 1,
-    codexRunStatus: "failed"
+    status: "failed"
   });
 });
 
@@ -683,12 +674,12 @@ test("pauses canonical loop immediately when a Codex session reports a budget st
     consecutiveFailures: 1,
     paused: true,
     pausedReason: "budget",
-    running: false
-  });
-  expect(JSON.parse(files.find((file) => file.path === `runs/${launch.run.id}/status.json`)!.content)).toMatchObject({
-    id: launch.run.id,
-    status: "failed",
-    pausedReason: "budget"
+    running: false,
+    latestRun: {
+      id: launch.run.id,
+      status: "failed",
+      pausedReason: "budget"
+    }
   });
 });
 
@@ -965,15 +956,12 @@ test("persists canonical loop operational state across run lifecycle", async () 
     loopStates: [{ loopId: formal.id, activeRunId: first.run.id, activeRunStatus: "waiting_for_human" }]
   });
   const waitingFiles = await service.listLoopFiles(formal.id);
-  const waitingRunIndex = JSON.parse(waitingFiles.find((file) => file.path === "runs/index.json")!.content);
-  const waitingRunStatus = JSON.parse(waitingFiles.find((file) => file.path === `runs/${first.run.id}/status.json`)!.content);
-  expect(waitingRunIndex).toMatchObject({
-    runs: [{ id: first.run.id, status: "waiting_for_human", index: 1 }]
-  });
-  expect(waitingRunStatus).toMatchObject({
-    id: first.run.id,
-    status: "waiting_for_human",
-    codexRunStatus: "waiting_for_human"
+  const waitingStatus = JSON.parse(waitingFiles.find((file) => file.path === "status.json")!.content);
+  expect(waitingStatus).toMatchObject({
+    activeRunId: first.run.id,
+    activeRunStatus: "waiting_for_human",
+    latestRun: { id: first.run.id, status: "waiting_for_human" },
+    runs: [{ id: first.run.id, status: "waiting_for_human" }]
   });
 
   await service.markRunRepairing(first.run.id, { reason: "Repair after missing source." });
@@ -981,11 +969,12 @@ test("persists canonical loop operational state across run lifecycle", async () 
     loopStates: [{ loopId: formal.id, activeRunId: first.run.id, activeRunStatus: "repairing" }]
   });
   const repairingFiles = await service.listLoopFiles(formal.id);
-  const repairingRunStatus = JSON.parse(repairingFiles.find((file) => file.path === `runs/${first.run.id}/status.json`)!.content);
-  expect(repairingRunStatus).toMatchObject({
-    id: first.run.id,
-    status: "repairing",
-    codexRunStatus: "repairing"
+  const repairingStatus = JSON.parse(repairingFiles.find((file) => file.path === "status.json")!.content);
+  expect(repairingStatus).toMatchObject({
+    activeRunId: first.run.id,
+    activeRunStatus: "repairing",
+    latestRun: { id: first.run.id, status: "repairing" },
+    runs: [{ id: first.run.id, status: "repairing" }]
   });
 
   await service.completeRun(first.run.id, { status: "failed" });
@@ -1057,16 +1046,14 @@ test("persists newest-first loop memory across commits", async () => {
 
   const files = await service.listLoopFiles(formal.id);
   expect(files.find((file) => file.path === "memory.md")?.content).toBe("Ignore duplicate syndicated posts.\nPrefer official sources.\n");
-  const memoryCommits = JSON.parse(files.find((file) => file.path === "evolution/memory-commits.json")!.content);
-  expect(memoryCommits).toMatchObject({
-    loopId: formal.id,
-    latestCommitId: "memory_2",
-    commits: [
+  const contract = JSON.parse(files.find((file) => file.path === "contract.json")!.content);
+  expect(contract).toMatchObject({
+    memoryCommits: [
       { id: "memory_1", summary: "Prefer official sources." },
       { id: "memory_2", summary: "Ignore duplicate syndicated posts." }
     ]
   });
-  expect(memoryCommits).not.toHaveProperty("memoryRevision");
+  expect(contract).not.toHaveProperty("memoryRevision");
 });
 
 test("reads loop memory in bounded newest-first windows", async () => {
@@ -1296,16 +1283,6 @@ test("proposes workflow revisions from a visible Codex session without replacing
     workflowRevisions: [
       { id: revision.id, status: "superseded" },
       { id: followUpRevision.id, status: "promoted" }
-    ]
-  });
-
-  const files = await service.listLoopFiles(formal.id);
-  const revisions = JSON.parse(files.find((file) => file.path === "evolution/revisions.json")!.content);
-  expect(revisions).toMatchObject({
-    activeRevisionId: followUpRevision.id,
-    revisions: [
-      { id: revision.id, status: "superseded", reason: "Missing official sources." },
-      { id: followUpRevision.id, status: "promoted", reason: "Narrow the monitor to official release channels." }
     ]
   });
 });

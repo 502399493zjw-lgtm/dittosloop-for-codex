@@ -30,7 +30,7 @@ export class LoopStore {
   private readonly statePath: string;
   private updateQueue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly dataDir: string) {
+  constructor(readonly dataDir: string) {
     this.statePath = join(dataDir, STATE_FILE);
   }
 
