@@ -1140,16 +1140,17 @@ a:focus-visible {
 
 .agent-avatar {
   display: inline-flex;
-  min-width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
+  border: 1.5px solid var(--dittos-700);
+  border-radius: 999px;
   background: transparent;
-  color: var(--muted);
+  color: var(--dittos-700);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 750;
   line-height: 1;
 }
 

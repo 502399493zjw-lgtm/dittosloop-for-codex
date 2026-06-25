@@ -982,7 +982,7 @@ function renderAgentCard(agent) {
   const sessionLabel = agent.threadTitle ?? (agent.threadId ? shortThreadId(agent.threadId) : "待 Codex App 创建");
   const card = el("div", `agent-card ${agent.threadUrl ? "has-session" : ""}`, [
     el("div", "agent-card-row", [
-      el("span", "agent-avatar", agent.avatar),
+      el("span", "agent-avatar", agentInitial(agent)),
       el("span", "agent-name", agent.name),
       el("span", "agent-spacer", ""),
       statusChip(agent.status),
@@ -1000,6 +1000,11 @@ function renderAgentCard(agent) {
     card.dataset.threadId = agent.threadId;
   }
   return card;
+}
+
+function agentInitial(agent) {
+  const name = `${agent.name ?? ""}`.trim();
+  return Array.from(name)[0] ?? agent.avatar ?? "代";
 }
 
 function openSessionButton(threadUrl, label = "打开会话", className = "open-session-button") {
