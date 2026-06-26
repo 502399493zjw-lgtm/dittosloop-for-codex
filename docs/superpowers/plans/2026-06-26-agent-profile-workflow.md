@@ -23,7 +23,7 @@
 
 ---
 
-- [ ] **Step 1: Add contract profile types, validation, and normalization**
+- [ ] **Task 1: Add contract profile types, validation, and normalization**
 
   Files:
 
@@ -119,7 +119,7 @@
     - If no declared profile is found but inline `subagent` exists, create a legacy inline effective profile.
   - Update `applyContractPatch` in `service.ts` to preserve `agentProfiles` across workflow revisions.
 
-- [ ] **Step 2: Expose profile fields through MCP schemas**
+- [ ] **Task 2: Expose profile fields through MCP schemas**
 
   Files:
 
@@ -176,7 +176,7 @@
   - Add `allowDegradedProfiles: z.boolean().optional()` to `startCodexSessionSchema`.
   - Pass `allowDegradedProfiles` into `service.startCodexSessionRun`.
 
-- [ ] **Step 3: Implement local conservative skill preflight**
+- [ ] **Task 3: Implement local conservative skill preflight**
 
   Files:
 
@@ -253,7 +253,7 @@
   - Throw before creating a run if `report.status === "blocked"` and `allowDegradedProfiles` is not true.
   - Store the report on `run.codexSession.profilePreflight`.
 
-- [ ] **Step 4: Carry effective profiles through workflow execution and sessions**
+- [ ] **Task 4: Carry effective profiles through workflow execution and sessions**
 
   Files:
 
@@ -311,7 +311,7 @@
     - preflight warnings/blockers,
     - explicit note that DittosLoop records expectations but the visible Codex session remains the orchestrator.
 
-- [ ] **Step 5: Update workspace files and preview display**
+- [ ] **Task 5: Update workspace files and preview display**
 
   Files:
 
@@ -365,7 +365,7 @@
     - `profileStatusMeta(profilePreflight)`
   - In task/session card rendering, prefer `taskRun.agentProfile` and `subagent.agentProfile`; fall back to `formatSubagentMeta` only for legacy records.
 
-- [ ] **Step 6: Update installed skill guidance for creating profile-based workflows**
+- [ ] **Task 6: Update installed skill guidance for creating profile-based workflows**
 
   Files:
 
@@ -425,7 +425,7 @@
   - Keep legacy `subagent` documented as compatibility hints, not the preferred structure.
   - Document `allowDegradedProfiles` as an explicit escape hatch for real-world testing.
 
-- [ ] **Step 7: Full verification and review handoff**
+- [ ] **Task 7: Full verification and review handoff**
 
   Files:
 
