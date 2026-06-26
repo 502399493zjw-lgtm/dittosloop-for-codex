@@ -202,6 +202,22 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).not.toContain("阶段暂无 agent 明细");
 });
 
+test("preview renders pipeline and human badges on workflow nodes", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+  const styles = await readFile(join(previewDir, "styles.css"), "utf8");
+
+  expect(app).toContain("renderAgentBadges");
+  expect(app).toContain("agent-badge pipeline");
+  expect(app).toContain("agent-badge human");
+  expect(app).toContain("管道");
+  expect(app).toContain("人工");
+  expect(app).toContain("item.pipeline === true");
+  expect(app).toContain("item.human === true");
+  expect(styles).toContain(".agent-badge");
+  expect(styles).toContain(".agent-badge.pipeline");
+  expect(styles).toContain(".agent-badge.human");
+});
+
 test("preview renders agent cards with minimal avatars and no diamond marker", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
   const styles = await readFile(join(previewDir, "styles.css"), "utf8");

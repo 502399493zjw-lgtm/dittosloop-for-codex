@@ -5,6 +5,8 @@ export interface AgentRequest {
   label?: string;
   stepId?: string;
   phaseId?: string;
+  pipeline?: boolean;
+  human?: boolean;
   subagent?: CodexSubagentSpec;
   attemptId?: string;
   workflowContextId?: string;
@@ -22,6 +24,8 @@ export interface WorkflowExecutionPlanStep {
   phaseId?: string;
   prompt?: string;
   sessionPolicy?: "new";
+  pipeline?: boolean;
+  human?: boolean;
   subagent?: CodexSubagentSpec;
 }
 
@@ -63,10 +67,10 @@ export type EngineEvent =
   | EngineEventBase<"run_completed", { status: "completed"; result?: unknown }>
   | EngineEventBase<"run_failed", { status: "failed"; error: string }>
   | EngineEventBase<"run_done", { status: "completed" | "failed" | "waiting_for_human"; summary?: string }>
-  | EngineEventBase<"phase_started", { label?: string; title?: string; phaseId?: string }>
-  | EngineEventBase<"phase_done", { phaseId: string; title?: string; status: "ok" | "failed" }>
-  | EngineEventBase<"agent_started", { label?: string; prompt: string; stepId?: string; nodeId?: string; phaseId?: string; session?: unknown }>
-  | EngineEventBase<"agent_done", { label?: string; result?: string; stepId?: string; nodeId?: string; phaseId?: string; status?: "ok" | "failed"; error?: string; session?: unknown }>
+  | EngineEventBase<"phase_started", { label?: string; title?: string; phaseId?: string; pipeline?: boolean }>
+  | EngineEventBase<"phase_done", { phaseId: string; title?: string; status: "ok" | "failed"; pipeline?: boolean }>
+  | EngineEventBase<"agent_started", { label?: string; prompt: string; stepId?: string; nodeId?: string; phaseId?: string; pipeline?: boolean; human?: boolean; session?: unknown }>
+  | EngineEventBase<"agent_done", { label?: string; result?: string; stepId?: string; nodeId?: string; phaseId?: string; status?: "ok" | "failed"; error?: string; pipeline?: boolean; human?: boolean; session?: unknown }>
   | EngineEventBase<"agent_failed", { label?: string; error: string; stepId?: string; phaseId?: string }>
   | EngineEventBase<"parallel_started", { label?: string; count: number }>
   | EngineEventBase<"parallel_completed", { label?: string; count: number }>
@@ -97,6 +101,7 @@ export interface PhaseHandle {
 
 export interface PhaseOptions {
   phaseId?: string;
+  pipeline?: boolean;
 }
 
 export interface FlowApi {
@@ -111,6 +116,8 @@ export interface AgentOptions {
   label?: string;
   stepId?: string;
   phaseId?: string;
+  pipeline?: boolean;
+  human?: boolean;
   subagent?: CodexSubagentSpec;
 }
 

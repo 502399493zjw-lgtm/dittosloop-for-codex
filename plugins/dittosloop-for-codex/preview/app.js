@@ -1508,6 +1508,8 @@ function timelineItemAgent(section, item, index) {
     status: timelineStatus(item.status),
     description: item.message,
     meta: item.createdAt ? `${section.title} · ${formatDate.format(new Date(item.createdAt))}` : section.title,
+    pipeline: item.pipeline === true,
+    human: item.human === true,
     threadId: session?.threadId,
     threadTitle: session?.threadTitle,
     threadUrl: session?.threadUrl,
@@ -1642,6 +1644,8 @@ function workflowAgentCards(detail) {
       status: timelineStatus(item.status),
       description: item.message,
       meta: item.createdAt ? formatDate.format(new Date(item.createdAt)) : "workflow agent",
+      pipeline: item.pipeline === true,
+      human: item.human === true,
       threadId: session?.threadId,
       threadTitle: session?.threadTitle,
       threadUrl: session?.threadUrl,
@@ -1703,7 +1707,10 @@ function renderAgentCard(agent) {
     el("div", "agent-card-row", [
       el("span", "agent-avatar", agentInitial(agent)),
       el("div", "agent-main", [
-        el("span", "agent-name", agent.name),
+        el("span", "agent-name", [
+          el("span", "", agent.name),
+          ...renderAgentBadges(agent)
+        ]),
         agent.description ? el("p", "agent-description", agent.description) : null,
         agent.meta ? el("span", "agent-meta", agent.meta) : null
       ]),
@@ -1722,6 +1729,17 @@ function renderAgentCard(agent) {
     card.dataset.threadId = agent.threadId;
   }
   return card;
+}
+
+function renderAgentBadges(agent) {
+  const badges = [];
+  if (agent.pipeline) {
+    badges.push(el("span", "agent-badge pipeline", "管道"));
+  }
+  if (agent.human) {
+    badges.push(el("span", "agent-badge human", "人工"));
+  }
+  return badges;
 }
 
 function agentInitial(agent) {

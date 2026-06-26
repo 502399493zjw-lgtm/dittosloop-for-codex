@@ -92,12 +92,19 @@ const taskStepSchema = z.object({
   verifierRef: z.string().optional(),
   sessionPolicy: z.literal("new").optional(),
   outputSchema: z.record(z.unknown()).optional(),
+  human: z.boolean().optional(),
   subagent: subagentSchema.optional()
 });
 
 type StepSchema = z.infer<typeof agentStepSchema> | z.infer<typeof taskStepSchema> | {
   id: string;
-  kind: "phase" | "parallel";
+  kind: "phase";
+  label: string;
+  pipeline?: boolean;
+  children: StepSchema[];
+} | {
+  id: string;
+  kind: "parallel";
   label: string;
   children: StepSchema[];
 };
@@ -110,6 +117,7 @@ const stepSchema: z.ZodType<StepSchema> = z.lazy(() =>
       id: z.string().min(1),
       kind: z.literal("phase"),
       label: z.string().min(1),
+      pipeline: z.boolean().optional(),
       children: z.array(stepSchema)
     }),
     z.object({
@@ -121,12 +129,22 @@ const stepSchema: z.ZodType<StepSchema> = z.lazy(() =>
   ])
 );
 
-const createLoopContractSchema = z.object({
+const scriptCallSchema: z.ZodType<{ fn: string; args?: unknown[] }> = z.object({
+  fn: z.string().min(1),
+  args: z.array(z.unknown()).optional()
+});
+
+const scriptSchema = z.object({
+  build: z.array(scriptCallSchema).min(1)
+});
+
+const createLoopContractObjectSchema = z.object({
   id: z.string().min(1).optional(),
   title: z.string().min(1),
   goal: z.string().min(1),
   intent: z.string().optional(),
-  body: z.object({ steps: z.array(stepSchema).min(1) }),
+  body: z.object({ steps: z.array(stepSchema).min(1) }).optional(),
+  script: scriptSchema.optional(),
   verification: z.object({
     mode: z.enum(["after_workflow", "after_each_agent"]),
     rubrics: z.array(z.object({
@@ -152,6 +170,11 @@ const createLoopContractSchema = z.object({
     projectPath: z.string().optional()
   }).optional()
 });
+
+const createLoopContractSchema = createLoopContractObjectSchema.refine(
+  (value) => Boolean(value.body) !== Boolean(value.script),
+  { message: "exactly one of body or script is required" }
+);
 
 const startCodexSessionSchema = z.object({
   loopId: z.string().min(1),
@@ -183,12 +206,14 @@ const proposeWorkflowRevisionSchema = z.object({
   authorThreadId: z.string().min(1).optional(),
   reason: z.string().min(1).optional(),
   rationale: z.string().min(1).optional(),
-  contract: createLoopContractSchema.optional(),
-  patch: createLoopContractSchema.partial().optional()
+  contract: createLoopContractObjectSchema.optional(),
+  patch: createLoopContractObjectSchema.partial().optional()
 }).refine((value) => Boolean(value.reason || value.rationale), {
   message: "reason or rationale is required"
 }).refine((value) => Boolean(value.contract || value.patch), {
   message: "contract or patch is required"
+}).refine((value) => !(value.contract?.body && value.contract?.script), {
+  message: "contract cannot include both body and script"
 });
 
 const listWorkflowRevisionsSchema = z.object({

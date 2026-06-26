@@ -134,6 +134,8 @@ function flattenWorkflowSteps(steps: Step[], phaseId?: string, depth = 0): Workf
       phaseId,
       prompt: step.kind === "agent" || step.kind === "task" ? step.prompt : undefined,
       sessionPolicy: step.kind === "agent" || step.kind === "task" ? step.sessionPolicy : undefined,
+      pipeline: step.kind === "phase" ? step.pipeline : undefined,
+      human: step.kind === "task" ? step.human : undefined,
       subagent: step.kind === "agent" || step.kind === "task" ? step.subagent : undefined
     };
     if (step.kind === "agent" || step.kind === "task") {

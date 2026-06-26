@@ -444,6 +444,89 @@ test("resumes a suspended task workflow with subagent metadata through session w
   );
 });
 
+test("authors a loop via script, suspends on the first task, and resumes to completion without relaunching", async () => {
+  const sessionBridge = createPendingSessionBridge();
+  const service = await createService(sessionBridge);
+  const handlers = createToolHandlers(service);
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const loop = await callTool<{ id: string; body: { steps: Array<{ id: string }> } }>(handlers.create_loop_contract, {
+    title: "Scripted pipeline loop",
+    goal: "Author and run a pipeline loop from a builder script.",
+    script: {
+      build: [
+        {
+          fn: "pipeline",
+          args: [
+            "produce",
+            "Produce",
+            [
+              { fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Write a draft." }] },
+              { fn: "task", args: [{ id: "review", label: "Review", prompt: "Review the draft." }] }
+            ]
+          ]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The report is complete.", severity: "must" }]
+    }
+  });
+
+  expect(loop.body.steps[0]).toMatchObject({ id: "produce", kind: "phase", pipeline: true });
+
+  const launch = await callTool<{ run: { id: string }; attempt: { id: string }; launchRequest: { workflowContextId: string } }>(
+    handlers.start_codex_session,
+    { loopId: loop.id, goal: "Run the scripted pipeline." }
+  );
+
+  const firstExecution = await callTool<{ status: string }>(handlers.execute_workflow_attempt, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+  expect(firstExecution.status).toBe("running");
+  expect(sessionBridge.requests.map((request) => request.stepId)).toEqual(["draft"]);
+
+  await callTool(handlers.record_session_result, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_1",
+    stepId: "draft",
+    idempotencyKey: "session_1:draft:passed",
+    status: "passed",
+    summary: "Draft finished.",
+    result: "DRAFT-FROM-STEP-1"
+  });
+
+  // The first step is not relaunched; the second runs once with the prior output threaded in.
+  expect(sessionBridge.requests.map((request) => request.stepId)).toEqual(["draft", "review"]);
+  const reviewRequest = sessionBridge.requests.find((request) => request.stepId === "review");
+  expect(reviewRequest?.prompt).toContain("[pipeline] Prior step (draft) output:");
+  expect(reviewRequest?.prompt).toContain("DRAFT-FROM-STEP-1");
+
+  const completed = await callTool<{ status: string }>(handlers.record_session_result, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_2",
+    stepId: "review",
+    idempotencyKey: "session_2:review:passed",
+    status: "passed",
+    summary: "Review approved.",
+    result: "FINAL-REPORT"
+  });
+  expect(completed.status).toBe("completed");
+
+  const detail = await callTool<RunDetail>(handlers.get_run_detail, { runId: launch.run.id });
+  const context = detail.workflowContexts.find((candidate) => candidate.id === launch.launchRequest.workflowContextId);
+  expect(context?.status).toBe("completed");
+  expect(context?.steps.draft).toMatchObject({ status: "completed", output: "DRAFT-FROM-STEP-1" });
+  expect(context?.steps.review).toMatchObject({ status: "completed", output: "FINAL-REPORT" });
+});
+
 async function createService(sessionBridge: CodexSessionBridge) {
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-e2e-"));
   tempDirs.push(dir);

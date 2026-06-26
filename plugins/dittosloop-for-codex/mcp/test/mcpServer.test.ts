@@ -1026,6 +1026,104 @@ test("rejects invalid MCP memory read windows", async () => {
   await expect(handlers.read_loop_memory({ loopId: loop.id, offset: -1 })).rejects.toThrow();
 });
 
+test("create_loop_contract accepts a script AST that compiles to the same body as a hand-written contract", async () => {
+  const handlers = await createHandlers();
+
+  const fromScript = readResult(await handlers.create_loop_contract({
+    title: "Script authored",
+    goal: "Author a loop through the builder script",
+    script: {
+      build: [
+        { fn: "budget", args: [2] },
+        {
+          fn: "pipeline",
+          args: [
+            "produce",
+            "Produce",
+            [
+              { fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Write the draft." }] },
+              { fn: "task", args: [{ id: "review", label: "Review", prompt: "Review the draft." }] }
+            ]
+          ]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Output satisfies the goal", severity: "must" }]
+    }
+  }));
+
+  expect(fromScript.body.steps).toEqual([
+    {
+      id: "produce",
+      kind: "phase",
+      label: "Produce",
+      pipeline: true,
+      children: [
+        { id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Write the draft." },
+        { id: "review", kind: "task", runtime: "codex", label: "Review", prompt: "Review the draft." }
+      ]
+    }
+  ]);
+  expect(fromScript.budgetUsd).toBe(2);
+});
+
+test("create_loop_contract rejects providing both body and script, and providing neither", async () => {
+  const handlers = await createHandlers();
+
+  await expect(handlers.create_loop_contract({
+    title: "Both",
+    goal: "Reject both body and script",
+    body: { steps: [{ id: "a", kind: "agent", label: "A", prompt: "..." }] },
+    script: { build: [{ fn: "task", args: [{ id: "a", label: "A", prompt: "..." }] }] },
+    verification: { mode: "after_workflow", rubrics: [] }
+  })).rejects.toThrow(/exactly one of body or script/i);
+
+  await expect(handlers.create_loop_contract({
+    title: "Neither",
+    goal: "Reject neither body nor script",
+    verification: { mode: "after_workflow", rubrics: [] }
+  })).rejects.toThrow(/exactly one of body or script/i);
+});
+
+test("propose_workflow_revision accepts a script-authored revision", async () => {
+  const handlers = await createHandlers();
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Revisable",
+    goal: "Revise via script",
+    body: { steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Write." }] },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Output ok", severity: "must" }]
+    }
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Run" }));
+
+  const revision = readResult(await handlers.propose_workflow_revision({
+    loopId: contract.id,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    reason: "Add review through a script",
+    contract: {
+      title: "Revisable",
+      goal: "Revise via script",
+      script: {
+        build: [
+          { fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Write." }] },
+          { fn: "task", args: [{ id: "review", label: "Review", prompt: "Review." }] }
+        ]
+      },
+      verification: {
+        mode: "after_workflow",
+        rubrics: [{ id: "done", label: "Done", requirement: "Output ok", severity: "must" }]
+      }
+    }
+  }));
+
+  expect(revision.contract.body.steps.map((step: { id: string }) => step.id)).toEqual(["draft", "review"]);
+});
+
 test("registers the DittosLoop tool surface", () => {
   const registeredTools: string[] = [];
   const toolMetadata: Record<string, { title: string; description: string }> = {};

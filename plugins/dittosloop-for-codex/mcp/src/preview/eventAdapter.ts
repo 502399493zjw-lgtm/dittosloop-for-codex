@@ -20,6 +20,8 @@ export interface PreviewTimelineItem {
   sequence?: number;
   stepId?: string;
   phaseId?: string;
+  pipeline?: boolean;
+  human?: boolean;
   message?: string;
   session?: unknown;
 }
@@ -169,6 +171,8 @@ function baseItem(
     sequence: event.sequence,
     stepId: "stepId" in event ? event.stepId : "nodeId" in event ? event.nodeId : "phaseId" in event ? event.phaseId : undefined,
     phaseId: "phaseId" in event ? event.phaseId : undefined,
+    pipeline: "pipeline" in event && event.pipeline === true ? true : undefined,
+    human: "human" in event && event.human === true ? true : undefined,
     message: typeof message === "string" ? message : undefined,
     session: "session" in event ? event.session : undefined
   };

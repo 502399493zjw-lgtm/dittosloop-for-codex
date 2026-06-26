@@ -3845,3 +3845,180 @@ test("returns composed run detail", async () => {
   });
   expect(detail.events).toEqual(expect.arrayContaining([expect.objectContaining({ message: "Checked package scripts" })]));
 });
+
+test("a script-authored loop yields the same body as the equivalent hand-written contract", async () => {
+  const service = await createServiceWithSequentialIds();
+
+  const scripted = await service.createLoopContract({
+    title: "Scripted",
+    goal: "Author through a builder script",
+    script: {
+      build: [
+        { fn: "budget", args: [3] },
+        {
+          fn: "pipeline",
+          args: [
+            "produce",
+            "Produce",
+            [
+              { fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Write." }] },
+              { fn: "task", args: [{ id: "review", label: "Review", prompt: "Review." }] }
+            ]
+          ]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Output ok", severity: "must" }]
+    }
+  });
+
+  expect(scripted.body.steps).toEqual([
+    {
+      id: "produce",
+      kind: "phase",
+      label: "Produce",
+      pipeline: true,
+      children: [
+        { id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Write." },
+        { id: "review", kind: "task", runtime: "codex", label: "Review", prompt: "Review." }
+      ]
+    }
+  ]);
+  expect(scripted.budgetUsd).toBe(3);
+});
+
+test("rejects a passed task result that violates the step outputSchema without mutating the workflow context", async () => {
+  const { bridge } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await service.createLoopContract({
+    title: "Schema enforced workflow",
+    goal: "Enforce outputSchema at writeback",
+    body: {
+      steps: [
+        {
+          id: "draft",
+          kind: "task",
+          runtime: "codex",
+          label: "Draft",
+          prompt: "Produce JSON.",
+          outputSchema: { type: "object", required: ["summary"] }
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Output ok", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run schema workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  await expect(
+    service.recordSessionResult(launch.run.id, {
+      attemptId: launch.attempt.id,
+      sessionId: "session_1",
+      stepId: "draft",
+      idempotencyKey: "draft:final",
+      status: "passed",
+      summary: "Draft done.",
+      result: JSON.stringify({ notes: "missing summary" })
+    })
+  ).rejects.toThrow(/outputSchema validation failed/);
+
+  const snapshot = await service.getSnapshot();
+  expect(snapshot.workflowContexts[0]).toMatchObject({
+    status: "suspended",
+    idempotencyKeys: [],
+    steps: { draft: { status: "suspended" } }
+  });
+  expect(snapshot.workflowContexts[0].steps.draft.output).toBeUndefined();
+
+  // A conforming result then succeeds.
+  const completed = await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "draft",
+    idempotencyKey: "draft:final",
+    status: "passed",
+    summary: "Draft done.",
+    result: JSON.stringify({ summary: "all good" })
+  });
+  expect(completed.status).toBe("completed");
+});
+
+test("a pipeline threads the prior step output into the next step prompt and never relaunches completed steps", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await service.createLoopContract({
+    title: "Pipeline workflow",
+    goal: "Thread outputs between pipeline steps",
+    script: {
+      build: [
+        {
+          fn: "pipeline",
+          args: [
+            "produce",
+            "Produce",
+            [
+              { fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Write a draft." }] },
+              { fn: "task", args: [{ id: "review", label: "Review", prompt: "Review the draft." }] }
+            ]
+          ]
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Output ok", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run pipeline" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(requests.map((request) => request.stepId)).toEqual(["draft"]);
+
+  await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "draft",
+    idempotencyKey: "draft:final",
+    status: "passed",
+    summary: "Draft done.",
+    result: "DRAFT-OUTPUT"
+  });
+
+  // Step 1 is not relaunched (memoize-by-stepId preserved); step 2 launched once.
+  expect(requests.map((request) => request.stepId)).toEqual(["draft", "review"]);
+  const reviewRequest = requests.find((request) => request.stepId === "review");
+  expect(reviewRequest?.prompt).toContain("Review the draft.");
+  expect(reviewRequest?.prompt).toContain("[pipeline] Prior step (draft) output:");
+  expect(reviewRequest?.prompt).toContain("DRAFT-OUTPUT");
+});
