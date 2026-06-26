@@ -225,7 +225,7 @@ const executeWorkflowAttemptSchema = z.object({
   attemptId: z.string().min(1).optional()
 });
 
-const proposeWorkflowRevisionSchema = z.object({
+const proposeWorkflowRevisionObjectSchema = z.object({
   loopId: z.string().min(1),
   runId: z.string().min(1),
   attemptId: z.string().min(1),
@@ -235,7 +235,9 @@ const proposeWorkflowRevisionSchema = z.object({
   rationale: z.string().min(1).optional(),
   contract: createLoopContractObjectSchema.optional(),
   patch: createLoopContractObjectSchema.partial().optional()
-}).refine((value) => Boolean(value.reason || value.rationale), {
+});
+
+const proposeWorkflowRevisionSchema = proposeWorkflowRevisionObjectSchema.refine((value) => Boolean(value.reason || value.rationale), {
   message: "reason or rationale is required"
 }).refine((value) => Boolean(value.contract || value.patch), {
   message: "contract or patch is required"
@@ -645,7 +647,7 @@ const toolDefinitions = [
     name: "create_loop_contract",
     title: "Create formal loop contract",
     description: "Create a structured Live Loop contract with workflow body and verification rubrics.",
-    schema: createLoopContractSchema
+    schema: createLoopContractObjectSchema
   },
   {
     name: "list_loops",
@@ -681,7 +683,7 @@ const toolDefinitions = [
     name: "propose_workflow_revision",
     title: "Propose workflow revision",
     description: "Create a draft workflow revision from inside a visible Codex session.",
-    schema: proposeWorkflowRevisionSchema
+    schema: proposeWorkflowRevisionObjectSchema
   },
   {
     name: "list_workflow_revisions",

@@ -2,9 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { createToolHandlers, registerDittosLoopTools } from "../src/mcpServer.js";
+import { createMcpServer, createToolHandlers, registerDittosLoopTools } from "../src/mcpServer.js";
 import { LoopService } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
 import type {
@@ -19,7 +21,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function createHandlers() {
+async function createTestLoopService() {
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-mcp-"));
   tempDirs.push(dir);
   const counters = new Map<string, number>();
@@ -64,6 +66,11 @@ async function createHandlers() {
     sessionBridge
   });
 
+  return { service, sessionRequests };
+}
+
+async function createHandlers() {
+  const { service, sessionRequests } = await createTestLoopService();
   const handlers = createToolHandlers(service);
   Object.defineProperty(handlers, "__sessionRequests", {
     value: sessionRequests,
@@ -1233,6 +1240,42 @@ test("propose_workflow_revision accepts a script-authored revision", async () =>
   }));
 
   expect(revision.contract.body.steps.map((step: { id: string }) => step.id)).toEqual(["draft", "review"]);
+});
+
+test("exposes structured schemas for refined tools through MCP listTools", async () => {
+  const { service } = await createTestLoopService();
+  const server = createMcpServer(service);
+  const client = new Client({ name: "schema-test-client", version: "0.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    const createLoopContract = byName.get("create_loop_contract");
+    const proposeWorkflowRevision = byName.get("propose_workflow_revision");
+
+    expect(createLoopContract?.inputSchema.properties).toMatchObject({
+      title: expect.any(Object),
+      goal: expect.any(Object),
+      body: expect.any(Object),
+      script: expect.any(Object),
+      agentProfiles: expect.any(Object)
+    });
+    expect(JSON.stringify(createLoopContract?.inputSchema)).toContain("agentProfileRef");
+
+    expect(proposeWorkflowRevision?.inputSchema.properties).toMatchObject({
+      loopId: expect.any(Object),
+      runId: expect.any(Object),
+      attemptId: expect.any(Object),
+      contract: expect.any(Object),
+      patch: expect.any(Object)
+    });
+  } finally {
+    await Promise.allSettled([client.close(), server.close()]);
+  }
 });
 
 test("registers the DittosLoop tool surface", () => {

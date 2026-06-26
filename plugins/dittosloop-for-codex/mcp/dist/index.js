@@ -25530,7 +25530,7 @@ var executeWorkflowAttemptSchema = external_exports.object({
   runId: external_exports.string().min(1),
   attemptId: external_exports.string().min(1).optional()
 });
-var proposeWorkflowRevisionSchema = external_exports.object({
+var proposeWorkflowRevisionObjectSchema = external_exports.object({
   loopId: external_exports.string().min(1),
   runId: external_exports.string().min(1),
   attemptId: external_exports.string().min(1),
@@ -25540,7 +25540,8 @@ var proposeWorkflowRevisionSchema = external_exports.object({
   rationale: external_exports.string().min(1).optional(),
   contract: createLoopContractObjectSchema.optional(),
   patch: createLoopContractObjectSchema.partial().optional()
-}).refine((value) => Boolean(value.reason || value.rationale), {
+});
+var proposeWorkflowRevisionSchema = proposeWorkflowRevisionObjectSchema.refine((value) => Boolean(value.reason || value.rationale), {
   message: "reason or rationale is required"
 }).refine((value) => Boolean(value.contract || value.patch), {
   message: "contract or patch is required"
@@ -25902,7 +25903,7 @@ var toolDefinitions = [
     name: "create_loop_contract",
     title: "Create formal loop contract",
     description: "Create a structured Live Loop contract with workflow body and verification rubrics.",
-    schema: createLoopContractSchema
+    schema: createLoopContractObjectSchema
   },
   {
     name: "list_loops",
@@ -25938,7 +25939,7 @@ var toolDefinitions = [
     name: "propose_workflow_revision",
     title: "Propose workflow revision",
     description: "Create a draft workflow revision from inside a visible Codex session.",
-    schema: proposeWorkflowRevisionSchema
+    schema: proposeWorkflowRevisionObjectSchema
   },
   {
     name: "list_workflow_revisions",
