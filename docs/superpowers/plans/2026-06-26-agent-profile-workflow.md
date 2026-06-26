@@ -25,7 +25,7 @@
 
 ## Task 1: Add contract profile types, validation, and normalization
 
-- [ ] Task status
+- [x] Task status
 
   Files:
 
