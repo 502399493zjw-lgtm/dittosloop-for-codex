@@ -23848,6 +23848,9 @@ ${priorOutput}`;
       if (input.attemptId && context.attemptId !== input.attemptId) {
         throw new Error(`Workflow context does not belong to attempt: ${context.id}`);
       }
+      if (input.sessionId && context.taskRuns.some((taskRun) => taskRun.sessionId === input.sessionId)) {
+        throw new Error("Validator result session cannot be a workflow task session");
+      }
       const attempt = requireAttempt(state, context.attemptId);
       if (attempt.runId !== runId) {
         throw new Error(`Attempt does not belong to run: ${attempt.id}`);
@@ -26491,6 +26494,7 @@ var recordValidatorResultSchema = external_exports.object({
   runId: external_exports.string().min(1),
   workflowContextId: external_exports.string().min(1),
   attemptId: external_exports.string().min(1),
+  sessionId: external_exports.string().min(1).optional(),
   validatorId: external_exports.string().min(1),
   idempotencyKey: external_exports.string().min(1).optional(),
   result: validatorResultInputSchema
@@ -26630,6 +26634,7 @@ function createToolHandlers(service) {
       return toToolResult(await service.recordValidatorResult(args.runId, {
         workflowContextId: args.workflowContextId,
         attemptId: args.attemptId,
+        sessionId: args.sessionId,
         validatorId: args.validatorId,
         idempotencyKey: args.idempotencyKey,
         result: args.result

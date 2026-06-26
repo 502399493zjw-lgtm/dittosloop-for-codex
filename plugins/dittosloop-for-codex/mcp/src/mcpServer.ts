@@ -392,6 +392,7 @@ const recordValidatorResultSchema = z.object({
   runId: z.string().min(1),
   workflowContextId: z.string().min(1),
   attemptId: z.string().min(1),
+  sessionId: z.string().min(1).optional(),
   validatorId: z.string().min(1),
   idempotencyKey: z.string().min(1).optional(),
   result: validatorResultInputSchema
@@ -541,6 +542,7 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
       return toToolResult(await service.recordValidatorResult(args.runId, {
         workflowContextId: args.workflowContextId,
         attemptId: args.attemptId,
+        sessionId: args.sessionId,
         validatorId: args.validatorId,
         idempotencyKey: args.idempotencyKey,
         result: args.result

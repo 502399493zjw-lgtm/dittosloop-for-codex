@@ -2442,6 +2442,74 @@ test("recordValidatorResult finalizes v2 verification from a separate rubric age
   });
 });
 
+test("recordValidatorResult rejects workflow task session identity", async () => {
+  const { bridge } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.executeWorkflowAttempt(launch.run.id, launch.attempt.id);
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "draft",
+    idempotencyKey: "session_1:draft:passed",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  const workerWriteback = {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-worker",
+    result: {
+      type: "rubric_agent" as const,
+      status: "passed" as const,
+      evidence: "Worker self-approval should not count.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed" as const, score: 1, maxScore: 1, evidence: "Self-approved." }
+      ]
+    }
+  };
+
+  await expect(service.recordValidatorResult(launch.run.id, workerWriteback)).rejects.toThrow(
+    "Validator result session cannot be a workflow task session"
+  );
+
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "running" },
+    verificationResults: []
+  });
+
+  const verification = await service.recordValidatorResult(launch.run.id, {
+    ...workerWriteback,
+    sessionId: "verifier-session",
+    idempotencyKey: "validator-quality-review-verifier",
+    result: {
+      ...workerWriteback.result,
+      evidence: "Independent verifier approved the candidate."
+    }
+  });
+
+  expect(verification).toMatchObject({ version: 2, status: "passed" });
+});
+
 test("recordValidatorResult rejects writeback before the worker enters verification", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await service.createLoopContract(v2RubricAgentLoopInput());

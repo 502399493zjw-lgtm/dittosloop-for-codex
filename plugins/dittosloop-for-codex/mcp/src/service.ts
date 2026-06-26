@@ -223,6 +223,7 @@ export interface RecordSessionResultInput {
 export interface RecordValidatorResultInput {
   workflowContextId?: string;
   attemptId?: string;
+  sessionId?: string;
   validatorId: string;
   idempotencyKey?: string;
   result: RecordedRubricAgentResultInput & {
@@ -1519,6 +1520,9 @@ export class LoopService {
       const context = findWorkflowContextForValidatorResult(state, runId, input);
       if (input.attemptId && context.attemptId !== input.attemptId) {
         throw new Error(`Workflow context does not belong to attempt: ${context.id}`);
+      }
+      if (input.sessionId && context.taskRuns.some((taskRun) => taskRun.sessionId === input.sessionId)) {
+        throw new Error("Validator result session cannot be a workflow task session");
       }
       const attempt = requireAttempt(state, context.attemptId);
       if (attempt.runId !== runId) {
