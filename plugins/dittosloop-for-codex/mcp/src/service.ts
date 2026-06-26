@@ -32,7 +32,7 @@ import type {
 } from "./types.js";
 import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
-import { syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
+import { deleteLoopWorkspaceDirectory, syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
 
 export interface LoopServiceOptions {
   store: LoopStore;
@@ -394,9 +394,12 @@ export class LoopService {
         memoryCommits: state.memoryCommits.filter(
           (commit) => commit.loopId !== loopId && (!commit.runId || !deletedRunIds.has(commit.runId))
         ),
+        loopMemories: state.loopMemories.filter((memory) => memory.loopId !== loopId),
         artifacts: state.artifacts.filter((artifact) => !deletedRunIds.has(artifact.runId))
       };
     });
+
+    await deleteLoopWorkspaceDirectory(this.options.store.dataDir, loopId);
 
     return deletedLoop!;
   }

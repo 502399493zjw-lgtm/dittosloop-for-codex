@@ -658,7 +658,7 @@ function renderLoopStage({ snapshot, detail }) {
       el("span", "trigger-actions", [
         button("ghost-button launch-button", () => {
           void startCodexSession(loop);
-        }, "生成启动请求"),
+        }, "复制启动请求"),
         button("danger-button", () => {
           void deleteLoop(loop);
         }, "删除")
@@ -716,7 +716,7 @@ function loopProjectLabel(loop, snapshot) {
 
 function projectForLoop(snapshot, loop) {
   const projects = projectChoices(snapshot);
-  if (!loop) return projects[0] ?? null;
+  if (!loop) return null;
 
   return projects.find((project) => {
     return project.id === loop.codexProjectId || project.path === loop.projectPath || project.name === loop.projectLabel;
@@ -724,19 +724,10 @@ function projectForLoop(snapshot, loop) {
 }
 
 async function copyNewLoopPrompt() {
-  const project = projectChoices(currentSnapshot)[0];
-  const body = project
-    ? {
-        codexProjectId: project.id,
-        projectLabel: project.name,
-        projectPath: project.path
-      }
-    : {};
-
   const response = await fetch("/api/new-loop-session", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify({})
   });
   if (!response.ok) {
     renderError(`New loop prompt request failed: ${response.status}`);
@@ -771,20 +762,11 @@ async function copyText(text) {
 }
 
 async function startCodexSession(loop) {
-  const project = projectForLoop(currentSnapshot, loop) ?? projectChoices(currentSnapshot)[0];
-  if (!project) {
-    renderError("没有可用的 Codex App 项目，无法创建 Codex 会话请求。");
-    return;
-  }
-
   const response = await fetch(`/api/loops/${encodeURIComponent(loop.id)}/codex-session`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      goal: loop.intent,
-      codexProjectId: project.id,
-      projectLabel: project.name,
-      projectPath: project.path
+      goal: loop.intent
     })
   });
   if (!response.ok) {
@@ -794,13 +776,14 @@ async function startCodexSession(loop) {
 
   const launch = await response.json();
   window.__dittosloopLastLaunchRequest = launch.launchRequest;
-  window.dispatchEvent(new CustomEvent("dittosloop:create-codex-thread", { detail: launch.launchRequest }));
-  window.parent?.postMessage({ type: "dittosloop:create-codex-thread", launchRequest: launch.launchRequest }, "*");
+  window.__dittosloopLastLaunchPrompt = launch.prompt;
+  await copyText(launch.prompt);
   selectedRunId = launch.run.id;
   selectedLoopId = launch.run.loopId;
   activeLoopTab = "history";
   writeRouteState("run", selectedRunId);
-  renderNotice("已生成 Codex 会话请求，等待 Codex App 打开新会话。");
+  renderNotice("已复制启动提示，请打开 Codex 新会话粘贴运行。");
+  showToast("已复制启动提示。");
   await loadSnapshot();
 }
 
@@ -1255,7 +1238,7 @@ function codexSessionRequestAgents(run) {
       status: run.codexSession.threadId ? "completed" : run.codexSession.status,
       description: run.codexSession.threadId
         ? "已关联真实 Codex worker 会话，可打开查看运行结果。"
-        : "等待 Codex App 创建任务会话。",
+        : "启动提示已复制，等待在 Codex 新会话中粘贴运行。",
       meta: "host-mediated session",
       threadId: run.codexSession.threadId,
       threadTitle: run.codexSession.threadTitle,
@@ -1533,9 +1516,11 @@ function buildCodexSessionTimelineAgents(detail) {
     {
       id: `${run.id}-session`,
       avatar: "启",
-      name: "创建 Codex 会话",
+      name: "启动 Codex 会话",
       status: run.codexSession.threadId ? "completed" : run.codexSession.status,
-      description: run.codexSession.threadId ? "真实 Codex worker session 已创建并关联。" : "等待 Codex App 创建真实会话。",
+      description: run.codexSession.threadId
+        ? "真实 Codex worker session 已创建并关联。"
+        : "启动提示已复制，等待在 Codex 新会话中粘贴运行。",
       meta: formatDate.format(new Date(run.createdAt)),
       threadId: run.codexSession.threadId,
       threadTitle: run.codexSession.threadTitle,
@@ -1648,7 +1633,7 @@ function phaseDone(status) {
 }
 
 function renderAgentCard(agent) {
-  const sessionLabel = agent.threadTitle ?? (agent.threadId ? shortThreadId(agent.threadId) : "待 Codex App 创建");
+  const sessionLabel = agent.threadTitle ?? (agent.threadId ? shortThreadId(agent.threadId) : "待手动启动");
   const card = el("div", `agent-card ${agent.threadUrl ? "has-session" : ""}`, [
     el("div", "agent-card-row", [
       el("span", "agent-avatar", agentInitial(agent)),
@@ -1725,7 +1710,7 @@ function sessionActionForRun(run, className = "open-session-button", pendingClas
     return openSessionButtonForRun(run.id, "打开会话", className);
   }
   if (run.codexSession) {
-    return el("span", pendingClassName, "等待 Codex App 创建");
+    return el("span", pendingClassName, "等待手动启动");
   }
   return null;
 }

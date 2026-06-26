@@ -33,6 +33,10 @@ export async function syncLoopWorkspaceDirectory(
   );
 }
 
+export async function deleteLoopWorkspaceDirectory(dataDir: string, loopId: string): Promise<void> {
+  await rm(join(dataDir, "loops", loopId), { recursive: true, force: true });
+}
+
 function resolveLoopFilePath(loopDir: string, filePath: string): string {
   const parts = filePath.split("/");
   if (filePath.startsWith("/") || parts.some((part) => part === "" || part === "." || part === "..")) {

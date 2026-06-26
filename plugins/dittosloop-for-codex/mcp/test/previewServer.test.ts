@@ -157,7 +157,7 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("renderAgentCard");
   expect(app).toContain("agent-card");
   expect(app).toContain("agent-avatar");
-  expect(app).toContain("待 Codex App 创建");
+  expect(app).toContain("待手动启动");
   expect(app).toContain("threadId");
   expect(app).toContain("Codex worker 会话");
   expect(app).toContain("codexSessionRequestAgents");
@@ -257,15 +257,20 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("/codex-session");
   expect(app).toContain("/api/new-loop-session");
   expect(app).toContain("已复制成功，请打开 Codex 新会话粘贴构建。");
-  expect(app).toContain("创建 Codex 会话请求");
+  expect(app).toContain("复制启动请求");
+  expect(app).toContain("已复制启动提示，请打开 Codex 新会话粘贴运行。");
   expect(app).toContain("sessionActionForRun");
-  expect(app).toContain("等待 Codex App 创建");
-  expect(app).toContain("dittosloop:create-codex-thread");
+  expect(app).toContain("window.__dittosloopLastLaunchPrompt");
   expect(app).toContain("launchRequest");
   expect(app).toContain("codexProjectId");
   expect(app).toContain("deleteLoop");
   expect(app).toContain("danger-button");
   expect(app).toContain("window.confirm");
+  expect(app).not.toContain("创建 Codex 会话请求");
+  expect(app).not.toContain("Codex App 创建");
+  expect(app).not.toContain("dittosloop:create-codex-thread");
+  expect(app).not.toContain("没有可用的 Codex App 项目");
+  expect(app).not.toContain("projectChoices(currentSnapshot)[0]");
   expect(app).not.toContain("再次点击删除");
   expect(app).not.toContain("未连接 Codex 项目");
   expect(app).not.toContain("未关联会话");
@@ -1393,6 +1398,47 @@ test("starts a codex session run from the preview api", async () => {
     projectLabel: "dittos loop"
   });
   expect(launch.prompt).toContain("AI Dev Tools Update Monitor");
+});
+
+test("starts a projectless codex session run from the preview api", async () => {
+  const service = await createService();
+  const loop = await createFormalLoop(service, {
+    title: "Projectless update monitor",
+    goal: "Watch release updates"
+  });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/loops/${loop.id}/codex-session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      goal: "Check projectless updates"
+    })
+  });
+  const launch = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(launch.run).toMatchObject({
+    loopId: loop.id,
+    goal: "Check projectless updates",
+    codexSession: {
+      mode: "new_session",
+      status: "requested"
+    }
+  });
+  expect(launch.run).not.toHaveProperty("codexProjectId");
+  expect(launch.run).not.toHaveProperty("projectLabel");
+  expect(launch.run).not.toHaveProperty("projectPath");
+  expect(launch.launchRequest).toMatchObject({
+    runId: launch.run.id,
+    loopId: loop.id,
+    title: "DittosLoop: Projectless update monitor"
+  });
+  expect(launch.launchRequest).not.toHaveProperty("codexProjectId");
+  expect(launch.launchRequest).not.toHaveProperty("projectLabel");
+  expect(launch.launchRequest).not.toHaveProperty("projectPath");
+  expect(launch.prompt).toContain("Projectless update monitor");
 });
 
 test("records a codex thread from the preview api", async () => {

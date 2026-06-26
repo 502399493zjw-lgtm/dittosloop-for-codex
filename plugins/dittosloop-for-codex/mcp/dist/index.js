@@ -21759,6 +21759,9 @@ async function syncLoopWorkspaceDirectory(dataDir, loopId, files) {
     })
   );
 }
+async function deleteLoopWorkspaceDirectory(dataDir, loopId) {
+  await rm(join(dataDir, "loops", loopId), { recursive: true, force: true });
+}
 function resolveLoopFilePath(loopDir, filePath) {
   const parts = filePath.split("/");
   if (filePath.startsWith("/") || parts.some((part) => part === "" || part === "." || part === "..")) {
@@ -21915,9 +21918,11 @@ var LoopService = class {
         memoryCommits: state.memoryCommits.filter(
           (commit) => commit.loopId !== loopId && (!commit.runId || !deletedRunIds.has(commit.runId))
         ),
+        loopMemories: state.loopMemories.filter((memory) => memory.loopId !== loopId),
         artifacts: state.artifacts.filter((artifact) => !deletedRunIds.has(artifact.runId))
       };
     });
+    await deleteLoopWorkspaceDirectory(this.options.store.dataDir, loopId);
     return deletedLoop;
   }
   async executeWorkflowAttempt(runId, input = {}) {

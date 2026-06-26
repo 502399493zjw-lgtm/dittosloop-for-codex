@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1803,8 +1803,31 @@ test("deletes a loop and its run history", async () => {
     verificationResults: [],
     humanRequests: [],
     memoryCommits: [],
+    loopMemories: [],
     artifacts: []
   });
+});
+
+test("deletes a loop workspace directory from disk", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => `${prefix}_1`,
+    previewBaseUrl: "http://127.0.0.1:47888"
+  });
+  const formal = await createFormalLoop(service, {
+    title: "Daily code health check",
+    goal: "Keep the project healthy"
+  });
+
+  await service.listLoopFiles(formal.id);
+  await expect(access(join(dir, "loops", formal.id))).resolves.toBeUndefined();
+
+  await service.deleteLoop(formal.id);
+
+  await expect(access(join(dir, "loops", formal.id))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("binds loop runs to the Codex project selected for the loop", async () => {
