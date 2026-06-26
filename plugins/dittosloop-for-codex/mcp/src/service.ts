@@ -2666,12 +2666,15 @@ function profilePreflightForStep(
   const blockers = report.blockers.filter((blocker) =>
     checks.some((check) => blocker.includes(check.profileLabel) || blocker.includes(check.profileId) || blocker.includes(check.skill.id))
   );
+  const stepWarnings = warnings.length ? warnings : report.warnings.filter((warning) => checkMessages.has(warning));
+  const stepBlockers = blockers.length ? blockers : report.blockers.filter((blocker) => checkMessages.has(blocker));
+  const status = stepBlockers.length > 0 ? (report.allowDegradedProfiles ? "degraded" : "blocked") : stepWarnings.length > 0 ? "warning" : "passed";
 
   return {
-    status: report.status,
+    status,
     checks,
-    warnings: warnings.length ? warnings : report.warnings.filter((warning) => checkMessages.has(warning)),
-    blockers: blockers.length ? blockers : report.blockers.filter((blocker) => checkMessages.has(blocker)),
+    warnings: stepWarnings,
+    blockers: stepBlockers,
     allowDegradedProfiles: report.allowDegradedProfiles
   };
 }

@@ -3943,6 +3943,83 @@ test("agent profile snapshots remain stable when resuming after a workflow revis
   });
 });
 
+test("agent profile step preflight status stays local to each step", async () => {
+  const service = await createServiceWithSkillAvailability(async (requirement) => {
+    if (requirement.id === "research-pack") {
+      return {
+        status: "passed",
+        message: "research-pack is installed"
+      };
+    }
+
+    return {
+      status: "unknown",
+      message: `${requirement.id} could not be verified`
+    };
+  });
+  const loop = await service.createLoopContract({
+    title: "Profile status locality",
+    goal: "Keep each step preflight status local",
+    agentProfiles: {
+      researcher: {
+        id: "researcher",
+        label: "Researcher",
+        role: "Research specialist",
+        requiredSkills: [{ id: "research-pack", source: "user" }]
+      },
+      reviewer: {
+        id: "reviewer",
+        label: "Reviewer",
+        role: "Code reviewer",
+        requiredSkills: [{ id: "review-pack", source: "user" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "research",
+          kind: "task",
+          runtime: "codex",
+          label: "Research",
+          prompt: "Gather the relevant evidence.",
+          agentProfileRef: "researcher"
+        },
+        {
+          id: "review",
+          kind: "task",
+          runtime: "codex",
+          label: "Review",
+          prompt: "Review the evidence.",
+          agentProfileRef: "reviewer"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Work completes", severity: "must" }]
+    }
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "Run mixed profile steps",
+    allowDegradedProfiles: true
+  });
+
+  expect(launch.run.codexSession?.profilePreflight).toMatchObject({
+    status: "degraded",
+    blockers: [expect.stringMatching(/review-pack/)]
+  });
+  expect(launch.run.codexSession?.subagents?.find((subagent) => subagent.stepId === "research")?.profilePreflight)
+    .toMatchObject({
+      status: "passed"
+    });
+  expect(launch.run.codexSession?.subagents?.find((subagent) => subagent.stepId === "review")?.profilePreflight).toMatchObject(
+    {
+      status: "degraded"
+    }
+  );
+});
+
 test("profile preflight finds plugin skills stored directly under the plugin cache root", async () => {
   const codexHome = await mkdtemp(join(tmpdir(), "dittosloop-codex-home-"));
   tempDirs.push(codexHome);
