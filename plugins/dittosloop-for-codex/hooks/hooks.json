@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./hooks/loopable-reminder.mjs session-start startup",
+            "command": "node \"${PLUGIN_ROOT}/hooks/loopable-reminder.mjs\" session-start startup",
             "timeout": 5,
             "statusMessage": "Loading DittosLoop reminder"
           }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./hooks/loopable-reminder.mjs session-start resume",
+            "command": "node \"${PLUGIN_ROOT}/hooks/loopable-reminder.mjs\" session-start resume",
             "timeout": 5,
             "statusMessage": "Loading DittosLoop reminder"
           }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./hooks/loopable-reminder.mjs session-start compact",
+            "command": "node \"${PLUGIN_ROOT}/hooks/loopable-reminder.mjs\" session-start compact",
             "timeout": 5,
             "statusMessage": "Loading DittosLoop reminder"
           }
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ./hooks/loopable-reminder.mjs user-prompt-submit",
+            "command": "node \"${PLUGIN_ROOT}/hooks/loopable-reminder.mjs\" user-prompt-submit",
             "timeout": 5
           }
         ]

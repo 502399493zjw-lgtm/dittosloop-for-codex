@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const PLUGIN_NAME = "dittosloop-for-codex";
@@ -8,6 +10,10 @@ const MARKETPLACE_NAME = "dittosloop-local";
 const MARKETPLACE_DISPLAY_NAME = "DittosLoop Local";
 const PLUGIN_PATH = "./plugins/dittosloop-for-codex";
 const MCP_ENTRYPOINT = "./mcp/dist/index.js";
+const MCP_ENTRYPOINT_REPO_PATH = `plugins/${PLUGIN_NAME}/mcp/dist/index.js`;
+const HOOK_SCRIPT_REFERENCE = "${PLUGIN_ROOT}/hooks/loopable-reminder.mjs";
+const CWD_RELATIVE_HOOK_SCRIPT_REFERENCE = "./hooks/loopable-reminder.mjs";
+const execFileAsync = promisify(execFile);
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -64,6 +70,27 @@ async function requireFile(filePath, label, checks, errors) {
     checks.push(`${label} exists`);
   } else {
     errors.push(`${label} is missing at ${filePath}`);
+  }
+}
+
+async function isGitTracked(root, repoRelativePath) {
+  try {
+    await execFileAsync("git", ["-C", root, "ls-files", "--error-unmatch", repoRelativePath]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function requireGitTrackedFile(root, repoRelativePath, label, checks, errors) {
+  if (!(await pathExists(path.join(root, ".git")))) {
+    return;
+  }
+
+  if (await isGitTracked(root, repoRelativePath)) {
+    checks.push(`${label} is git-tracked`);
+  } else {
+    errors.push(`${label} must be git-tracked for Git-backed installs (${repoRelativePath})`);
   }
 }
 
@@ -215,6 +242,13 @@ function validateHooksConfig(hooksConfig, errors, checks) {
       requireEqual(hook?.type, "command", "hook type", errors);
       if (!isNonEmptyString(hook?.command)) {
         errors.push("hook command must be present");
+      } else {
+        if (!hook.command.includes(HOOK_SCRIPT_REFERENCE)) {
+          errors.push(`hook command must reference ${HOOK_SCRIPT_REFERENCE}`);
+        }
+        if (hook.command.includes(CWD_RELATIVE_HOOK_SCRIPT_REFERENCE)) {
+          errors.push(`hook command must not use cwd-relative ${CWD_RELATIVE_HOOK_SCRIPT_REFERENCE}`);
+        }
       }
       if (hook?.timeout !== undefined && (!Number.isInteger(hook.timeout) || hook.timeout <= 0)) {
         errors.push("hook timeout must be a positive integer when present");
@@ -254,6 +288,7 @@ export async function validatePlugin(rootDir = process.cwd()) {
   );
   await requireFile(path.join(pluginRoot, "mcp", "package.json"), "MCP package", checks, errors);
   await requireFile(path.join(pluginRoot, "mcp", "dist", "index.js"), "built MCP entrypoint", checks, errors);
+  await requireGitTrackedFile(root, MCP_ENTRYPOINT_REPO_PATH, "built MCP entrypoint", checks, errors);
 
   const manifest = await readJson(manifestPath, errors, "plugin manifest");
   const marketplace = await readJson(marketplacePath, errors, "marketplace manifest");

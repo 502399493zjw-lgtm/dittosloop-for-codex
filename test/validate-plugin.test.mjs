@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const validatorModule = pathToFileURL(path.join(repoRoot, "scripts/validate-plugin.mjs")).href;
 const { validatePlugin } = await import(validatorModule);
+const execFileAsync = promisify(execFile);
 
 async function writeJson(filePath, value) {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -19,7 +22,12 @@ async function writeText(filePath, value = "") {
   await writeFile(filePath, value);
 }
 
-async function createValidFixture() {
+async function runGit(cwd, args) {
+  await execFileAsync("git", args, { cwd });
+}
+
+async function createValidFixture(options = {}) {
+  const hookScriptRef = options.hookScriptRef ?? "\"${PLUGIN_ROOT}/hooks/loopable-reminder.mjs\"";
   const root = await mkdtemp(path.join(tmpdir(), "dittosloop-validator-"));
   const pluginRoot = path.join(root, "plugins/dittosloop-for-codex");
 
@@ -91,7 +99,7 @@ async function createValidFixture() {
           hooks: [
             {
               type: "command",
-              command: "node ./hooks/loopable-reminder.mjs session-start startup",
+              command: `node ${hookScriptRef} session-start startup`,
               timeout: 5
             }
           ]
@@ -102,7 +110,7 @@ async function createValidFixture() {
           hooks: [
             {
               type: "command",
-              command: "node ./hooks/loopable-reminder.mjs user-prompt-submit",
+              command: `node ${hookScriptRef} user-prompt-submit`,
               timeout: 5
             }
           ]
@@ -151,4 +159,33 @@ test("reports actionable errors for broken metadata", async () => {
   assert.match(result.errors.join("\n"), /plugin name/);
   assert.match(result.errors.join("\n"), /semver/);
   assert.match(result.errors.join("\n"), /skills/);
+});
+
+test("rejects cwd-relative hook commands for plugin-owned scripts", async () => {
+  const root = await createValidFixture({
+    hookScriptRef: "./hooks/loopable-reminder.mjs"
+  });
+
+  const result = await validatePlugin(root);
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /PLUGIN_ROOT/);
+});
+
+test("rejects git-backed fixtures when the built MCP entrypoint is untracked", async (t) => {
+  const root = await createValidFixture();
+  await writeText(path.join(root, ".gitignore"), "plugins/dittosloop-for-codex/mcp/dist/\n");
+
+  try {
+    await runGit(root, ["init"]);
+    await runGit(root, ["add", "."]);
+  } catch {
+    t.skip("git is unavailable in this environment");
+    return;
+  }
+
+  const result = await validatePlugin(root);
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join("\n"), /git-tracked/);
 });

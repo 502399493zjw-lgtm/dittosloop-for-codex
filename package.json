@@ -7,6 +7,7 @@
     "build": "npm --prefix plugins/dittosloop-for-codex/mcp run build",
     "test": "node --test test/*.test.mjs",
     "validate": "node scripts/validate-plugin.mjs",
-    "check": "npm run build && npm run test && npm run validate && npm --prefix plugins/dittosloop-for-codex/mcp test"
+    "verify:generated": "node scripts/verify-generated.mjs",
+    "check": "npm run build && npm run verify:generated && npm run test && npm run validate && npm --prefix plugins/dittosloop-for-codex/mcp test"
   }
 }

@@ -8,5 +8,7 @@ coverage/
 .dittosloop-data/
 .worktrees/
 plugins/dittosloop-for-codex/mcp/node_modules/
-plugins/dittosloop-for-codex/mcp/dist/
+!plugins/dittosloop-for-codex/mcp/dist/
+plugins/dittosloop-for-codex/mcp/dist/*
+!plugins/dittosloop-for-codex/mcp/dist/index.js
 plugins/dittosloop-for-codex/mcp/coverage/
