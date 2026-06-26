@@ -251,6 +251,70 @@ describe("formal loop contracts", () => {
     expect(() => validateContract(invalidPermissions)).toThrow(/subagent\.permissions\.network/i);
   });
 
+  test("accepts pipeline phases and human task nodes", () => {
+    const contract = compileContract(
+      {
+        id: "loop_1",
+        title: "Pipeline workflow",
+        goal: "Thread outputs and gate on a human",
+        body: {
+          steps: [
+            {
+              id: "produce",
+              kind: "phase",
+              label: "Produce",
+              pipeline: true,
+              children: [
+                { id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Write the draft." },
+                { id: "review", kind: "task", runtime: "codex", label: "Review", prompt: "Review the draft." }
+              ]
+            },
+            {
+              id: "signoff",
+              kind: "task",
+              runtime: "codex",
+              label: "Sign-off",
+              prompt: "Approve the report?",
+              human: true
+            }
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+    expect(contract.body.steps[0]).toMatchObject({ kind: "phase", pipeline: true });
+    expect(contract.body.steps[1]).toMatchObject({ kind: "task", human: true, prompt: "Approve the report?" });
+  });
+
+  test("rejects a human task without a prompt question", () => {
+    const contract = compileContract(
+      {
+        id: "loop_1",
+        title: "Bad human workflow",
+        goal: "Reject a human node without a question",
+        body: {
+          steps: [
+            {
+              id: "signoff",
+              kind: "task",
+              runtime: "codex",
+              label: "Sign-off",
+              prompt: "",
+              human: true
+            } as any
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).toThrow(/human task step .* requires a prompt question|prompt is required/i);
+  });
+
   test("rejects unsupported session reuse policies", () => {
     const contract = compileContract(
       {

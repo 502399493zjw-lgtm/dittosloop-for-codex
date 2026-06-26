@@ -11,17 +11,24 @@ export async function runBody(body: ExecutionBody, api: FlowApi): Promise<unknow
   return results;
 }
 
-async function runStep(step: Step, api: FlowApi, phaseId?: string): Promise<unknown> {
+async function runStep(step: Step, api: FlowApi, phaseId?: string, pipeline = false): Promise<unknown> {
   if (step.kind === "agent" || step.kind === "task") {
-    return api.agent(step.prompt, { label: step.label, stepId: step.id, phaseId, subagent: step.subagent });
+    return api.agent(step.prompt, {
+      label: step.label,
+      stepId: step.id,
+      phaseId,
+      subagent: step.subagent,
+      ...(pipeline ? { pipeline: true } : {}),
+      ...(step.kind === "task" && step.human ? { human: true } : {})
+    });
   }
 
   if (step.kind === "phase") {
-    const phase = api.phase(step.label, { phaseId: step.id });
+    const phase = api.phase(step.label, { phaseId: step.id, pipeline: step.pipeline === true });
     try {
       const results: unknown[] = [];
       for (const child of step.children) {
-        results.push(await runStep(child, api, step.id));
+        results.push(await runStep(child, api, step.id, step.pipeline === true));
       }
       phase.done("ok");
       return results;

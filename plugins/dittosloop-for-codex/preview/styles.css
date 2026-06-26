@@ -1812,6 +1812,28 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.agent-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+}
+
+.agent-badge.pipeline {
+  color: var(--brand-pink);
+  border: 1px solid var(--brand-pink);
+  background: transparent;
+}
+
+.agent-badge.human {
+  color: var(--dittos-700);
+  border: 1px solid var(--dittos-700);
+  background: transparent;
+}
+
 .agent-actions {
   display: inline-flex;
   flex: 0 0 auto;

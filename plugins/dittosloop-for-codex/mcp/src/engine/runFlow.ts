@@ -19,18 +19,21 @@ export async function runFlow<T>(
   const api: FlowApi = {
     phase(title, opts) {
       const phaseId = opts?.phaseId ?? title;
+      const pipeline = opts?.pipeline === true ? true : undefined;
       let closed = false;
-      emit({ type: "phase_started", label: title, title, phaseId });
+      emit({ type: "phase_started", label: title, title, phaseId, pipeline });
 
       return {
         done(status = "ok") {
           if (closed) return;
           closed = true;
-          emit({ type: "phase_done", phaseId, title, status });
+          emit({ type: "phase_done", phaseId, title, status, pipeline });
         }
       };
     },
     async agent(prompt, opts) {
+      const pipeline = opts?.pipeline === true ? true : undefined;
+      const human = opts?.human === true ? true : undefined;
       const cachedOutput = opts?.stepId ? deps.completedStepOutputs?.[opts.stepId] : undefined;
       if (cachedOutput !== undefined) {
         emit({
@@ -39,18 +42,22 @@ export async function runFlow<T>(
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
           result: cachedOutput,
-          status: "ok"
+          status: "ok",
+          pipeline,
+          human
         });
         return cachedOutput;
       }
 
-      emit({ type: "agent_started", label: opts?.label, stepId: opts?.stepId, phaseId: opts?.phaseId, prompt });
+      emit({ type: "agent_started", label: opts?.label, stepId: opts?.stepId, phaseId: opts?.phaseId, prompt, pipeline, human });
       try {
         const result = await deps.executor.run({
           prompt,
           label: opts?.label,
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
+          pipeline: opts?.pipeline,
+          human: opts?.human,
           subagent: opts?.subagent,
           workflowRuntime: deps.workflow?.runtime,
           workflowContractId: deps.workflow?.contractId,
@@ -62,6 +69,8 @@ export async function runFlow<T>(
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
           result: result.text,
+          pipeline,
+          human,
           session: result.data?.session
         });
         return result.text;

@@ -40,6 +40,7 @@ export interface TaskStep {
   verifierRef?: string;
   sessionPolicy?: "new";
   outputSchema?: Record<string, unknown>;
+  human?: boolean;
   subagent?: CodexSubagentSpec;
 }
 
@@ -54,6 +55,7 @@ export interface PhaseStep {
   id: string;
   kind: "phase";
   label: string;
+  pipeline?: boolean;
   children: Step[];
 }
 
