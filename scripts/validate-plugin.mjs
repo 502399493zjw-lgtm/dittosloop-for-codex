@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const PLUGIN_NAME = "dittosloop-for-codex";
 const DISPLAY_NAME = "DittosLoop For Codex";
-const MARKETPLACE_NAME = "dittosloop-local";
-const MARKETPLACE_DISPLAY_NAME = "DittosLoop Local";
+const MARKETPLACE_NAME = "dittosloop";
+const MARKETPLACE_DISPLAY_NAME = "DittosLoop";
 const PLUGIN_PATH = "./plugins/dittosloop-for-codex";
 const MCP_ENTRYPOINT = "./mcp/dist/index.js";
 const MCP_ENTRYPOINT_REPO_PATH = `plugins/${PLUGIN_NAME}/mcp/dist/index.js`;

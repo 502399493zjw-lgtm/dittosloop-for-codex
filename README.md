@@ -42,7 +42,7 @@ Add this repo as a Codex marketplace source:
 codex plugin marketplace add "$(pwd)"
 ```
 
-Then open Codex plugin settings and install `DittosLoop For Codex` from the `DittosLoop Local` marketplace.
+Then open Codex plugin settings and install `DittosLoop For Codex` from the `DittosLoop` marketplace.
 
 After installing or reinstalling the plugin, restart Codex and start a new thread so the bundled skill and MCP tools are loaded fresh.
 
@@ -57,10 +57,10 @@ npm run check
 codex plugin marketplace add "$(pwd)"
 ```
 
-For a public or private GitHub marketplace source that Codex can access, add the repo source instead of the local path:
+For the public GitHub marketplace source, add the repo source instead of the local path:
 
 ```bash
-codex plugin marketplace add owner/dittosloop-for-codex --ref main
+codex plugin marketplace add 502399493zjw-lgtm/dittosloop-for-codex --ref main
 ```
 
 The marketplace entry points to `./plugins/dittosloop-for-codex`, so the same repository shape works locally and from GitHub.

@@ -32,9 +32,9 @@ async function createValidFixture(options = {}) {
   const pluginRoot = path.join(root, "plugins/dittosloop-for-codex");
 
   await writeJson(path.join(root, ".agents/plugins/marketplace.json"), {
-    name: "dittosloop-local",
+    name: "dittosloop",
     interface: {
-      displayName: "DittosLoop Local"
+      displayName: "DittosLoop"
     },
     plugins: [
       {

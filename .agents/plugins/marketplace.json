@@ -1,7 +1,7 @@
 {
-  "name": "dittosloop-local",
+  "name": "dittosloop",
   "interface": {
-    "displayName": "DittosLoop Local"
+    "displayName": "DittosLoop"
   },
   "plugins": [
     {
