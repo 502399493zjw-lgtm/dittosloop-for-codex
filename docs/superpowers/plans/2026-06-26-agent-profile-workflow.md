@@ -261,7 +261,7 @@
 
 ## Task 4: Carry effective profiles through workflow execution and sessions
 
-- [ ] Task status
+- [x] Task status
 
   Files:
 
