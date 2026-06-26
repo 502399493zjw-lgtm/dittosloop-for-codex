@@ -8,7 +8,7 @@ import type {
   VerificationRubricAgentValidator,
   VerificationValidator
 } from "../contract/types.js";
-import type { VerificationDecisionStatus } from "./verifier.js";
+import type { VerificationDecisionCheck, VerificationDecisionStatus } from "./verifier.js";
 
 export const MAX_EVIDENCE_CHARS = 8000;
 
@@ -90,10 +90,32 @@ export interface VerificationResultV2 {
   attemptId?: string;
   status: VerificationDecisionStatus;
   summary: string;
+  checks: VerificationDecisionCheck[];
   validatorResults: ValidatorResult[];
   decision: AggregatedVerificationDecision;
+  repairInstructions?: string;
+  humanQuestion?: string;
   createdAt: string;
 }
+
+export type RunVerificationV2Event =
+  | {
+      type: "validator_started";
+      attemptId?: string;
+      validatorId: string;
+      validatorType: VerificationValidator["type"];
+      label?: string;
+    }
+  | {
+      type: "validator_done";
+      attemptId?: string;
+      result: ValidatorResult;
+    }
+  | {
+      type: "verification_decided";
+      attemptId?: string;
+      decision: AggregatedVerificationDecision;
+    };
 
 export interface RunVerificationV2Input {
   id: string;
@@ -106,6 +128,7 @@ export interface RunVerificationV2Input {
   contractWorkspacePath?: string;
   priorValidatorResults?: ValidatorResult[];
   commandExecutor?: CommandExecutor;
+  emit?: (event: RunVerificationV2Event) => void;
 }
 
 export interface RecordedRubricAgentResultInput {
@@ -124,10 +147,20 @@ export async function runVerificationV2(input: RunVerificationV2Input): Promise<
       continue;
     }
 
-    validatorResults.push(await runDeterministicValidator(validator, input, validatorResults));
+    input.emit?.({
+      type: "validator_started",
+      attemptId: input.attemptId,
+      validatorId: validator.id,
+      validatorType: validator.type,
+      label: validator.label
+    });
+    const result = await runDeterministicValidator(validator, input, validatorResults);
+    input.emit?.({ type: "validator_done", attemptId: input.attemptId, result });
+    validatorResults.push(result);
   }
 
   const decision = aggregateVerificationDecision(input.policy, validatorResults);
+  input.emit?.({ type: "verification_decided", attemptId: input.attemptId, decision });
   return {
     id: input.id,
     version: 2,
@@ -135,8 +168,11 @@ export async function runVerificationV2(input: RunVerificationV2Input): Promise<
     attemptId: input.attemptId,
     status: decision.status,
     summary: decisionSummary(decision),
+    checks: validatorResultsToDecisionChecks(validatorResults),
     validatorResults,
     decision,
+    repairInstructions: decision.repairInstructions,
+    humanQuestion: decision.humanQuestion,
     createdAt: input.createdAt
   };
 }
@@ -426,7 +462,7 @@ function enforceRubricAgentPolicy(policy: VerificationPolicyV2, result: Validato
     };
   }
 
-  if (validator?.type === "rubric_agent" && result.score < validator.passScore) {
+  if (validator?.type === "rubric_agent" && result.score !== undefined && result.score < validator.passScore) {
     return {
       ...result,
       status: "failed",
@@ -435,6 +471,17 @@ function enforceRubricAgentPolicy(policy: VerificationPolicyV2, result: Validato
   }
 
   return result;
+}
+
+function validatorResultsToDecisionChecks(validatorResults: ValidatorResult[]): VerificationDecisionCheck[] {
+  return validatorResults.flatMap((result) => {
+    const rubricIds = result.criteriaIds.length > 0 ? result.criteriaIds : [result.validatorId];
+    return rubricIds.map((rubricId) => ({
+      rubricId,
+      status: result.status,
+      evidence: result.evidence
+    }));
+  });
 }
 
 function rubricAgentStatusFromInput(
