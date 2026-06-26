@@ -6,6 +6,18 @@ This repo is shaped as a GitHub-ready Codex plugin marketplace source. The first
 
 The plugin owns its own formal Live Loop runtime. It copies the main Dittos Loop engine concepts into this repo instead of importing the main Dittos Loop project at runtime. Structured contracts can define a workflow body, verification rubrics, repair policy, stop policy, and Codex project binding; engine-backed runs execute that body through the plugin's local engine and expose engine events to the preview.
 
+## Quick Install
+
+Add the public GitHub marketplace source:
+
+```bash
+codex plugin marketplace add 502399493zjw-lgtm/dittosloop-for-codex --ref main
+```
+
+Then open Codex plugin settings and install `DittosLoop For Codex` from the `DittosLoop` marketplace.
+
+After installing or updating the plugin, restart Codex and start a new thread so the bundled skill and MCP runtime are loaded fresh.
+
 ## Quick Check
 
 From the repo root:
