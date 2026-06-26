@@ -3,11 +3,25 @@ import { compileContract } from "./contract/compileContract.js";
 import { evalScriptAst, type ScriptAst } from "./script/evalScript.js";
 import { validateOutputAgainstSchema } from "./script/validateOutput.js";
 import type { CodexSessionBridge, CodexSessionRef } from "./codex/sessionBridge.js";
-import type { FormalLoopContract, FormalLoopContractInput, PhaseStep, Step } from "./contract/types.js";
+import type {
+  FormalLoopContract,
+  FormalLoopContractInput,
+  LegacyVerificationPolicy,
+  PhaseStep,
+  Step,
+  VerificationPolicyV2
+} from "./contract/types.js";
 import { validateContract } from "./contract/validateContract.js";
 import type { AgentRequest, AgentResult, EngineEvent, Executor } from "./engine/types.js";
 import { LoopRunner, type LoopRunResult, type LoopVerifier } from "./runner/loopRunner.js";
+import { shouldRepair } from "./runner/repair.js";
 import type { VerificationDecision, VerificationDecisionStatus } from "./runner/verifier.js";
+import {
+  recordedRubricAgentResultToValidatorResult,
+  runVerificationV2,
+  type RecordedRubricAgentResultInput,
+  type VerificationResultV2
+} from "./runner/verificationV2.js";
 import type {
   ArtifactRef,
   CodexProjectRef,
@@ -29,6 +43,7 @@ import type {
   VerificationResult,
   VerificationStatus,
   WorkflowContext,
+  WorkflowVerificationState,
   WorkflowTaskRun,
   WorkflowRevision
 } from "./types.js";
@@ -157,7 +172,7 @@ export interface WorkflowLaunchPlan {
   contractId: string;
   goal: string;
   steps: WorkflowLaunchPlanStep[];
-  verification: FormalLoopContract["verification"];
+  verification: FormalLoopContract["verification"] | LegacyVerificationPolicy;
   repairPolicy: FormalLoopContract["repairPolicy"];
   stopPolicy: FormalLoopContract["stopPolicy"];
   budgetUsd?: FormalLoopContract["budgetUsd"];
@@ -197,6 +212,23 @@ export interface RecordSessionResultInput {
   result?: string;
   checks?: VerificationResult["checks"];
   humanQuestion?: string;
+}
+
+export interface RecordValidatorResultInput {
+  workflowContextId?: string;
+  attemptId?: string;
+  validatorId: string;
+  idempotencyKey: string;
+  result: RecordedRubricAgentResultInput & {
+    type: "rubric_agent";
+    criteriaResults?: Array<{
+      criterionId: string;
+      status: VerificationDecisionStatus;
+      score?: number;
+      maxScore?: number;
+      evidence?: string;
+    }>;
+  };
 }
 
 export interface CompleteAttemptInput {
@@ -438,7 +470,19 @@ export class LoopService {
     const activeContract = existingContext?.contractSnapshot ?? requireFormalContract(initialState, run.loopId);
     const workflowContext = await this.prepareWorkflowContext(run.id, attempt.id, activeContract);
     const contract = workflowContext.contractSnapshot ?? activeContract;
+    const usesV2Verification = usesVerificationV2Runtime(contract.verification);
+    const usesExternalV2Verification = usesExternalV2ValidatorWriteback(contract.verification);
+    const runnerContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
     const attemptNumber = Math.max(1, attemptsForRun.findIndex((candidate) => candidate.id === attempt.id) + 1);
+    if (
+      usesExternalV2Verification &&
+      !hasRemainingExecutableSteps(contract, workflowContext) &&
+      !hasOpenWorkflowSessions(workflowContext) &&
+      pendingRubricAgentValidatorIds(contract.verification, workflowContext).length > 0
+    ) {
+      await this.startPendingRubricAgentValidators(run, workflowContext, contract.verification);
+      return (await this.getRunDetail(runId)).run;
+    }
     const engineEvents: EngineEvent[] = [];
     const runner = new LoopRunner({
       executor: input.executor ?? this.createWorkflowContextExecutor(run, attempt.id, workflowContext.id),
@@ -450,7 +494,7 @@ export class LoopService {
     let result: LoopRunResult;
     try {
       result = await runner.run({
-        contract,
+        contract: runnerContract,
         runId,
         attemptId: attempt.id,
         attemptNumber,
@@ -475,11 +519,15 @@ export class LoopService {
 
     let finalRun = await this.recordCompletedCodexSessions(runId, engineEvents);
     await this.recordEngineEvents(runId, engineEvents);
+    if (usesV2Verification && isVerificationResultV2(result.verification)) {
+      return this.finalizeV2Verification(runId, workflowContext.id, result.verification);
+    }
+
     await this.recordVerification(runId, {
       attemptId: attempt.id,
       status: verificationDecisionToResultStatus(result.verification.status),
       summary: result.verification.summary,
-      checks: verificationDecisionChecksToResults(contract, result.verification),
+      checks: verificationDecisionChecksToResults(runnerContract, result.verification),
       repair: result.shouldRepair
     });
 
@@ -1143,6 +1191,78 @@ export class LoopService {
         };
       }
 
+      if (
+        targetContract &&
+        usesVerificationV2Runtime(targetContract.verification) &&
+        resultInput.status === "passed" &&
+        isWorkflowTaskResult &&
+        workflowContextAfterTaskResult &&
+        !hasRemainingWorkflowSteps &&
+        !hasPendingWorkflowSessions
+      ) {
+        shouldContinueWorkflow = true;
+        continuationAttemptId = attemptId;
+        updatedRun = {
+          ...run,
+          status: "running",
+          codexSession: {
+            ...codexSession,
+            status:
+              codexSession.status === "failed" || codexSession.status === "unavailable"
+                ? codexSession.status
+                : "started"
+          },
+          updatedAt: timestamp,
+          completedAt: undefined
+        };
+
+        return {
+          ...state,
+          runs: state.runs.map((candidate) => (candidate.id === runId ? updatedRun! : candidate)),
+          attempts: targetAttempt
+            ? state.attempts.map((attempt) =>
+                attempt.id === targetAttempt.id
+                  ? {
+                      ...attempt,
+                      status: "running" as const,
+                      completedAt: undefined
+                    }
+                  : attempt
+              )
+            : state.attempts,
+          workflowContexts: state.workflowContexts.map((context) =>
+            context.id === workflowContextAfterTaskResult.id
+              ? {
+                  ...workflowContextAfterTaskResult,
+                  verification: startWorkflowVerificationState(
+                    workflowContextAfterTaskResult.verification,
+                    timestamp
+                  )
+                }
+              : context
+          ),
+          events: [
+            ...state.events,
+            lifecycleEvent(
+              this.nextId("event"),
+              runId,
+              "note",
+              "Codex task result recorded; starting v2 verification",
+              timestamp,
+              {
+                attemptId,
+                workflowContextId: workflowContextAfterTaskResult.id,
+                sessionResult: {
+                  status: resultInput.status,
+                  summary: resultInput.summary,
+                  result: resultInput.result
+                }
+              }
+            )
+          ]
+        };
+      }
+
       const verification: VerificationResult = {
         id: this.nextId("verification"),
         runId,
@@ -1372,6 +1492,139 @@ export class LoopService {
     });
 
     return event;
+  }
+
+  async recordValidatorResult(runId: string, input: RecordValidatorResultInput): Promise<VerificationResultV2> {
+    const timestamp = this.now();
+    if (!input.idempotencyKey) {
+      throw new Error("Validator results require an idempotencyKey");
+    }
+
+    let contextAfterWrite: WorkflowContext | undefined;
+    let policy: FormalLoopContract["verification"] | undefined;
+    let duplicateResultId: string | undefined;
+
+    await this.options.store.updateState((state) => {
+      const run = requireRun(state, runId);
+      const context = findWorkflowContextForValidatorResult(state, runId, input);
+      if (input.attemptId && context.attemptId !== input.attemptId) {
+        throw new Error(`Workflow context does not belong to attempt: ${context.id}`);
+      }
+      const attempt = requireAttempt(state, context.attemptId);
+      if (attempt.runId !== runId) {
+        throw new Error(`Attempt does not belong to run: ${attempt.id}`);
+      }
+
+      const contract = context.contractSnapshot ??
+        state.formalContracts.find((candidate) => candidate.id === (context.contractId ?? run.loopId));
+      if (!contract) {
+        throw new Error(`Loop contract not found: ${context.contractId ?? run.loopId}`);
+      }
+      if (!usesExternalV2ValidatorWriteback(contract.verification)) {
+        throw new Error("Validator results can only be recorded for verification v2 workflows");
+      }
+      const validator = contract.verification.validators.find((candidate) => candidate.id === input.validatorId);
+      if (!validator) {
+        throw new Error(`Validator not found: ${input.validatorId}`);
+      }
+      if (validator.type !== input.result.type) {
+        throw new Error(`Validator result type does not match validator: ${input.validatorId}`);
+      }
+
+      const verification = context.verification ?? createWorkflowVerificationState(timestamp);
+      if (verification.idempotencyKeys.includes(input.idempotencyKey)) {
+        duplicateResultId = verification.resultId;
+        contextAfterWrite = context;
+        policy = contract.verification;
+        return state;
+      }
+      if (verification.validatorResults.some((result) => result.validatorId === input.validatorId)) {
+        throw new Error(`Validator result already recorded: ${input.validatorId}`);
+      }
+
+      const validatorResult = recordedRubricAgentResultToValidatorResult(
+        validator,
+        normalizeRecordedRubricAgentInput(input.result)
+      );
+      const validatorResults = [...verification.validatorResults, validatorResult];
+      const pendingValidatorIds = pendingRubricAgentValidatorIds(contract.verification, {
+        ...context,
+        verification: {
+          ...verification,
+          validatorResults
+        }
+      }).filter((validatorId) => validatorId !== input.validatorId);
+      const nextVerification: WorkflowVerificationState = {
+        ...verification,
+        status: pendingValidatorIds.length > 0 ? "waiting_for_validator" : "running",
+        validatorResults,
+        pendingValidatorIds,
+        idempotencyKeys: appendUnique(verification.idempotencyKeys, input.idempotencyKey),
+        updatedAt: timestamp
+      };
+      contextAfterWrite = {
+        ...context,
+        verification: nextVerification,
+        updatedAt: timestamp
+      };
+      policy = contract.verification;
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, context.id, contextAfterWrite!),
+        events: [
+          ...state.events,
+          lifecycleEvent(
+            this.nextId("event"),
+            runId,
+            "note",
+            `Validator result recorded: ${input.validatorId}`,
+            timestamp,
+            {
+              attemptId: context.attemptId,
+              workflowContextId: context.id,
+              validatorId: input.validatorId
+            }
+          )
+        ]
+      };
+    });
+
+    if (duplicateResultId) {
+      const state = await this.options.store.readState();
+      const existing = state.verificationResults.find((result) => result.id === duplicateResultId);
+      if (existing && isVerificationResultV2(existing)) {
+        return existing;
+      }
+    }
+
+    if (!contextAfterWrite?.verification || !policy) {
+      throw new Error("Validator result was not recorded");
+    }
+
+    if (contextAfterWrite.verification.pendingValidatorIds.length > 0) {
+      return pendingVerificationResultV2(
+        this.nextId("verification"),
+        runId,
+        contextAfterWrite.attemptId,
+        contextAfterWrite.verification,
+        timestamp
+      );
+    }
+
+    const result = await runVerificationV2({
+      id: this.nextId("verification"),
+      runId,
+      attemptId: contextAfterWrite.attemptId,
+      createdAt: timestamp,
+      policy,
+      workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
+      projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
+      priorValidatorResults: contextAfterWrite.verification.validatorResults
+    });
+    await this.finalizeV2Verification(runId, contextAfterWrite.id, result);
+
+    return result;
   }
 
   async recordVerification(runId: string, input: RecordVerificationInput): Promise<VerificationResult> {
@@ -1683,7 +1936,11 @@ export class LoopService {
   async listLoopFiles(loopId: string): Promise<LoopWorkspaceFile[]> {
     const state = await this.options.store.readState();
 
-    return syncLoopWorkspaceDirectory(this.options.store.dataDir, loopId, loopWorkspaceFiles(state, loopId));
+    return syncLoopWorkspaceDirectory(
+      this.options.store.dataDir,
+      loopId,
+      loopWorkspaceFiles(legacyCompatibleWorkspaceState(state), loopId)
+    );
   }
 
   async getSnapshot(): Promise<Snapshot> {
@@ -1992,6 +2249,158 @@ export class LoopService {
     });
 
     return revision;
+  }
+
+  private async recordVerificationV2Result(runId: string, result: VerificationResultV2): Promise<VerificationResultV2> {
+    const timestamp = this.now();
+
+    await this.options.store.updateState((state) => {
+      requireRun(state, runId);
+      const existing = state.verificationResults.find((candidate) => candidate.id === result.id);
+      if (existing) {
+        if (isVerificationResultV2(existing)) {
+          return state;
+        }
+        throw new Error(`Verification result id already exists: ${result.id}`);
+      }
+
+      return {
+        ...state,
+        verificationResults: [...state.verificationResults, result],
+        events: [
+          ...state.events,
+          lifecycleEvent(this.nextId("event"), runId, "verification_recorded", result.summary, timestamp, {
+            attemptId: result.attemptId,
+            verificationId: result.id,
+            verificationVersion: 2,
+            decision: result.decision
+          })
+        ]
+      };
+    });
+
+    return result;
+  }
+
+  private async finalizeV2Verification(
+    runId: string,
+    workflowContextId: string,
+    result: VerificationResultV2
+  ): Promise<LoopRun> {
+    await this.recordVerificationV2Result(runId, result);
+    await this.markWorkflowVerificationCompleted(workflowContextId, result);
+
+    const state = await this.options.store.readState();
+    const run = requireRun(state, runId);
+    const context = requireWorkflowContext(state, workflowContextId);
+    const contract = context.contractSnapshot ?? requireFormalContract(state, run.loopId);
+    const attemptsForRun = state.attempts.filter((attempt) => attempt.runId === runId);
+    const attemptNumber = Math.max(1, attemptsForRun.findIndex((attempt) => attempt.id === context.attemptId) + 1);
+
+    if (result.status === "failed" && shouldRepair(result.decision, contract.repairPolicy, attemptNumber)) {
+      await this.markRunRepairing(runId, { reason: repairReasonForV2Result(result) });
+      return (await this.getRunDetail(runId)).run;
+    }
+
+    if (result.status === "passed") {
+      await this.completeWorkflowContext(workflowContextId);
+      await this.completeAttempt(context.attemptId, {
+        status: "completed",
+        summary: result.summary
+      });
+      return this.completeRun(runId, { status: "completed" });
+    }
+
+    if (result.status === "needs_human") {
+      await this.completeWorkflowContext(workflowContextId);
+      await this.completeAttempt(context.attemptId, {
+        status: "completed",
+        summary: result.summary
+      });
+      await this.recordHumanRequest(runId, {
+        question: result.humanQuestion ?? result.decision.humanQuestion ?? result.summary
+      });
+      return (await this.getRunDetail(runId)).run;
+    }
+
+    await this.failWorkflowContext(workflowContextId, result.summary);
+    await this.completeAttempt(context.attemptId, {
+      status: "failed",
+      summary: result.summary
+    });
+    return this.completeRun(runId, { status: "failed" });
+  }
+
+  private async startPendingRubricAgentValidators(
+    run: LoopRun,
+    context: WorkflowContext,
+    policy: FormalLoopContract["verification"]
+  ): Promise<void> {
+    const timestamp = this.now();
+    const pendingValidatorIds = pendingRubricAgentValidatorIds(policy, context);
+    if (pendingValidatorIds.length === 0) {
+      return;
+    }
+
+    await this.options.store.updateState((state) => {
+      requireRun(state, run.id);
+      const currentContext = requireWorkflowContext(state, context.id);
+      const verification = currentContext.verification ?? createWorkflowVerificationState(timestamp);
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, currentContext.id, {
+          ...currentContext,
+          verification: {
+            ...verification,
+            status: "waiting_for_validator",
+            pendingValidatorIds,
+            updatedAt: timestamp
+          },
+          updatedAt: timestamp,
+          completedAt: undefined
+        }),
+        events: [
+          ...state.events,
+          ...pendingValidatorIds.map((validatorId) =>
+            lifecycleEvent(this.nextId("event"), run.id, "note", `Waiting for validator result: ${validatorId}`, timestamp, {
+              attemptId: context.attemptId,
+              workflowContextId: context.id,
+              validatorId
+            })
+          )
+        ]
+      };
+    });
+  }
+
+  private async markWorkflowVerificationCompleted(
+    workflowContextId: string,
+    result: VerificationResultV2
+  ): Promise<void> {
+    const timestamp = this.now();
+
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      const verification = context.verification ?? createWorkflowVerificationState(timestamp);
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+          ...context,
+          verification: {
+            ...verification,
+            status: result.status === "failed" ? "failed" : "completed",
+            validatorResults: result.validatorResults,
+            pendingValidatorIds: [],
+            decision: result.decision,
+            resultId: result.id,
+            updatedAt: timestamp
+          },
+          updatedAt: timestamp
+        })
+      };
+    });
   }
 
   private async prepareWorkflowContext(
@@ -2426,10 +2835,33 @@ function createWorkflowContext(input: {
     vars: {},
     steps: {},
     taskRuns: [],
+    verification: createWorkflowVerificationState(input.timestamp),
     pendingSessionIds: [],
     idempotencyKeys: [],
     createdAt: input.timestamp,
     updatedAt: input.timestamp
+  };
+}
+
+function createWorkflowVerificationState(timestamp: string): WorkflowVerificationState {
+  return {
+    status: "not_started",
+    validatorResults: [],
+    pendingValidatorIds: [],
+    idempotencyKeys: [],
+    updatedAt: timestamp
+  };
+}
+
+function startWorkflowVerificationState(
+  existing: WorkflowVerificationState | undefined,
+  timestamp: string
+): WorkflowVerificationState {
+  const verification = existing ?? createWorkflowVerificationState(timestamp);
+  return {
+    ...verification,
+    status: "running",
+    updatedAt: timestamp
   };
 }
 
@@ -2439,6 +2871,80 @@ function completedWorkflowStepOutputs(context: WorkflowContext): Record<string, 
       .filter(([, step]) => step.status === "completed" && step.output !== undefined)
       .map(([stepId, step]) => [stepId, step.output as string])
   );
+}
+
+function pendingRubricAgentValidatorIds(
+  policy: FormalLoopContract["verification"],
+  context: WorkflowContext
+): string[] {
+  const recordedValidatorIds = new Set(
+    (context.verification?.validatorResults ?? []).map((result) => result.validatorId)
+  );
+
+  return policy.validators
+    .filter((validator) => validator.type === "rubric_agent" && !recordedValidatorIds.has(validator.id))
+    .map((validator) => validator.id);
+}
+
+function usesVerificationV2Runtime(policy: FormalLoopContract["verification"]): boolean {
+  return policy.version === 2 && !isMigratedLegacyRubricPolicy(policy);
+}
+
+function usesExternalV2ValidatorWriteback(policy: FormalLoopContract["verification"]): boolean {
+  return usesVerificationV2Runtime(policy) && policy.validators.some((validator) => validator.type === "rubric_agent");
+}
+
+function isMigratedLegacyRubricPolicy(policy: FormalLoopContract["verification"]): boolean {
+  if (policy.version !== 2) return false;
+  if (policy.criteria.length === 0 && policy.validators.length === 0) return true;
+  if (policy.validators.length !== 1) return false;
+
+  const validator = policy.validators[0];
+  return (
+    validator.type === "rubric_agent" &&
+    validator.id === "rubric-agent" &&
+    validator.label === "Rubric review" &&
+    validator.scoreScale.min === 0 &&
+    validator.scoreScale.max === 1 &&
+    validator.passScore === 1 &&
+    validator.evidenceRequired === true &&
+    validator.severity === "must" &&
+    sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id))
+  );
+}
+
+function legacyCompatibleRunnerContract(contract: FormalLoopContract): FormalLoopContract {
+  if (!isMigratedLegacyRubricPolicy(contract.verification)) return contract;
+
+  return {
+    ...contract,
+    verification: legacyVerificationFromMigratedV2(contract.verification) as unknown as FormalLoopContract["verification"]
+  };
+}
+
+function legacyCompatibleWorkspaceState(state: LoopState): LoopState {
+  return {
+    ...state,
+    formalContracts: state.formalContracts.map(legacyCompatibleRunnerContract)
+  };
+}
+
+function legacyVerificationFromMigratedV2(policy: VerificationPolicyV2): LegacyVerificationPolicy {
+  return {
+    mode: policy.mode === "after_each_step" ? "after_each_agent" : "after_workflow",
+    rubrics: policy.criteria.map((criterion) => ({
+      id: criterion.id,
+      label: criterion.label,
+      requirement: criterion.description,
+      severity: criterion.severity
+    }))
+  };
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
 }
 
 function hasOpenWorkflowSessions(context: WorkflowContext): boolean {
@@ -2651,7 +3157,7 @@ function formalContractToLoop(contract: FormalLoopContract): LoopContract {
     intent: contract.intent ?? contract.goal,
     trigger: contract.trigger,
     verification: {
-      checks: contract.verification.rubrics.map((rubric) => rubric.requirement)
+      checks: verificationRequirementChecks(contract.verification)
     },
     status: contract.status,
     codexProjectId: contract.projectBinding?.codexProjectId,
@@ -2660,6 +3166,28 @@ function formalContractToLoop(contract: FormalLoopContract): LoopContract {
     createdAt: contract.createdAt,
     updatedAt: contract.updatedAt
   };
+}
+
+function verificationRequirementChecks(verification: FormalLoopContract["verification"]): string[] {
+  const legacy = verification as unknown as { rubrics?: Array<{ requirement: string }> };
+  if (legacy.rubrics) {
+    return legacy.rubrics.map((rubric) => rubric.requirement);
+  }
+
+  return verification.criteria.map((criterion) => criterion.description);
+}
+
+function formatVerificationCriteria(verification: FormalLoopContract["verification"]): string {
+  const legacy = verification as unknown as {
+    rubrics?: Array<{ severity: string; label: string; requirement: string }>;
+  };
+  if (legacy.rubrics) {
+    return legacy.rubrics.map((rubric) => `- [${rubric.severity}] ${rubric.label}: ${rubric.requirement}`).join("\n");
+  }
+
+  return verification.criteria
+    .map((criterion) => `- [${criterion.severity}] ${criterion.label}: ${criterion.description}`)
+    .join("\n");
 }
 
 function verificationDecisionToResultStatus(status: VerificationDecisionStatus): VerificationStatus {
@@ -2675,14 +3203,26 @@ function verificationDecisionChecksToResults(
   decision: VerificationDecision
 ): VerificationResult["checks"] {
   return decision.checks.map((check) => {
-    const rubric = contract.verification.rubrics.find((candidate) => candidate.id === check.rubricId);
+    const rubric = verificationCriterionLabel(contract.verification, check.rubricId);
 
     return {
-      name: rubric?.label ?? check.rubricId,
+      name: rubric ?? check.rubricId,
       status: verificationDecisionToResultStatus(check.status),
       output: check.evidence
     };
   });
+}
+
+function verificationCriterionLabel(
+  verification: FormalLoopContract["verification"],
+  criterionId: string
+): string | undefined {
+  const legacy = verification as unknown as { rubrics?: Array<{ id: string; label: string }> };
+  if (legacy.rubrics) {
+    return legacy.rubrics.find((candidate) => candidate.id === criterionId)?.label;
+  }
+
+  return verification.criteria.find((candidate) => candidate.id === criterionId)?.label;
 }
 
 type CompletedCodexSessionRef = CodexSessionRef & {
@@ -2842,6 +3382,36 @@ function findWorkflowContextForSessionResult(
   return (attemptId ? contexts.find((context) => context.attemptId === attemptId) : undefined) ?? contexts.at(-1);
 }
 
+function findWorkflowContextForValidatorResult(
+  state: LoopState,
+  runId: string,
+  input: RecordValidatorResultInput
+): WorkflowContext {
+  const contexts = state.workflowContexts.filter((context) => context.runId === runId);
+  if (input.workflowContextId) {
+    const context = contexts.find((candidate) => candidate.id === input.workflowContextId);
+    if (!context) {
+      throw new Error(`Workflow context does not belong to run: ${input.workflowContextId}`);
+    }
+    return context;
+  }
+
+  if (input.attemptId) {
+    const context = contexts.find((candidate) => candidate.attemptId === input.attemptId);
+    if (!context) {
+      throw new Error(`Workflow context not found for attempt: ${input.attemptId}`);
+    }
+    return context;
+  }
+
+  const context = contexts.at(-1);
+  if (!context) {
+    throw new Error(`Workflow context not found for run: ${runId}`);
+  }
+
+  return context;
+}
+
 function completeWorkflowContextFromSessionResult(
   context: WorkflowContext,
   input: RecordSessionResultInput,
@@ -2957,6 +3527,71 @@ function partiallyMatchesWorkflowTaskRun(taskRun: WorkflowTaskRun, input: Record
   if (input.sessionId && taskRun.sessionId === input.sessionId) return true;
   if (input.stepId && taskRun.stepId === input.stepId) return true;
   return false;
+}
+
+function normalizeRecordedRubricAgentInput(
+  input: RecordValidatorResultInput["result"]
+): RecordedRubricAgentResultInput {
+  const criteriaEvidence = input.criteriaResults
+    ?.map((result) => result.evidence)
+    .filter((evidence): evidence is string => Boolean(evidence?.trim()));
+  const criteriaScores = input.criteriaResults
+    ?.map((result) => result.score)
+    .filter((score): score is number => typeof score === "number" && Number.isFinite(score));
+
+  return {
+    status: input.status,
+    score: input.score ?? criteriaScores?.[0],
+    evidence: input.evidence ?? criteriaEvidence?.join("\n"),
+    summary: input.summary,
+    output: input.output ?? {
+      criteriaResults: input.criteriaResults
+    }
+  };
+}
+
+function pendingVerificationResultV2(
+  id: string,
+  runId: string,
+  attemptId: string | undefined,
+  verification: WorkflowVerificationState,
+  timestamp: string
+): VerificationResultV2 {
+  const decision = {
+    status: "needs_human" as const,
+    summary: `Waiting for validator results: ${verification.pendingValidatorIds.join(", ")}`,
+    failedValidatorIds: [],
+    needsHumanValidatorIds: verification.pendingValidatorIds,
+    failedCriterionIds: [],
+    uncoveredMustCriterionIds: [],
+    warnings: [],
+    humanQuestion: `Waiting for validator results: ${verification.pendingValidatorIds.join(", ")}`
+  };
+
+  return {
+    id,
+    version: 2,
+    runId,
+    attemptId,
+    status: "needs_human",
+    summary: decision.summary,
+    checks: [],
+    validatorResults: verification.validatorResults,
+    decision,
+    humanQuestion: decision.humanQuestion,
+    createdAt: timestamp
+  };
+}
+
+function isVerificationResultV2(result: unknown): result is VerificationResultV2 {
+  return result !== null && typeof result === "object" && "version" in result && result.version === 2;
+}
+
+function repairReasonForV2Result(result: VerificationResultV2): string {
+  return [
+    `Failed validators: ${result.decision.failedValidatorIds.join(", ")}`,
+    `failed criteria: ${result.decision.failedCriterionIds.join(", ")}.`
+  ].join("; ") + ` ${result.decision.repairInstructions ?? result.summary}`;
 }
 
 function engineEventToMessage(event: EngineEvent): string {
@@ -3765,9 +4400,7 @@ function buildCodexSessionPrompt(
         formatWorkflowSteps(contract),
         "",
         "Verifier rubrics / 验证规则：",
-        contract.verification.rubrics
-          .map((rubric) => `- [${rubric.severity}] ${rubric.label}: ${rubric.requirement}`)
-          .join("\n")
+        formatVerificationCriteria(contract.verification)
       ].join("\n")
     : "";
   const loopMemory = memoryWindow
@@ -3832,13 +4465,19 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
       contractId: contract.id,
       goal: contract.goal,
       steps: flattenWorkflowLaunchSteps(contract.body.steps),
-      verification: contract.verification,
+      verification: workflowLaunchVerification(contract.verification),
       repairPolicy: contract.repairPolicy,
       stopPolicy: contract.stopPolicy,
       budgetUsd: contract.budgetUsd,
       escalation: contract.escalation
     }
   };
+}
+
+function workflowLaunchVerification(
+  verification: FormalLoopContract["verification"]
+): FormalLoopContract["verification"] | LegacyVerificationPolicy {
+  return isMigratedLegacyRubricPolicy(verification) ? legacyVerificationFromMigratedV2(verification) : verification;
 }
 
 function flattenWorkflowLaunchSteps(

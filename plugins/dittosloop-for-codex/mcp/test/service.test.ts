@@ -275,6 +275,41 @@ function createSkewedPendingSessionBridge() {
   return { bridge, requests };
 }
 
+function v2RubricAgentLoopInput() {
+  return {
+    title: "Verifier owned loop",
+    goal: "Separate work from verification",
+    body: {
+      steps: [{ id: "draft", kind: "task" as const, runtime: "codex" as const, label: "Draft", prompt: "Draft answer" }]
+    },
+    verification: {
+      version: 2 as const,
+      mode: "after_workflow" as const,
+      criteria: [
+        { id: "quality", label: "Quality", description: "Verifier accepts the result.", severity: "must" as const }
+      ],
+      validators: [
+        {
+          id: "quality-review",
+          type: "rubric_agent" as const,
+          label: "Quality review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must" as const
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    }
+  };
+}
+
 async function createPendingServiceWithSequentialIds() {
   const { bridge, requests } = createPendingSessionBridge();
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
@@ -2153,6 +2188,156 @@ test("executes a visible session workflow attempt through the same attempt and s
   expect(replay.status).toBe("completed");
   expect(replayDetail.verificationResults).toHaveLength(1);
   expect(replayDetail.events.filter((event) => event.kind === "verification_recorded")).toHaveLength(1);
+});
+
+test("v2 worker session result cannot complete a run before validator results exist", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker says done",
+    result: "candidate"
+  });
+
+  expect(run.status).not.toBe("completed");
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.verificationResults).toHaveLength(0);
+  expect(detail.workflowContexts[0].verification).toMatchObject({
+    status: "waiting_for_validator",
+    pendingValidatorIds: ["quality-review"],
+    validatorResults: []
+  });
+});
+
+test("recordValidatorResult finalizes v2 verification from a separate rubric agent", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  const verification = await service.recordValidatorResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-1",
+    result: {
+      type: "rubric_agent",
+      status: "passed",
+      evidence: "Candidate is complete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed", score: 1, maxScore: 1, evidence: "Complete answer." }
+      ]
+    }
+  });
+
+  expect(verification).toMatchObject({ version: 2, status: "passed" });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "completed" },
+    verificationResults: [{ version: 2, status: "passed" }],
+    workflowContexts: [
+      {
+        verification: {
+          status: "completed",
+          pendingValidatorIds: [],
+          resultId: verification.id
+        }
+      }
+    ]
+  });
+});
+
+test("recordValidatorResult is idempotent by idempotencyKey", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+  const input = {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-1",
+    result: {
+      type: "rubric_agent" as const,
+      status: "passed" as const,
+      evidence: "Candidate is complete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed" as const, score: 1, maxScore: 1, evidence: "Complete answer." }
+      ]
+    }
+  };
+
+  const first = await service.recordValidatorResult(launch.run.id, input);
+  const replay = await service.recordValidatorResult(launch.run.id, input);
+
+  expect(replay.id).toBe(first.id);
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    verificationResults: [{ id: first.id, version: 2, status: "passed" }]
+  });
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.verificationResults).toHaveLength(1);
+});
+
+test("failed v2 validator result repairs with validator and criterion ids in the reason", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    ...v2RubricAgentLoopInput(),
+    repairPolicy: { maxAttempts: 2, strategy: "repair_then_retry" as const }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  await service.recordValidatorResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-failed",
+    result: {
+      type: "rubric_agent",
+      status: "failed",
+      evidence: "Candidate is incomplete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "failed", score: 0, maxScore: 1, evidence: "Missing required content." }
+      ]
+    }
+  });
+
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.run.status).toBe("repairing");
+  expect(detail.verificationResults).toMatchObject([{ version: 2, status: "failed" }]);
+  expect(detail.workflowContexts[0]).toMatchObject({
+    status: "repairing",
+    cursor: { state: "repairing" },
+    vars: {
+      repairReason: expect.stringContaining("quality-review")
+    }
+  });
+  expect(detail.workflowContexts[0].vars.repairReason).toContain("quality");
 });
 
 test("records a targeted session result against the specified workflow context, attempt, and pending task", async () => {
