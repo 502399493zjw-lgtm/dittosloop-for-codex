@@ -35,6 +35,10 @@ describe("formal loop contracts", () => {
       createdAt: fixedTime,
       updatedAt: fixedTime
     });
+    expect(contract.verification).toMatchObject({
+      version: 2,
+      validators: [{ type: "rubric_agent" }]
+    });
   });
 
   test("rejects duplicate step ids", () => {

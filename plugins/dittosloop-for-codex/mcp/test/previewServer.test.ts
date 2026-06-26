@@ -81,7 +81,7 @@ async function createFormalLoop(
     goal?: string;
   } = {}
 ) {
-  return service.createLoopContract({
+  const contract = await service.createLoopContract({
     title: input.title ?? "Code health",
     goal: input.goal ?? "Keep checks visible",
     body: {
@@ -106,6 +106,12 @@ async function createFormalLoop(
       ]
     }
   });
+
+  expect(contract.verification).toMatchObject({
+    version: 2,
+    validators: [expect.objectContaining({ type: "rubric_agent" })]
+  });
+  return contract;
 }
 
 test("serves the preview shell", async () => {
@@ -517,8 +523,34 @@ test("serves backend-rendered loop directory files api", async () => {
       steps: [{ id: "write-report", kind: "agent", label: "日报 worker", prompt: "生成中文日报。" }]
     },
     verification: {
+      version: 2,
       mode: "after_workflow",
-      rubrics: [{ id: "daily-report", label: "中文日报", requirement: "输出中文日报。", severity: "must" }]
+      criteria: [
+        {
+          id: "daily-report",
+          label: "中文日报",
+          description: "输出中文日报。",
+          severity: "must"
+        }
+      ],
+      validators: [
+        {
+          id: "daily-report-review",
+          type: "rubric_agent",
+          label: "中文日报 review",
+          criteriaIds: ["daily-report"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must"
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
     }
   });
   const { run } = await service.startCodexSessionRun(contract.id, { goal: "生成今天的中文日报" });
@@ -534,12 +566,14 @@ test("serves backend-rendered loop directory files api", async () => {
     expect.arrayContaining([
       expect.objectContaining({ path: "memory.md", kind: "memory", language: "markdown" }),
       expect.objectContaining({ path: "workflow.json", kind: "workflow", language: "json" }),
+      expect.objectContaining({ path: "verification.md", kind: "verification", language: "markdown" }),
       expect.objectContaining({ path: "skill/dittosloop-for-codex-loop.md", kind: "skill", language: "markdown" }),
       expect.objectContaining({ path: "contract.json", kind: "contract", language: "json" })
     ])
   );
   expect(files.find((file: { path: string }) => file.path === "memory.md").content).toContain("保留昨天的来源筛选规则。");
   expect(files.find((file: { path: string }) => file.path === "flow.js")).toBeUndefined();
+  expect(files.find((file: { path: string }) => file.path === "rubrics.md")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "agents.md")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "tool-list.md")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "session.json")).toBeUndefined();

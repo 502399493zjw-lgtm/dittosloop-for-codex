@@ -91,7 +91,7 @@ function formalLoopDirectoryFiles(input: {
   const verificationFileEntry = isVerificationPolicyV2(input.contract.verification)
     ? withSize({
         path: "verification.md",
-        kind: "rubrics",
+        kind: "verification",
         language: "markdown",
         content: verificationFile({ contract: input.contract, latestVerification })
       })
@@ -199,13 +199,13 @@ function loopSkillFile(contract: FormalLoopContract): string {
     "",
     `Loop: ${contract.title}`,
     "",
-    "这个 loop 使用 DittosLoop For Codex 的 loop skill 来创建正式 contract、启动可见 Codex worker session、执行 workflow、写回结果，并按 rubrics 做最终验证。",
+    "这个 loop 使用 DittosLoop For Codex 的 loop skill 来创建正式 contract、启动可见 Codex worker session、执行 workflow、写回结果，并按 criteria、validators、decision 做最终验证。",
     "",
     "## Runtime role",
     "",
     "- Codex worker session 本身承担 orchestrator。",
     "- workflow body 只描述真正被调度的 specialist/editor/checker agents。",
-    "- verifier/rubrics 属于外部最终验证，不作为普通 agent 文件夹层级展示。",
+    "- verification criteria/validators/decision 属于外部最终验证，不作为普通 agent 文件夹层级展示。",
     ""
   ].join("\n");
 }

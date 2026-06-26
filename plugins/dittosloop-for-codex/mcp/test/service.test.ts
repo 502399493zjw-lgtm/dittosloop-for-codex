@@ -61,7 +61,7 @@ async function createFormalLoop(
     projectPath?: string;
   } = {}
 ) {
-  return service.createLoopContract({
+  const contract = await service.createLoopContract({
     title: input.title ?? "Code health",
     goal: input.goal ?? "Keep checks visible",
     codexProjectId: input.codexProjectId,
@@ -89,6 +89,12 @@ async function createFormalLoop(
       ]
     }
   });
+
+  expect(contract.verification).toMatchObject({
+    version: 2,
+    validators: [expect.objectContaining({ type: "rubric_agent" })]
+  });
+  return contract;
 }
 
 async function startFormalRun(

@@ -103,27 +103,43 @@ test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and
       ]
     },
     verification: {
+      version: 2,
       mode: "after_workflow",
-      rubrics: [
+      criteria: [
         {
           id: "zh-report",
           label: "中文日报",
-          requirement: "最终输出必须是中文日报，而不是内部执行日志。",
+          description: "最终输出必须是中文日报，而不是内部执行日志。",
           severity: "must"
         },
         {
           id: "tool-coverage",
           label: "工具覆盖",
-          requirement: "必须覆盖 OpenClaw、Claude Code、Codex、Hermes。",
+          description: "必须覆盖 OpenClaw、Claude Code、Codex、Hermes。",
           severity: "must"
         },
         {
           id: "evidence-and-actions",
           label: "证据与行动",
-          requirement: "必须包含来源、限制说明和建议行动。",
+          description: "必须包含来源、限制说明和建议行动。",
           severity: "must"
         }
-      ]
+      ],
+      validators: [
+        {
+          id: "command-pass",
+          type: "command",
+          label: "Command pass",
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: "project",
+          timeoutMs: 10_000,
+          criteriaIds: ["zh-report", "tool-coverage", "evidence-and-actions"],
+          severity: "must",
+          parse: { kind: "none" }
+        }
+      ],
+      decision: v2DecisionPolicy()
     },
     repairPolicy: {
       maxAttempts: 1,
@@ -194,12 +210,11 @@ test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and
   expect(detail.attempts).toHaveLength(1);
   expect(detail.attempts[0].status).toBe("completed");
   expect(detail.verificationResults).toHaveLength(1);
-  expect(detail.verificationResults[0].status).toBe("passed");
-  expect(detail.verificationResults[0].checks.map((check) => check.name)).toEqual([
-    "中文日报",
-    "工具覆盖",
-    "证据与行动"
-  ]);
+  expect(detail.verificationResults[0]).toMatchObject({
+    version: 2,
+    status: "passed",
+    validatorResults: [expect.objectContaining({ validatorId: "command-pass", status: "passed" })]
+  });
 
   const engineEvents = detail.events.map((event) => event.data?.engineEvent).filter(Boolean);
   expect(engineEvents).toEqual(
@@ -285,15 +300,31 @@ test("resumes a suspended task workflow with subagent metadata through session w
       ]
     },
     verification: {
+      version: 2,
       mode: "after_workflow",
-      rubrics: [
+      criteria: [
         {
           id: "review-approved",
           label: "Review approved",
-          requirement: "The reviewer subagent must approve the collected evidence.",
+          description: "The reviewer subagent must approve the collected evidence.",
           severity: "must"
         }
-      ]
+      ],
+      validators: [
+        {
+          id: "command-pass",
+          type: "command",
+          label: "Command pass",
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: "project",
+          timeoutMs: 10_000,
+          criteriaIds: ["review-approved"],
+          severity: "must",
+          parse: { kind: "none" }
+        }
+      ],
+      decision: v2DecisionPolicy()
     },
     repairPolicy: {
       maxAttempts: 0,
@@ -423,7 +454,7 @@ test("resumes a suspended task workflow with subagent metadata through session w
   workflowContext = detail.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
 
   expect(detail.run.status).toBe("completed");
-  expect(detail.run.codexSession?.status).toBe("completed");
+  expect(detail.run.codexSession?.subagents?.map((agent) => agent.status)).toEqual(["completed", "completed"]);
   expect(detail.attempts[0]?.status).toBe("completed");
   expect(workflowContext?.status).toBe("completed");
   expect(workflowContext?.taskRuns.map((taskRun) => taskRun.status)).toEqual(["completed", "completed"]);
@@ -470,8 +501,31 @@ test("authors a loop via script, suspends on the first task, and resumes to comp
       ]
     },
     verification: {
+      version: 2,
       mode: "after_workflow",
-      rubrics: [{ id: "done", label: "Done", requirement: "The report is complete.", severity: "must" }]
+      criteria: [
+        {
+          id: "done",
+          label: "Done",
+          description: "The report is complete.",
+          severity: "must"
+        }
+      ],
+      validators: [
+        {
+          id: "command-pass",
+          type: "command",
+          label: "Command pass",
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: "contract",
+          timeoutMs: 10_000,
+          criteriaIds: ["done"],
+          severity: "must",
+          parse: { kind: "none" }
+        }
+      ],
+      decision: v2DecisionPolicy()
     }
   });
 
@@ -501,7 +555,6 @@ test("authors a loop via script, suspends on the first task, and resumes to comp
     result: "DRAFT-FROM-STEP-1"
   });
 
-  // The first step is not relaunched; the second runs once with the prior output threaded in.
   expect(sessionBridge.requests.map((request) => request.stepId)).toEqual(["draft", "review"]);
   const reviewRequest = sessionBridge.requests.find((request) => request.stepId === "review");
   expect(reviewRequest?.prompt).toContain("[pipeline] Prior step (draft) output:");
@@ -525,6 +578,188 @@ test("authors a loop via script, suspends on the first task, and resumes to comp
   expect(context?.status).toBe("completed");
   expect(context?.steps.draft).toMatchObject({ status: "completed", output: "DRAFT-FROM-STEP-1" });
   expect(context?.steps.review).toMatchObject({ status: "completed", output: "FINAL-REPORT" });
+  expect(detail.verificationResults[0]).toMatchObject({
+    version: 2,
+    status: "passed",
+    validatorResults: [expect.objectContaining({ validatorId: "command-pass", status: "passed" })]
+  });
+});
+
+test("multi-agent workflow requires separate rubric-agent validator before completing v2 run", async () => {
+  const sessionBridge = createPendingSessionBridge();
+  const service = await createService(sessionBridge);
+  const handlers = createToolHandlers(service);
+
+  const loop = await callTool<{ id: string }>(handlers.create_loop_contract, {
+    title: "Candidate with external quality gate",
+    goal: "Draft a candidate and verify it separately.",
+    body: {
+      steps: [
+        {
+          id: "draft",
+          kind: "task",
+          runtime: "codex",
+          label: "Draft",
+          prompt: "Produce the candidate output."
+        }
+      ]
+    },
+    verification: {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        {
+          id: "quality",
+          label: "Quality",
+          description: "The candidate satisfies the quality bar.",
+          severity: "must"
+        }
+      ],
+      validators: [
+        {
+          id: "quality-review",
+          type: "rubric_agent",
+          label: "Quality review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must"
+        }
+      ],
+      decision: v2DecisionPolicy()
+    },
+    repairPolicy: {
+      maxAttempts: 1,
+      strategy: "fail_run"
+    },
+    stopPolicy: {
+      rule: "verification_passed_or_failed_after_one_attempt",
+      maxConsecutiveFailures: 1
+    }
+  });
+
+  const launch = await callTool<{
+    run: { id: string };
+    attempt: { id: string };
+    launchRequest: { workflowContextId: string };
+  }>(handlers.start_codex_session, {
+    loopId: loop.id,
+    goal: "Draft and verify once."
+  });
+  await callTool(handlers.execute_workflow_attempt, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+  const workerSessionId = "session_1";
+
+  await callTool(handlers.record_session_result, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_1",
+    stepId: "draft",
+    idempotencyKey: "session_1:draft:passed",
+    status: "passed",
+    summary: "Worker produced candidate.",
+    result: "Candidate output ready for independent verification."
+  });
+
+  const detailBeforeValidator = await callTool<RunDetail>(handlers.get_run_detail, { runId: launch.run.id });
+
+  const verifierSession = await sessionBridge.createSession({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    title: "Quality review",
+    prompt: "Review the worker candidate and write the result with record_validator_result.",
+    workflowRuntime: "dittosloop-local-workflow",
+    workflowContractId: loop.id
+  });
+
+  const verifierSessionId = verifierSession.sessionId;
+
+  expect(sessionBridge.requests.map((request) => request.title)).toEqual(expect.arrayContaining([
+    "Draft",
+    "Quality review"
+  ]));
+  expect(workerSessionId).not.toBe(verifierSessionId);
+  expect(detailBeforeValidator.run.status).not.toBe("completed");
+
+  await expect(
+    callTool(handlers.record_validator_result, {
+      runId: launch.run.id,
+      workflowContextId: launch.launchRequest.workflowContextId,
+      attemptId: launch.attempt.id,
+      sessionId: workerSessionId,
+      validatorId: "quality-review",
+      idempotencyKey: "quality-review:worker-rejected",
+      result: {
+        type: "rubric_agent",
+        status: "passed",
+        evidence: "Worker tries to validate its own output.",
+        criteriaResults: [
+          {
+            criterionId: "quality",
+            status: "passed",
+            score: 1,
+            maxScore: 1,
+            evidence: "Worker self-approval should not count."
+          }
+        ],
+        score: 1,
+        maxScore: 1
+      }
+    })
+  ).rejects.toThrow("Validator result session cannot be a workflow task session");
+
+  const detailAfterWorkerValidatorAttempt = await callTool<RunDetail>(handlers.get_run_detail, {
+    runId: launch.run.id
+  });
+  expect(detailAfterWorkerValidatorAttempt.run.status).not.toBe("completed");
+  expect(detailAfterWorkerValidatorAttempt.verificationResults).toHaveLength(0);
+
+  await callTool(handlers.record_validator_result, {
+    runId: launch.run.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: verifierSessionId,
+    validatorId: "quality-review",
+    idempotencyKey: "quality-review:passed",
+    result: {
+      type: "rubric_agent",
+      status: "passed",
+      evidence: "Candidate has complete content and clear evidence.",
+      criteriaResults: [
+        {
+          criterionId: "quality",
+          status: "passed",
+          score: 1,
+          maxScore: 1,
+          evidence: "Candidate meets the quality bar."
+        }
+      ],
+      score: 1,
+      maxScore: 1
+    }
+  });
+
+  const detailAfterValidator = await callTool<RunDetail>(handlers.get_run_detail, { runId: launch.run.id });
+
+  expect(detailAfterValidator.run.status).toBe("completed");
+  expect(detailAfterValidator.verificationResults).toEqual([
+    expect.objectContaining({
+      version: 2,
+      status: "passed",
+      validatorResults: [
+        expect.objectContaining({
+          validatorId: "quality-review",
+          status: "passed",
+          evidence: "Candidate has complete content and clear evidence."
+        })
+      ]
+    })
+  ]);
 });
 
 async function createService(sessionBridge: CodexSessionBridge) {
@@ -661,6 +896,15 @@ function createPendingSessionBridge() {
   };
 
   return bridge;
+}
+
+function v2DecisionPolicy() {
+  return {
+    requireAllMustCriteriaCovered: true,
+    failOnMustValidatorFailure: true,
+    failOnShouldValidatorFailure: false,
+    requireEvidenceForAgentScores: true
+  };
 }
 
 async function callTool<T = any>(handler: (input: unknown) => Promise<TextToolResult>, input: unknown): Promise<T> {

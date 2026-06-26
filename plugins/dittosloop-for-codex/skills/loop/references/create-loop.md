@@ -23,10 +23,10 @@ Goal: what the loop is responsible for
 Body: ordered phase, task(runtime: codex), compatibility agent, and parallel steps
 Session policy: omit it or use sessionPolicy: "new"; reuse-run/reuse-step are not supported yet
 Subagent: optional role/model/tools/permissions hints for Codex task sessions
-Verification rubrics: must/should checks
+Verification: criteria, validators, decision policy
 Repair policy: whether failed verification should retry, ask the user, or fail
 Stop policy: when the loop should stop
 Project binding: optional Codex project id, label, and path
 ```
 
-The final response after creating a formal loop should state the selected workflow style, the task names and responsibilities, the verifier rubrics, and the repair/stop policy.
+The final response after creating a formal loop should state the selected workflow style, the task names and responsibilities, the verification criteria, validators, decision policy, and repair/stop policy.
