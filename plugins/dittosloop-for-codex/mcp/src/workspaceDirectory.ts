@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 
 import type { LoopWorkspaceFile } from "./types.js";
@@ -57,7 +57,7 @@ async function removeStaleFiles(rootDir: string, currentDir: string, desiredPath
       await removeStaleFiles(rootDir, entryPath, desiredPaths);
       const remaining = await readdir(entryPath);
       if (remaining.length === 0) {
-        await rm(entryPath, { recursive: false, force: true });
+        await rmdir(entryPath);
       }
       continue;
     }
