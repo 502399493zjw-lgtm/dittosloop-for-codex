@@ -255,7 +255,7 @@ export async function startPreviewServer(options: PreviewServerOptions): Promise
     }
   });
 
-  await listen(server, port, host);
+  await listenOnAvailablePort(server, port, host);
 
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
@@ -444,6 +444,23 @@ function listen(server: Server, port: number, host: string): Promise<void> {
       resolve();
     });
   });
+}
+
+async function listenOnAvailablePort(server: Server, port: number, host: string): Promise<void> {
+  try {
+    await listen(server, port, host);
+  } catch (error) {
+    if (port !== 0 && isAddressInUseError(error)) {
+      await listen(server, 0, host);
+      return;
+    }
+
+    throw error;
+  }
+}
+
+function isAddressInUseError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EADDRINUSE";
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {

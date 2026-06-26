@@ -1734,6 +1734,17 @@ test("records a run lifecycle in the snapshot", async () => {
   expect(service.getPreviewUrl()).toBe("http://127.0.0.1:47888");
 });
 
+test("updates the preview URL after the runtime binds a fallback port", async () => {
+  const service = await createService();
+
+  service.setPreviewUrl("http://127.0.0.1:47901");
+
+  expect(service.getPreviewUrl()).toBe("http://127.0.0.1:47901");
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    previewUrl: "http://127.0.0.1:47901"
+  });
+});
+
 test("deletes a loop and its run history", async () => {
   const service = await createService();
   const formal = await service.createLoopContract({

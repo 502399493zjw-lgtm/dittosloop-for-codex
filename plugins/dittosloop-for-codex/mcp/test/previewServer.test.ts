@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -443,6 +444,27 @@ test("serves the loop snapshot api", async () => {
     loops: [{ id: "loop_1", title: "Daily code health check" }],
     codexProjects: [{ name: "dittos loop" }]
   });
+});
+
+test("falls back to an available preview port when the preferred port is busy", async () => {
+  const busyServer = await reserveTcpPort();
+  const busyAddress = busyServer.address();
+  if (!busyAddress || typeof busyAddress !== "object") {
+    throw new Error("Expected reserved test port");
+  }
+
+  try {
+    const service = await createService();
+    const server = await startPreviewServer({ service, staticDir: previewDir, port: busyAddress.port });
+    servers.push(server);
+
+    expect(server.port).not.toBe(busyAddress.port);
+
+    const response = await fetch(`${server.url}/api/snapshot`);
+    expect(response.status).toBe(200);
+  } finally {
+    await closeServer(busyServer);
+  }
 });
 
 test("serves backend-rendered loop directory files api", async () => {
@@ -1459,4 +1481,21 @@ async function writeTemplatesFile(templates: unknown[]): Promise<string> {
   const file = join(dir, "templates.json");
   await writeFile(file, `${JSON.stringify(templates, null, 2)}\n`, "utf8");
   return file;
+}
+
+function reserveTcpPort(): Promise<Server> {
+  const server = createServer();
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve(server);
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }

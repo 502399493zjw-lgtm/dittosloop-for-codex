@@ -22,12 +22,13 @@ async function main(): Promise<void> {
     codexProjects: config.codexProjects
   });
 
-  await startPreviewServer({
+  const previewServer = await startPreviewServer({
     service,
     staticDir: config.staticDir,
     templatesFile: config.templatesFile,
     port: config.previewPort
   });
+  service.setPreviewUrl(previewServer.url);
 
   const server = createMcpServer(service);
   await server.connect(new StdioServerTransport());

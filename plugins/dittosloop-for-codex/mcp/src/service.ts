@@ -261,7 +261,7 @@ export type Snapshot = LoopState & {
 export class LoopService {
   private readonly now: () => string;
   private readonly nextId: (prefix: IdPrefix) => string;
-  private readonly previewBaseUrl: string;
+  private previewBaseUrl: string;
 
   constructor(private readonly options: LoopServiceOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
@@ -1643,6 +1643,10 @@ export class LoopService {
 
   getPreviewUrl(): string {
     return this.previewBaseUrl;
+  }
+
+  setPreviewUrl(previewUrl: string): void {
+    this.previewBaseUrl = previewUrl;
   }
 
   async proposeWorkflowRevision(loopId: string, input: ProposeWorkflowRevisionInput): Promise<WorkflowRevision> {
