@@ -3861,6 +3861,105 @@ test("agent profile snapshots flow through workflow sessions and task runs", asy
   });
 });
 
+test("agent profile preflight survives workflow resume into the next Codex task", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const service = await createServiceWithStore(await makeTempStore(), {
+    sessionBridge: bridge,
+    skillAvailabilityProvider: {
+      check: async (requirement) => ({
+        status: "passed",
+        message: `${requirement.id} is installed`,
+        locations: [`/mock/.codex/skills/${requirement.id}/SKILL.md`]
+      })
+    }
+  });
+  const loop = await service.createLoopContract({
+    title: "Profile resume preflight",
+    goal: "Keep step preflight available after resume",
+    agentProfiles: {
+      researcher: {
+        id: "researcher",
+        label: "Researcher",
+        role: "Research specialist",
+        requiredSkills: [{ id: "research-pack", source: "user" }]
+      },
+      reviewer: {
+        id: "reviewer",
+        label: "Reviewer",
+        role: "Review specialist",
+        requiredSkills: [{ id: "review-pack", source: "user" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "research",
+          kind: "task",
+          runtime: "codex",
+          label: "Research",
+          prompt: "Gather the evidence.",
+          agentProfileRef: "researcher"
+        },
+        {
+          id: "review",
+          kind: "task",
+          runtime: "codex",
+          label: "Review",
+          prompt: "Review the evidence.",
+          agentProfileRef: "reviewer"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run research then review" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(requests.map((request) => request.stepId)).toEqual(["research"]);
+
+  const resumed = await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "research",
+    idempotencyKey: "research:final",
+    status: "passed",
+    summary: "Research complete.",
+    result: "Evidence bundle"
+  });
+  const detail = await service.getRunDetail(launch.run.id);
+  const reviewTaskRun = detail.workflowContexts[0]?.taskRuns.find((taskRun) => taskRun.stepId === "review");
+
+  expect(resumed.codexSession?.profilePreflight).toMatchObject({
+    checks: [
+      expect.objectContaining({
+        profileId: "researcher",
+        stepId: "research",
+        skill: { id: "research-pack", source: "user" }
+      }),
+      expect.objectContaining({
+        profileId: "reviewer",
+        stepId: "review",
+        skill: { id: "review-pack", source: "user" }
+      })
+    ]
+  });
+  expect(requests.map((request) => request.stepId)).toEqual(["research", "review"]);
+  expect(reviewTaskRun).toMatchObject({
+    stepId: "review",
+    sessionId: "session_2",
+    status: "suspended"
+  });
+  expect(reviewTaskRun?.profilePreflight).toBeDefined();
+  expect(detail.run.codexSession?.subagents?.find((subagent) => subagent.stepId === "review")).toMatchObject({
+    sessionId: "session_2"
+  });
+  expect(detail.run.codexSession?.subagents?.find((subagent) => subagent.stepId === "review")?.profilePreflight).toBeDefined();
+});
+
 test("agent profile snapshots remain stable when resuming after a workflow revision", async () => {
   const initialBridge = createPendingSessionBridge();
   const store = await makeTempStore();
