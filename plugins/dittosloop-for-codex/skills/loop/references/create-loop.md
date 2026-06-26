@@ -10,8 +10,10 @@ Read this when the user wants a new Dittos loop or a new formal loop contract.
 4. New loops should be formal runtime contracts, even when the workflow is compact.
 5. Prefer `task` steps with `runtime: "codex"`; old `agent` steps are compatibility aliases.
 6. Current task sessions only support omitted `sessionPolicy` or `sessionPolicy: "new"`.
-7. When a task needs a local Codex specialist, put the desired `subagent` role, model, tools, and permissions on the task.
-8. DittosLoop records and passes subagent hints to the Codex host bridge; it does not enforce tool allowlists itself.
+7. Prefer top-level `agentProfiles` plus per-task `agentProfileRef` for reusable Codex task guidance.
+8. Put required installed skills in `requiredSkills` on the profile and use `allowDegradedProfiles: true` only as an explicit escape hatch for real-world testing.
+9. Keep legacy `subagent` hints only for compatibility with older task shapes.
+10. DittosLoop records expectations and runs a best-effort local preflight; it does not claim native Codex skill enforcement or tool allowlist enforcement.
 
 ## Contract Shape
 
@@ -22,11 +24,44 @@ Title: short responsibility name
 Goal: what the loop is responsible for
 Body: ordered phase, task(runtime: codex), compatibility agent, and parallel steps
 Session policy: omit it or use sessionPolicy: "new"; reuse-run/reuse-step are not supported yet
-Subagent: optional role/model/tools/permissions hints for Codex task sessions
+Agent profiles: optional reusable Codex task profiles keyed in `agentProfiles`
+Task binding: optional `agentProfileRef` on each Codex task step
+Required skills: optional `requiredSkills` on a profile; use `allowDegradedProfiles: true` only when degraded launch is acceptable
+Subagent: optional compatibility-only role/model/tools/permissions hints for Codex task sessions
 Verification rubrics: must/should checks
 Repair policy: whether failed verification should retry, ask the user, or fail
 Stop policy: when the loop should stop
 Project binding: optional Codex project id, label, and path
 ```
+
+Prefer a compact contract shape like:
+
+```json
+{
+  "agentProfiles": {
+    "researcher": {
+      "id": "researcher",
+      "label": "Researcher",
+      "role": "Collect and verify source evidence",
+      "requiredSkills": [{ "id": "openai-docs", "source": "system" }],
+      "allowedTools": ["rg", "sed"]
+    }
+  },
+  "body": {
+    "steps": [
+      {
+        "id": "scan",
+        "kind": "task",
+        "runtime": "codex",
+        "label": "Scan",
+        "prompt": "Collect source evidence.",
+        "agentProfileRef": "researcher"
+      }
+    ]
+  }
+}
+```
+
+Generated per-loop guidance lives at `runtime/dittosloop-for-codex-loop.md`. It is a run-specific runtime guide, not an installed skill.
 
 The final response after creating a formal loop should state the selected workflow style, the task names and responsibilities, the verifier rubrics, and the repair/stop policy.

@@ -36,6 +36,8 @@ Read this when exact MCP tool purpose, required fields, or call caveats matter.
 - Use `create_loop_contract` for every new loop.
 - Use `list_loops` before reusing an existing loop.
 - Use `start_codex_session` to create the visible run, attempt, Codex session request, workflow context, and bounded memory excerpt.
+- When `agentProfiles` are present, `start_codex_session` records the effective profile snapshot and runs best-effort local preflight only; it does not provide native Codex skill enforcement.
+- Required profile skills from `requiredSkills` with `missing` or `unknown` status block launch unless `allowDegradedProfiles: true` is passed.
 - Use `execute_workflow_attempt` with the returned `runId` and `attemptId` so run, attempt, workflow context, task runs, and result writeback stay on one path.
 - Use `record_session_result` with `workflowContextId`, `attemptId`, `taskRunId` or `sessionId` or `stepId`, and an `idempotencyKey` to write back exact Codex task results.
 - When multiple locators are provided, they must identify the same task run.
@@ -44,3 +46,4 @@ Read this when exact MCP tool purpose, required fields, or call caveats matter.
 - Set `repair: true` on `record_verification` or call `mark_run_repairing` when failed verification needs repair work.
 - Use `complete_run` only after verification is recorded or the blocker is explicit.
 - Use `get_preview_url` and open that URL in Codex's in-app browser when the user wants the visual loop view.
+- The generated per-loop guide path is `runtime/dittosloop-for-codex-loop.md`; treat it as runtime output, not an installed skill.

@@ -54,3 +54,24 @@ test("loop skill references preserve memory, execution, and writeback rules", as
   assert.match(toolReference, /idempotencyKey/);
   assert.match(toolReference, /multiple locators.*same task run|多个定位.*同一个 task run/i);
 });
+
+test("loop skill docs describe profile-based codex workflows and the generated runtime guide", async () => {
+  const skill = await readFile(skillPath, "utf8");
+  const chooseWorkflow = await readSkillFile("references/choose-workflow.md");
+  const createLoop = await readSkillFile("references/create-loop.md");
+  const executeLoop = await readSkillFile("references/execute-loop.md");
+  const toolReference = await readSkillFile("references/tool-reference.md");
+
+  assert.match(chooseWorkflow, /task\(runtime: codex\)/);
+  assert.match(createLoop, /agentProfiles/);
+  assert.match(createLoop, /agentProfileRef/);
+  assert.match(createLoop, /requiredSkills/);
+  assert.match(createLoop, /allowDegradedProfiles/);
+  assert.match(createLoop, /runtime\/dittosloop-for-codex-loop\.md/);
+  assert.match(createLoop, /compatibility/);
+  assert.doesNotMatch(createLoop, /skill\/dittosloop-for-codex-loop\.md/);
+  assert.match(executeLoop, /requiredSkills/);
+  assert.match(executeLoop, /allowDegradedProfiles/);
+  assert.match(toolReference, /requiredSkills/);
+  assert.match(skill, /create_loop_contract/);
+});
