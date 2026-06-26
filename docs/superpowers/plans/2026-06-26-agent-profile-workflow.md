@@ -123,7 +123,7 @@
 
 ## Task 2: Expose profile fields through MCP schemas
 
-- [ ] Task status
+- [x] Task status
 
   Files:
 
