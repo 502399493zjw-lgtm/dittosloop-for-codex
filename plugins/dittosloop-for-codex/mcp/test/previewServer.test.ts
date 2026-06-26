@@ -972,7 +972,7 @@ test("creates a host-mediated new loop codex session request", async () => {
   });
   expect(launch.prompt).toContain("create_loop_contract");
   expect(launch.prompt).toContain("workflow steps");
-  expect(launch.prompt).toContain("verifier rubrics");
+  expect(launch.prompt).toContain("criteria、validators、decision");
   expect(launch.prompt).toContain("task(runtime: \"codex\") / phase / parallel");
   expect(launch.prompt).not.toContain("agent / sequence / parallel");
 });
@@ -1385,6 +1385,183 @@ test("serves formal engine event sections without invented verification records"
       items: [expect.objectContaining({ kind: "run", label: "Waiting for user input", status: "waiting_for_human" })]
     })
   ]);
+});
+
+test("serves verification v2 validator lifecycle events in the timeline", async () => {
+  const service = await createService();
+  const contract = await service.createLoopContract({
+    title: "V2 preview",
+    goal: "Render validator events",
+    body: { steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }] },
+    verification: {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "quality", label: "Quality", description: "Result meets the quality bar.", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "quality-review",
+          type: "rubric_agent",
+          label: "Quality review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must"
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    }
+  });
+  const { run } = await service.startCodexSessionRun(contract.id, { goal: "Manual formal run" });
+  const events = [
+    {
+      type: "validator_started",
+      runId: run.id,
+      sequence: 1,
+      createdAt: "2026-06-23T00:01:00.000Z",
+      attemptId: "attempt_1",
+      validatorId: "quality-review",
+      validatorType: "rubric_agent"
+    },
+    {
+      type: "validator_done",
+      runId: run.id,
+      sequence: 2,
+      createdAt: "2026-06-23T00:02:00.000Z",
+      attemptId: "attempt_1",
+      result: {
+        id: "quality-review",
+        type: "rubric_agent",
+        label: "Quality review",
+        status: "passed",
+        criteriaIds: ["quality"],
+        score: 1,
+        evidence: "All quality criteria passed."
+      }
+    },
+    {
+      type: "verification_decided",
+      runId: run.id,
+      sequence: 3,
+      createdAt: "2026-06-23T00:03:00.000Z",
+      attemptId: "attempt_1",
+      decision: {
+        status: "passed",
+        summary: "Verification passed",
+        failedValidatorIds: [],
+        needsHumanValidatorIds: [],
+        failedCriterionIds: [],
+        uncoveredMustCriterionIds: [],
+        warnings: []
+      }
+    }
+  ];
+  for (const event of events) {
+    await service.appendEvent(run.id, { message: event.type, data: { engineEvent: event } });
+  }
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/${run.id}`);
+  const detail = await response.json();
+  const section = detail.timeline.find((candidate: { id: string }) => candidate.id === "verification");
+
+  expect(response.status).toBe(200);
+  expect(section.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ label: "Validator quality-review started", status: "started" }),
+    expect.objectContaining({ label: "Quality review", status: "passed", message: "All quality criteria passed." }),
+    expect.objectContaining({ label: "Verification passed", status: "passed" })
+  ]));
+});
+
+test("serves persisted verification v2 results as fallback timeline evidence", async () => {
+  const service = await createService();
+  const contract = await service.createLoopContract({
+    title: "V2 persisted preview",
+    goal: "Render persisted validator evidence",
+    body: { steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }] },
+    verification: {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "quality", label: "Quality", description: "Result meets the quality bar.", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "quality-review",
+          type: "rubric_agent",
+          label: "Quality review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must"
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    }
+  });
+  const { run } = await service.startCodexSessionRun(contract.id, { goal: "Manual formal run" });
+  await (service as any).options.store.updateState((state: any) => ({
+    ...state,
+    verificationResults: [
+      ...state.verificationResults,
+      {
+        id: "verification_v2_1",
+        version: 2,
+        runId: run.id,
+        attemptId: "attempt_1",
+        status: "passed",
+        summary: "Verification passed.",
+        checks: [{ rubricId: "quality", status: "passed", evidence: "Quality covered." }],
+        validatorResults: [
+          {
+            id: "quality-review",
+            type: "rubric_agent",
+            label: "Quality review",
+            status: "passed",
+            criteriaIds: ["quality"],
+            score: 1,
+            evidence: "All quality criteria passed."
+          }
+        ],
+        decision: {
+          status: "passed",
+          summary: "Verification passed",
+          failedValidatorIds: [],
+          needsHumanValidatorIds: [],
+          failedCriterionIds: [],
+          uncoveredMustCriterionIds: [],
+          warnings: []
+        },
+        createdAt: "2026-06-23T00:03:00.000Z"
+      }
+    ]
+  }));
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/${run.id}`);
+  const detail = await response.json();
+  const section = detail.timeline.find((candidate: { id: string }) => candidate.id === "verification");
+
+  expect(response.status).toBe(200);
+  expect(section.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ label: "Quality review", status: "passed", message: "All quality criteria passed." }),
+    expect.objectContaining({ label: "Verification passed", status: "passed" })
+  ]));
 });
 
 test("starts a codex session run from the preview api", async () => {

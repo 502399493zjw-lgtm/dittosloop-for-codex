@@ -523,17 +523,71 @@ test("renders loop directory files from stored loop state", async () => {
       ]
     },
     verification: {
+      version: 2,
       mode: "after_workflow",
-      rubrics: [{ id: "daily-report", label: "中文日报", requirement: "输出中文日报。", severity: "must" }]
+      criteria: [
+        { id: "daily-report", label: "中文日报", description: "输出中文日报。", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "quality-review",
+          type: "rubric_agent",
+          label: "Quality review",
+          criteriaIds: ["daily-report"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must"
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
     }
   });
   const { run } = await service.startCodexSessionRun(formal.id, { goal: "生成今天的中文日报" });
   await service.commitMemory(formal.id, { runId: run.id, summary: "保留昨天的来源筛选规则。" });
-  await service.recordVerification(run.id, {
-    status: "passed",
-    summary: "日报通过验证。",
-    checks: [{ name: "中文日报", status: "passed", output: "包含来源" }]
-  });
+  await (service as any).options.store.updateState((state: any) => ({
+    ...state,
+    verificationResults: [
+      ...state.verificationResults,
+      {
+        id: "verification_v2_1",
+        version: 2,
+        runId: run.id,
+        attemptId: "attempt_1",
+        status: "passed",
+        summary: "Verification passed.",
+        checks: [{ rubricId: "daily-report", status: "passed", evidence: "包含来源" }],
+        validatorResults: [
+          {
+            id: "quality-review",
+            type: "rubric_agent",
+            label: "Quality review",
+            status: "passed",
+            criteriaIds: ["daily-report"],
+            score: 1,
+            maxScore: 1,
+            evidence: "包含来源",
+            output: { notes: "中文日报完整。" }
+          }
+        ],
+        decision: {
+          status: "passed",
+          summary: "Verification passed.",
+          failedValidatorIds: [],
+          needsHumanValidatorIds: [],
+          failedCriterionIds: [],
+          uncoveredMustCriterionIds: [],
+          warnings: []
+        },
+        createdAt: fixedTime
+      }
+    ]
+  }));
   const dataDir = (service as any).options.store.dataDir as string;
   const loopDir = join(dataDir, "loops", formal.id);
   await mkdir(join(loopDir, "skill"), { recursive: true });
@@ -546,11 +600,12 @@ test("renders loop directory files from stored loop state", async () => {
   expect(files.map((file) => file.path)).toEqual([
     "memory.md",
     "workflow.json",
-    "rubrics.md",
+    "verification.md",
     "status.json",
     "contract.json",
     "skill/dittosloop-for-codex-loop.md"
   ]);
+  expect(files.map((file) => file.path)).not.toContain("rubrics.md");
   expect(files.every((file) => file.size === Buffer.byteLength(file.content, "utf8"))).toBe(true);
   expect(files.find((file) => file.path === "flow.js")).toBeUndefined();
   expect(files.find((file) => file.path === "agents.md")).toBeUndefined();
@@ -560,16 +615,62 @@ test("renders loop directory files from stored loop state", async () => {
   expect(files.find((file) => file.path === "skill/dittosloop-for-codex-loop.md")?.content).toContain("dittosloop-for-codex:loop");
   expect(files.find((file) => file.path === "status.json")?.content).toContain("\"latestRun\"");
   expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
-  expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("包含来源");
+  const verificationFile = files.find((file) => file.path === "verification.md")?.content ?? "";
+  expect(verificationFile).toContain("## Criteria");
+  expect(verificationFile).toContain("## Validators");
+  expect(verificationFile).toContain("## Decision");
+  expect(verificationFile).toContain("包含来源");
+  const statusJson = JSON.parse(files.find((file) => file.path === "status.json")?.content ?? "{}");
+  expect(statusJson.latestVerification).toMatchObject({
+    version: 2,
+    status: "passed",
+    decision: { status: "passed" },
+    validators: [
+      expect.objectContaining({
+        id: "quality-review",
+        status: "passed",
+        score: 1,
+        maxScore: 1,
+        evidence: "包含来源"
+      })
+    ]
+  });
 
   await expect(readFile(join(loopDir, "memory.md"), "utf8")).resolves.toContain("保留昨天的来源筛选规则。");
   await expect(readFile(join(loopDir, "workflow.json"), "utf8")).resolves.toContain("AI 开发工具日报");
+  await expect(readFile(join(loopDir, "verification.md"), "utf8")).resolves.toContain("## Criteria");
   await expect(readFile(join(loopDir, "skill", "dittosloop-for-codex-loop.md"), "utf8")).resolves.toContain(
     "dittosloop-for-codex:loop"
   );
   await expect(readFile(join(loopDir, "flow.js"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(join(loopDir, "session.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(join(loopDir, "skill", "old.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("renders legacy workspace verification state without v2 fields", async () => {
+  const service = await createService();
+  const formal = await service.createLoopContract({
+    title: "Legacy verifier",
+    goal: "Keep old state readable",
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources.", severity: "must" }]
+    }
+  });
+  const { run } = await service.startCodexSessionRun(formal.id, { goal: "Legacy run" });
+  await service.recordVerification(run.id, {
+    status: "failed",
+    summary: "Missing source",
+    checks: [{ name: "Source", status: "failed", output: "No official source" }]
+  });
+
+  const files = await service.listLoopFiles(formal.id);
+
+  expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("No official source");
+  expect(() => JSON.parse(files.find((file) => file.path === "status.json")?.content ?? "{}")).not.toThrow();
 });
 
 test("projects canonical status for failed loop history", async () => {
