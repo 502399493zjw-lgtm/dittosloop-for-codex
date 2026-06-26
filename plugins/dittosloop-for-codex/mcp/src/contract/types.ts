@@ -70,19 +70,41 @@ export interface VerificationCriterion {
   severity: "must" | "should";
 }
 
+export type CommandValidatorCwd =
+  | "project"
+  | "contract"
+  | { relativeToProject: string };
+
 export interface VerificationCommandValidator {
   id: string;
   type: "command";
   label: string;
   command: string;
   args?: string[];
-  cwd?: string;
+  cwd?: CommandValidatorCwd;
   timeoutMs?: number;
   criteriaIds?: string[];
   severity: "must" | "should";
   parse: {
     kind: "none";
   };
+}
+
+export type ScoreSource =
+  | { type: "workflow_result"; path: string }
+  | { type: "artifact"; artifactId: string; path: string }
+  | { type: "validator_output"; validatorId: string; path: string };
+
+export interface ScoreValidator {
+  id: string;
+  type: "score";
+  label: string;
+  metric: string;
+  source: ScoreSource;
+  operator: ">=" | ">" | "<=" | "<" | "==" | "!=";
+  threshold: number;
+  criteriaIds?: string[];
+  severity: "must" | "should";
 }
 
 export interface VerificationRubricAgentValidator {
@@ -101,6 +123,7 @@ export interface VerificationRubricAgentValidator {
 
 export type VerificationValidator =
   | VerificationCommandValidator
+  | ScoreValidator
   | VerificationRubricAgentValidator;
 
 export interface VerificationPolicyV2 {
