@@ -111,6 +111,18 @@ async function startFormalRun(
   return { loop, run };
 }
 
+async function removeVerificationInputKindMarker(service: LoopService, loopId: string) {
+  await (service as any).options.store.updateState((state) => ({
+    ...state,
+    formalContracts: state.formalContracts.map((contract) => {
+      if (contract.id !== loopId) return contract;
+
+      const { __dittosLoopVerificationInputKind, ...verification } = contract.verification as any;
+      return { ...contract, verification };
+    })
+  }));
+}
+
 async function seedLegacyLoop(
   service: LoopService,
   input: {
@@ -2245,6 +2257,36 @@ test("v2 worker session result cannot complete a run before validator results ex
   expect(detail.workflowContexts[0].verification).toMatchObject({
     status: "waiting_for_validator",
     pendingValidatorIds: ["quality-review"],
+    validatorResults: []
+  });
+});
+
+test("unmarked legacy-migrated contracts keep legacy completion behavior", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+  await removeVerificationInputKindMarker(service, formal.id);
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "run-worker",
+    status: "passed",
+    summary: "Worker says done",
+    result: "legacy candidate"
+  });
+
+  expect(run.status).toBe("completed");
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.verificationResults).toHaveLength(1);
+  expect(detail.verificationResults[0]).toMatchObject({
+    status: "passed",
+    summary: "Worker says done"
+  });
+  expect(detail.verificationResults[0]).not.toHaveProperty("version");
+  expect(detail.workflowContexts[0].verification).toMatchObject({
+    status: "not_started",
+    pendingValidatorIds: [],
     validatorResults: []
   });
 });

@@ -7,7 +7,8 @@ DONE_WITH_CONCERNS pending the existing Task 6 workspaceFiles type cleanup.
 ## Commit
 
 - `f9d0d68 feat: persist verification v2 results`
-- Follow-up: `fix: harden verification v2 service state`
+- `7b08ce1 fix: harden verification v2 service state`
+- Second follow-up: `fix: preserve unmarked legacy verification contracts`
 
 ## Files Changed
 
@@ -21,6 +22,9 @@ DONE_WITH_CONCERNS pending the existing Task 6 workspaceFiles type cleanup.
 - The idempotency replay path remains allowed for already-recorded validator writebacks.
 - Legacy compatibility now uses a service compile-time verification input marker instead of shape matching. Contracts created from legacy input keep legacy behavior after compile-time migration, while explicit v2 policies keep async v2 behavior even if they have the default migrated legacy shape.
 - Added regression coverage for validator writeback before worker completion and explicit v2 legacy-like rubric-agent policies.
+- Unmarked historical v2 contracts now retain a legacy compatibility fallback only when they match the default legacy migration shape.
+- Marked explicit v2 contracts still use async v2 verification even when their policy shape matches the default legacy migration output.
+- Added regression coverage for persisted legacy-migrated contracts that predate the marker.
 
 ## State Machine Semantics
 
@@ -35,12 +39,13 @@ DONE_WITH_CONCERNS pending the existing Task 6 workspaceFiles type cleanup.
 - Failed v2 decisions fail the workflow/run unless repair attempts remain.
 - Repairable failed v2 decisions move the run and workflow context to repairing. The repair reason includes failed validator ids and failed criterion ids.
 - Legacy rubric contracts migrated by `compileContract()` keep legacy service behavior through a service-side compatibility projection, so old verifier rendering and old workflow tests continue to pass.
+- Historical persisted contracts without the service marker still use legacy behavior when their v2 policy matches the default legacy migration shape.
 
 ## Tests
 
 - PASS: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts e2eWorkflow.test.ts`
   - 2 test files passed.
-  - 73 tests passed.
+  - 74 tests passed.
 - CONCERN: `npm --prefix plugins/dittosloop-for-codex/mcp run typecheck`
   - Fails only in `src/workspaceFiles.ts`.
   - Remaining errors are the known follow-up area from the brief:

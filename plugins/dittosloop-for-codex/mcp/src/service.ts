@@ -2916,19 +2916,23 @@ function pendingRubricAgentValidatorIds(
 }
 
 function usesVerificationV2Runtime(policy: FormalLoopContract["verification"]): boolean {
-  return policy.version === 2 && !isLegacyCompiledVerificationPolicy(policy);
+  return policy.version === 2 && !isLegacyCompatibleVerificationPolicy(policy);
 }
 
 function usesExternalV2ValidatorWriteback(policy: FormalLoopContract["verification"]): boolean {
   return usesVerificationV2Runtime(policy) && policy.validators.some((validator) => validator.type === "rubric_agent");
 }
 
-function isLegacyCompiledVerificationPolicy(policy: FormalLoopContract["verification"]): boolean {
-  return (policy as Partial<VerificationPolicyWithInputKind>)[VERIFICATION_INPUT_KIND_FIELD] === "legacy";
+function isLegacyCompatibleVerificationPolicy(policy: FormalLoopContract["verification"]): boolean {
+  const marker = verificationInputKindMarker(policy);
+  if (marker === "legacy") return true;
+  if (marker === "v2") return false;
+
+  return hasDefaultLegacyMigrationShape(policy);
 }
 
 function legacyCompatibleRunnerContract(contract: FormalLoopContract): FormalLoopContract {
-  if (!isLegacyCompiledVerificationPolicy(contract.verification)) return contract;
+  if (!isLegacyCompatibleVerificationPolicy(contract.verification)) return contract;
 
   return {
     ...contract,
@@ -2953,6 +2957,31 @@ function legacyVerificationFromMigratedV2(policy: VerificationPolicyV2): LegacyV
       severity: criterion.severity
     }))
   };
+}
+
+function hasDefaultLegacyMigrationShape(policy: FormalLoopContract["verification"]): boolean {
+  if (policy.version !== 2) return false;
+  if (policy.criteria.length === 0 && policy.validators.length === 0) return true;
+  if (policy.validators.length !== 1) return false;
+
+  const validator = policy.validators[0];
+  return (
+    validator.type === "rubric_agent" &&
+    validator.id === "rubric-agent" &&
+    validator.label === "Rubric review" &&
+    validator.scoreScale.min === 0 &&
+    validator.scoreScale.max === 1 &&
+    validator.passScore === 1 &&
+    validator.evidenceRequired === true &&
+    validator.severity === "must" &&
+    sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id))
+  );
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
 }
 
 function hasOpenWorkflowSessions(context: WorkflowContext): boolean {
@@ -3124,10 +3153,16 @@ function compileContractWithVerificationInputKind(
 function verificationInputKind(
   verification: FormalLoopContractInput["verification"] | FormalLoopContract["verification"]
 ): VerificationInputKind {
-  const existing = (verification as Partial<VerificationPolicyWithInputKind>)[VERIFICATION_INPUT_KIND_FIELD];
+  const existing = verificationInputKindMarker(verification);
   if (existing === "legacy" || existing === "v2") return existing;
 
   return "version" in verification && verification.version === 2 ? "v2" : "legacy";
+}
+
+function verificationInputKindMarker(
+  verification: FormalLoopContractInput["verification"] | FormalLoopContract["verification"]
+): VerificationInputKind | undefined {
+  return (verification as Partial<VerificationPolicyWithInputKind>)[VERIFICATION_INPUT_KIND_FIELD];
 }
 
 function withVerificationInputKind(
@@ -4514,7 +4549,7 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
 function workflowLaunchVerification(
   verification: FormalLoopContract["verification"]
 ): FormalLoopContract["verification"] | LegacyVerificationPolicy {
-  return isLegacyCompiledVerificationPolicy(verification) ? legacyVerificationFromMigratedV2(verification) : verification;
+  return isLegacyCompatibleVerificationPolicy(verification) ? legacyVerificationFromMigratedV2(verification) : verification;
 }
 
 function flattenWorkflowLaunchSteps(
