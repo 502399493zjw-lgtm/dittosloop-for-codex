@@ -51,6 +51,27 @@ async function createServiceWithSequentialIds() {
   });
 }
 
+async function createServiceWithSkillAvailability(
+  checker: (requirement: { id: string }, profile: { id: string; label: string; stepId: string }) => Promise<{
+    status: "passed" | "missing" | "unknown";
+    message: string;
+    locations?: string[];
+  }>
+) {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+
+  return new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => `${prefix}_1`,
+    previewBaseUrl: "http://127.0.0.1:47888",
+    skillAvailabilityProvider: {
+      check: checker
+    }
+  } as any);
+}
+
 async function createFormalLoop(
   service: LoopService,
   input: {
@@ -3614,6 +3635,245 @@ test("records a default subagent when older session runs have none", async () =>
       threadUrl: undefined
     }
   ]);
+});
+
+test("profile preflight allows starting when required skills are available", async () => {
+  const service = await createServiceWithSkillAvailability(async (requirement) => ({
+    status: "passed",
+    message: `${requirement.id} is installed`,
+    locations: ["/mock/.codex/skills/research-pack/SKILL.md"]
+  }));
+  const loop = await service.createLoopContract({
+    title: "Profile preflight available",
+    goal: "Run with an available required skill",
+    agentProfiles: {
+      researcher: {
+        id: "researcher",
+        label: "Researcher",
+        role: "Research specialist",
+        requiredSkills: [{ id: "research-pack", source: "user" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "research",
+          kind: "agent",
+          label: "Research",
+          prompt: "Gather the relevant updates.",
+          agentProfileRef: "researcher"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Research completes", severity: "must" }]
+    }
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run research" });
+
+  expect(launch.run.codexSession?.profilePreflight).toEqual({
+    status: "passed",
+    checks: [
+      {
+        profileId: "researcher",
+        profileLabel: "Researcher",
+        stepId: "research",
+        required: true,
+        skill: { id: "research-pack", source: "user" },
+        status: "passed",
+        message: "research-pack is installed",
+        locations: ["/mock/.codex/skills/research-pack/SKILL.md"]
+      }
+    ],
+    warnings: [],
+    blockers: [],
+    allowDegradedProfiles: undefined
+  });
+});
+
+test("profile preflight blocks required missing skills by default", async () => {
+  const service = await createServiceWithSkillAvailability(async (requirement) => ({
+    status: "missing",
+    message: `${requirement.id} is not installed`
+  }));
+  const loop = await service.createLoopContract({
+    title: "Profile preflight blocked",
+    goal: "Refuse missing required skills",
+    agentProfiles: {
+      reviewer: {
+        id: "reviewer",
+        label: "Reviewer",
+        role: "Code reviewer",
+        requiredSkills: [{ id: "code-review-pack", source: "user" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "review",
+          kind: "agent",
+          label: "Review",
+          prompt: "Review the diff.",
+          agentProfileRef: "reviewer"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Review completes", severity: "must" }]
+    }
+  });
+
+  await expect(service.startCodexSessionRun(loop.id, { goal: "Run review" })).rejects.toThrow(
+    /Reviewer|review|code-review-pack/
+  );
+  await expect(service.getSnapshot()).resolves.toMatchObject({
+    runs: []
+  });
+});
+
+test("profile preflight blocks required unknown skills by default", async () => {
+  const service = await createServiceWithSkillAvailability(async (requirement) => ({
+    status: "unknown",
+    message: `${requirement.id} could not be verified`
+  }));
+  const loop = await service.createLoopContract({
+    title: "Profile preflight unknown",
+    goal: "Refuse unverifiable required skills",
+    agentProfiles: {
+      reporter: {
+        id: "reporter",
+        label: "Reporter",
+        role: "Daily reporter",
+        requiredSkills: [{ id: "daily-briefing", source: "project" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "report",
+          kind: "agent",
+          label: "Report",
+          prompt: "Write the report.",
+          agentProfileRef: "reporter"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Report completes", severity: "must" }]
+    }
+  });
+
+  await expect(service.startCodexSessionRun(loop.id, { goal: "Run report" })).rejects.toThrow(
+    /Reporter|report|daily-briefing/
+  );
+});
+
+test("profile preflight stores advisory missing and unknown skills as warnings", async () => {
+  const service = await createServiceWithSkillAvailability(async (requirement) => {
+    if (requirement.id === "optional-browser") {
+      return {
+        status: "missing",
+        message: "optional-browser is not installed"
+      };
+    }
+
+    return {
+      status: "unknown",
+      message: `${requirement.id} could not be verified`
+    };
+  });
+  const loop = await service.createLoopContract({
+    title: "Profile preflight warnings",
+    goal: "Record advisory warnings",
+    agentProfiles: {
+      analyst: {
+        id: "analyst",
+        label: "Analyst",
+        role: "Analyst",
+        advisorySkills: [
+          { id: "optional-browser", source: "user" },
+          { id: "project-memory", source: "project" }
+        ]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "analyze",
+          kind: "agent",
+          label: "Analyze",
+          prompt: "Analyze the project state.",
+          agentProfileRef: "analyst"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Analysis completes", severity: "must" }]
+    }
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run analysis" });
+
+  expect(launch.run.codexSession?.profilePreflight).toMatchObject({
+    status: "warning",
+    warnings: [
+      expect.stringMatching(/optional-browser/),
+      expect.stringMatching(/project-memory/)
+    ],
+    blockers: []
+  });
+});
+
+test("profile preflight allows degraded start when required skills cannot be confirmed", async () => {
+  const service = await createServiceWithSkillAvailability(async (requirement) => ({
+    status: "unknown",
+    message: `${requirement.id} could not be verified`
+  }));
+  const loop = await service.createLoopContract({
+    title: "Profile preflight degraded",
+    goal: "Allow degraded profile execution",
+    agentProfiles: {
+      worker: {
+        id: "worker",
+        label: "Worker",
+        role: "Worker",
+        requiredSkills: [{ id: "repo-memory", source: "project" }],
+        advisorySkills: [{ id: "nice-to-have", source: "user" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "work",
+          kind: "agent",
+          label: "Work",
+          prompt: "Do the task.",
+          agentProfileRef: "worker"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Work completes", severity: "must" }]
+    }
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "Run degraded work",
+    allowDegradedProfiles: true
+  });
+
+  expect(launch.run.codexSession?.profilePreflight).toMatchObject({
+    status: "degraded",
+    allowDegradedProfiles: true,
+    warnings: [expect.stringMatching(/nice-to-have/)],
+    blockers: [expect.stringMatching(/repo-memory/)]
+  });
 });
 
 test("does not mark a Codex session ready without an openable thread URL", async () => {

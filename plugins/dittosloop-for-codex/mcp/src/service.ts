@@ -1,5 +1,6 @@
 import { createId, type IdPrefix } from "./id.js";
 import { compileContract } from "./contract/compileContract.js";
+import { runSkillProfilePreflight, type SkillAvailabilityProvider } from "./codex/skillPreflight.js";
 import type { CodexSessionBridge, CodexSessionRef } from "./codex/sessionBridge.js";
 import type { FormalLoopContract, FormalLoopContractInput } from "./contract/types.js";
 import { validateContract } from "./contract/validateContract.js";
@@ -41,6 +42,7 @@ export interface LoopServiceOptions {
   previewBaseUrl?: string;
   codexProjects?: CodexProjectRef[];
   sessionBridge?: CodexSessionBridge;
+  skillAvailabilityProvider?: SkillAvailabilityProvider;
 }
 
 export const DEFAULT_LOOP_MEMORY_READ_LIMIT = 80;
@@ -683,6 +685,25 @@ export class LoopService {
 
   async startCodexSessionRun(loopId: string, input: StartCodexSessionRunInput = {}): Promise<CodexSessionLaunch> {
     const timestamp = this.now();
+    const initialState = await this.options.store.readState();
+    const initialLoop = requireLoop(initialState, loopId);
+    const initialLoopState = initialState.loopStates.find((candidate) => candidate.loopId === loopId);
+    if (initialLoopState?.paused || initialLoop.status === "paused") {
+      throw new Error(`Loop is paused: ${loopId}`);
+    }
+    if (initialLoopState?.running) {
+      throw new Error(`Loop is already running: ${loopId}`);
+    }
+    const formalContract = initialState.formalContracts.find((contract) => contract.id === loopId);
+    const profilePreflight = formalContract
+      ? await runSkillProfilePreflight(formalContract, {
+          provider: this.options.skillAvailabilityProvider,
+          allowDegradedProfiles: input.allowDegradedProfiles
+        })
+      : undefined;
+    if (profilePreflight?.status === "blocked") {
+      throw new Error(profilePreflight.blockers[0] ?? `Agent profile skill preflight blocked run ${loopId}`);
+    }
     let launch: CodexSessionLaunch | undefined;
 
     await this.options.store.updateState((state) => {
@@ -721,6 +742,7 @@ export class LoopService {
           status: "requested",
           ...project,
           subagents: codexSessionSubagentsForContract(formalContract, prompt),
+          ...(profilePreflight ? { profilePreflight } : {}),
           prompt
         },
         createdAt: timestamp,

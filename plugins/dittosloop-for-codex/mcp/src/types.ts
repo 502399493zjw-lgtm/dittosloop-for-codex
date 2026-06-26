@@ -1,4 +1,4 @@
-import type { CodexSubagentSpec, FormalLoopContract } from "./contract/types.js";
+import type { CodexSubagentSpec, FormalLoopContract, SkillRequirement } from "./contract/types.js";
 
 export type LoopStatus = "active" | "paused" | "archived";
 export type TriggerMode = "manual";
@@ -8,6 +8,7 @@ export type LoopRunRecordStatus = "queued" | "running" | "waiting_for_human" | "
 export type AttemptStatus = "running" | "completed" | "failed";
 export type VerificationStatus = "passed" | "failed" | "skipped";
 export type HumanRequestStatus = "open" | "resolved";
+export type SkillPreflightStatus = "passed" | "missing" | "unknown";
 export type EventKind =
   | "note"
   | "run_created"
@@ -73,12 +74,32 @@ export interface LoopRun {
       prompt?: string;
       subagent?: CodexSubagentSpec;
     }>;
+    profilePreflight?: SkillPreflightReport;
     prompt: string;
   };
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
   pausedReason?: LoopPausedReason;
+}
+
+export interface SkillPreflightCheck {
+  profileId: string;
+  profileLabel: string;
+  stepId?: string;
+  skill: SkillRequirement;
+  required: boolean;
+  status: SkillPreflightStatus;
+  message: string;
+  locations?: string[];
+}
+
+export interface SkillPreflightReport {
+  status: "passed" | "warning" | "blocked" | "degraded";
+  checks: SkillPreflightCheck[];
+  warnings: string[];
+  blockers: string[];
+  allowDegradedProfiles?: boolean;
 }
 
 export interface LoopOperationalState {
