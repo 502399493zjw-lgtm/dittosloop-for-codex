@@ -1,5 +1,6 @@
 import type { FormalLoopContract } from "./contract/types.js";
-import type { LoopContract, LoopRun, LoopState, LoopWorkspaceFile, VerificationResult } from "./types.js";
+import type { LoopContract, LoopRun, LoopState, LoopWorkspaceFile, VerificationResultRecord } from "./types.js";
+import type { ValidatorResult, VerificationResultV2 } from "./runner/verificationV2.js";
 
 export function loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorkspaceFile[] {
   const loop = state.loops.find((candidate) => candidate.id === loopId);
@@ -39,6 +40,7 @@ function sortLoopWorkspaceFiles(files: LoopWorkspaceFile[]): LoopWorkspaceFile[]
   const rootOrder = new Map([
     ["memory.md", 0],
     ["workflow.json", 1],
+    ["verification.md", 2],
     ["rubrics.md", 2],
     ["status.json", 3],
     ["runs.json", 4],
@@ -46,6 +48,10 @@ function sortLoopWorkspaceFiles(files: LoopWorkspaceFile[]): LoopWorkspaceFile[]
   ]);
 
   return [...files].sort((left, right) => {
+    const leftIsSkill = left.path.startsWith("skill/");
+    const rightIsSkill = right.path.startsWith("skill/");
+    if (leftIsSkill !== rightIsSkill) return leftIsSkill ? 1 : -1;
+
     const leftRank = rootOrder.get(left.path) ?? 100;
     const rightRank = rootOrder.get(right.path) ?? 100;
     if (leftRank !== rightRank) return leftRank - rightRank;
@@ -82,6 +88,19 @@ function formalLoopDirectoryFiles(input: {
   const latestVerification = latestRun ? latestVerificationForRun(input.state, latestRun.id) : undefined;
   const rubricStatuses = rubricStatusByLabel(latestVerification);
   const taskRuns = latestRun?.codexSession?.subagents ?? [];
+  const verificationFileEntry = isVerificationPolicyV2(input.contract.verification)
+    ? withSize({
+        path: "verification.md",
+        kind: "verification",
+        language: "markdown",
+        content: verificationFile({ contract: input.contract, latestVerification })
+      })
+    : withSize({
+        path: "rubrics.md",
+        kind: "rubrics",
+        language: "markdown",
+        content: legacyRubricsFile({ contract: input.contract, rubricStatuses })
+      });
 
   return [
     withSize({
@@ -108,34 +127,12 @@ function formalLoopDirectoryFiles(input: {
       )}\n`
     }),
     withSize({
-      path: "runtime/dittosloop-for-codex-loop.md",
-      kind: "runtime",
+      path: "skill/dittosloop-for-codex-loop.md",
+      kind: "skill",
       language: "markdown",
-      content: loopRuntimeGuideFile(input.contract)
+      content: loopSkillFile(input.contract)
     }),
-    withSize({
-      path: "rubrics.md",
-      kind: "rubrics",
-      language: "markdown",
-      content: [
-        `# ${input.contract.title} verifier`,
-        "",
-        `Mode: \`${input.contract.verification?.mode ?? "after_workflow"}\``,
-        "",
-        ...(input.contract.verification?.rubrics ?? []).flatMap((rubric) =>
-          [
-            `## ${rubric.label}`,
-            "",
-            `- id: \`${rubric.id}\``,
-            `- severity: \`${rubric.severity}\``,
-            `- status: ${statusText(rubricStatuses.get(rubric.label) ?? "not-run")}`,
-            `- requirement: ${rubric.requirement}`,
-            rubricStatuses.get(`${rubric.label}:output`) ? `- evidence: ${rubricStatuses.get(`${rubric.label}:output`)}` : "",
-            ""
-          ].filter(Boolean)
-        )
-      ].join("\n")
-    }),
+    verificationFileEntry,
     withSize({
       path: "status.json",
       kind: "status",
@@ -179,13 +176,7 @@ function formalLoopDirectoryFiles(input: {
               }
             : null,
           latestVerification: latestVerification
-            ? {
-                id: latestVerification.id,
-                status: latestVerification.status,
-                summary: latestVerification.summary,
-                checks: latestVerification.checks ?? [],
-                createdAt: latestVerification.createdAt
-              }
+            ? verificationSummaryForStatus(latestVerification)
             : null,
           runs: input.loopRuns.map((run) => ({
             id: run.id,
@@ -203,20 +194,20 @@ function formalLoopDirectoryFiles(input: {
   ];
 }
 
-function loopRuntimeGuideFile(contract: FormalLoopContract): string {
+function loopSkillFile(contract: FormalLoopContract): string {
   return [
-    "# DittosLoop For Codex runtime guide",
+    "# dittosloop-for-codex:loop",
     "",
     `Loop: ${contract.title}`,
     "",
-    "这个文件描述 DittosLoop For Codex runtime 如何为这个 loop 管理正式 contract、启动可见 Codex worker session、执行 workflow、写回结果，并按 rubrics 做最终验证。",
-    "它不是安装到 Codex 里的原生 skill，只是本地 runtime 快照，帮助你检查当前 loop 会如何运行。",
+    "这个 loop 使用 DittosLoop For Codex 的 loop skill 来创建正式 contract、启动可见 Codex worker session、执行 workflow、写回结果，并按 criteria、validators、decision 做最终验证。",
     "",
     "## Runtime role",
     "",
     "- Codex worker session 本身承担 orchestrator。",
     "- workflow body 只描述真正被调度的 specialist/editor/checker agents。",
-    "- verifier/rubrics 属于外部最终验证，不作为普通 agent 文件夹层级展示。",
+    "- agentProfiles/agentProfileRef 描述可复用的 Codex task guidance 和 skill expectations。",
+    "- verification criteria/validators/decision 属于外部最终验证，不作为普通 agent 文件夹层级展示。",
     ""
   ].join("\n");
 }
@@ -246,19 +237,188 @@ function contractFile(input: {
   )}\n`;
 }
 
-function latestVerificationForRun(state: LoopState, runId: string): VerificationResult | undefined {
+function legacyRubricsFile(input: {
+  contract: FormalLoopContract;
+  rubricStatuses: Map<string, string>;
+}): string {
+  const verification = input.contract.verification as unknown as {
+    mode?: string;
+    rubrics?: Array<{ id: string; label: string; requirement: string; severity: string }>;
+  };
+
+  return [
+    `# ${input.contract.title} verifier`,
+    "",
+    `Mode: \`${verification.mode ?? "after_workflow"}\``,
+    "",
+    ...(verification.rubrics ?? []).flatMap((rubric) =>
+      [
+        `## ${rubric.label}`,
+        "",
+        `- id: \`${rubric.id}\``,
+        `- severity: \`${rubric.severity}\``,
+        `- status: ${statusText(input.rubricStatuses.get(rubric.label) ?? "not-run")}`,
+        `- requirement: ${rubric.requirement}`,
+        input.rubricStatuses.get(`${rubric.label}:output`) ? `- evidence: ${input.rubricStatuses.get(`${rubric.label}:output`)}` : "",
+        ""
+      ].filter(Boolean)
+    )
+  ].join("\n");
+}
+
+function verificationFile(input: {
+  contract: FormalLoopContract;
+  latestVerification?: VerificationResultRecord;
+}): string {
+  const verification = input.contract.verification;
+  if (!isVerificationPolicyV2(verification)) {
+    return legacyRubricsFile({ contract: input.contract, rubricStatuses: rubricStatusByLabel(input.latestVerification) });
+  }
+
+  const v2Result = isVerificationResultV2(input.latestVerification) ? input.latestVerification : undefined;
+  const validatorResults = v2Result?.validatorResults ?? [];
+
+  return [
+    `# ${input.contract.title} verification`,
+    "",
+    `Mode: \`${verification.mode}\``,
+    "",
+    "## Criteria",
+    "| id | severity | status | covering validators |",
+    "| --- | --- | --- | --- |",
+    ...verification.criteria.map((criterion) => {
+      const coveringValidatorIds = verification.validators
+        .filter((validator) => validator.criteriaIds?.includes(criterion.id))
+        .map((validator) => validator.id);
+      return [
+        `| \`${criterion.id}\``,
+        criterion.severity,
+        statusText(criterionStatus(criterion.id, validatorResults)),
+        coveringValidatorIds.map((id) => `\`${id}\``).join(", ") || "none"
+      ].join(" | ") + " |";
+    }),
+    "",
+    "## Validators",
+    "| id | type | severity | status | score | evidence |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...verification.validators.map((validator) => {
+      const result = validatorResults.find((candidate) => validatorResultId(candidate) === validator.id);
+      return [
+        `| \`${validator.id}\``,
+        validator.type,
+        validator.severity,
+        statusText(result?.status ?? "not-run"),
+        validatorScoreText(result),
+        evidenceExcerpt(result?.evidence)
+      ].join(" | ") + " |";
+    }),
+    "",
+    "## Decision",
+    `- status: ${statusText(v2Result?.decision.status ?? v2Result?.status ?? "not-run")}`,
+    `- summary: ${v2Result?.decision.summary ?? v2Result?.summary ?? "No verification result yet."}`,
+    `- requireAllMustCriteriaCovered: ${verification.decision.requireAllMustCriteriaCovered}`,
+    `- failOnMustValidatorFailure: ${verification.decision.failOnMustValidatorFailure}`,
+    `- failOnShouldValidatorFailure: ${verification.decision.failOnShouldValidatorFailure}`,
+    `- requireEvidenceForAgentScores: ${verification.decision.requireEvidenceForAgentScores}`,
+    v2Result?.decision.repairInstructions ? `- repairInstructions: ${v2Result.decision.repairInstructions}` : "",
+    v2Result?.decision.humanQuestion ? `- humanQuestion: ${v2Result.decision.humanQuestion}` : "",
+    ""
+  ].filter(Boolean).join("\n");
+}
+
+function latestVerificationForRun(state: LoopState, runId: string): VerificationResultRecord | undefined {
   return [...state.verificationResults].reverse().find((result) => result.runId === runId);
 }
 
-function rubricStatusByLabel(verification: VerificationResult | undefined): Map<string, string> {
+function rubricStatusByLabel(verification: VerificationResultRecord | undefined): Map<string, string> {
   const statuses = new Map<string, string>();
+  if (isVerificationResultV2(verification)) {
+    for (const check of verification.checks ?? []) {
+      statuses.set(check.rubricId, check.status);
+      if (check.evidence) {
+        statuses.set(`${check.rubricId}:output`, check.evidence);
+      }
+    }
+    return statuses;
+  }
+
   for (const check of verification?.checks ?? []) {
-    statuses.set(check.name, check.status);
-    if (check.output) {
-      statuses.set(`${check.name}:output`, check.output);
+    const name = check.name ?? check.rubricId;
+    if (!name) continue;
+    statuses.set(name, check.status);
+    const evidence = check.output ?? check.evidence;
+    if (evidence) {
+      statuses.set(`${name}:output`, evidence);
     }
   }
   return statuses;
+}
+
+function verificationSummaryForStatus(verification: VerificationResultRecord): Record<string, unknown> {
+  if (!isVerificationResultV2(verification)) {
+    return {
+      id: verification.id,
+      status: verification.status,
+      summary: verification.summary,
+      checks: verification.checks ?? [],
+      createdAt: verification.createdAt
+    };
+  }
+
+  return {
+    id: verification.id,
+    version: 2,
+    status: verification.status,
+    summary: verification.summary,
+    decision: verification.decision,
+    validators: verification.validatorResults.map((result) => ({
+      id: validatorResultId(result),
+      type: result.type,
+      label: result.label,
+      status: result.status,
+      score: "score" in result ? result.score : undefined,
+      maxScore: "maxScore" in result ? result.maxScore : undefined,
+      threshold: "threshold" in result ? result.threshold : undefined,
+      exitCode: "exitCode" in result ? result.exitCode : undefined,
+      evidence: evidenceExcerpt(result.evidence),
+      summary: result.summary
+    })),
+    checks: verification.checks ?? [],
+    createdAt: verification.createdAt
+  };
+}
+
+function isVerificationPolicyV2(value: unknown): value is FormalLoopContract["verification"] {
+  return Boolean(value && typeof value === "object" && (value as { version?: unknown }).version === 2);
+}
+
+function isVerificationResultV2(value: VerificationResultRecord | undefined): value is VerificationResultV2 {
+  return Boolean(value && typeof value === "object" && (value as { version?: unknown }).version === 2);
+}
+
+function validatorResultId(result: ValidatorResult | (ValidatorResult & { id?: string })): string {
+  const resultWithId = result as ValidatorResult & { id?: string };
+  return result.validatorId ?? resultWithId.id ?? result.label;
+}
+
+function criterionStatus(criterionId: string, results: ValidatorResult[]): string {
+  const covering = results.filter((result) => result.criteriaIds.includes(criterionId));
+  if (covering.some((result) => result.status === "failed")) return "failed";
+  if (covering.some((result) => result.status === "needs_human")) return "needs_human";
+  if (covering.some((result) => result.status === "passed")) return "passed";
+  return "not-run";
+}
+
+function validatorScoreText(result: ValidatorResult | undefined): string {
+  if (!result || !("score" in result) || typeof result.score !== "number") return "";
+  const maxScore = "maxScore" in result && typeof result.maxScore === "number" ? `/${result.maxScore}` : "";
+  return `${result.score}${maxScore}`;
+}
+
+function evidenceExcerpt(value: string | undefined): string {
+  if (!value) return "";
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
 }
 
 function statusText(status: string): string {

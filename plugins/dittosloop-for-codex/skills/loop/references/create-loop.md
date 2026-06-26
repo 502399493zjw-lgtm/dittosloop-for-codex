@@ -28,7 +28,7 @@ Agent profiles: optional reusable Codex task profiles keyed in `agentProfiles`
 Task binding: optional `agentProfileRef` on each Codex task step
 Required skills: optional `requiredSkills` on a profile; use `allowDegradedProfiles: true` only when degraded launch is acceptable
 Subagent: optional compatibility-only role/model/tools/permissions hints for Codex task sessions
-Verification rubrics: must/should checks
+Verification: criteria, validators, decision policy
 Repair policy: whether failed verification should retry, ask the user, or fail
 Stop policy: when the loop should stop
 Project binding: optional Codex project id, label, and path
@@ -58,10 +58,40 @@ Prefer a compact contract shape like:
         "agentProfileRef": "researcher"
       }
     ]
+  },
+  "verification": {
+    "version": 2,
+    "mode": "after_workflow",
+    "criteria": [
+      {
+        "id": "source-quality",
+        "label": "Source quality",
+        "description": "The result cites reliable source evidence.",
+        "severity": "must"
+      }
+    ],
+    "validators": [
+      {
+        "id": "quality-review",
+        "type": "rubric_agent",
+        "label": "Quality review",
+        "criteriaIds": ["source-quality"],
+        "scoreScale": { "min": 0, "max": 1 },
+        "passScore": 1,
+        "evidenceRequired": true,
+        "severity": "must"
+      }
+    ],
+    "decision": {
+      "requireAllMustCriteriaCovered": true,
+      "failOnMustValidatorFailure": true,
+      "failOnShouldValidatorFailure": false,
+      "requireEvidenceForAgentScores": true
+    }
   }
 }
 ```
 
-Generated per-loop guidance lives at `runtime/dittosloop-for-codex-loop.md`. It is a run-specific runtime guide, not an installed skill.
+Generated per-loop guidance lives at `skill/dittosloop-for-codex-loop.md`. It is a run-specific local skill guide, not a new installed marketplace skill.
 
-The final response after creating a formal loop should state the selected workflow style, the task names and responsibilities, the verifier rubrics, and the repair/stop policy.
+The final response after creating a formal loop should state the selected workflow style, the task names and responsibilities, the verification criteria, validators, decision policy, and repair/stop policy.

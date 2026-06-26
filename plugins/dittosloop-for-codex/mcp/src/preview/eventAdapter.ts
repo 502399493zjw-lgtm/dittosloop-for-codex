@@ -1,5 +1,6 @@
 import type { EngineEvent } from "../engine/types.js";
-import type { RunDetail, RunStatus, VerificationResult } from "../types.js";
+import type { RunDetail, RunStatus, VerificationResultRecord } from "../types.js";
+import type { ValidatorResult, VerificationResultV2 } from "../runner/verificationV2.js";
 
 export interface PreviewRunDetail extends RunDetail {
   engineEvents: EngineEvent[];
@@ -53,7 +54,7 @@ export function buildTimeline(detail: RunDetail, engineEvents: EngineEvent[] = e
   const verificationEvents = engineEvents
     .map(verificationEventToTimelineItem)
     .filter((item): item is PreviewTimelineItem => Boolean(item));
-  const verification = verificationEvents.length > 0 ? verificationEvents : detail.verificationResults.map(verificationToTimelineItem);
+  const verification = verificationEvents.length > 0 ? verificationEvents : detail.verificationResults.flatMap(verificationToTimelineItems);
   if (verification.length > 0) {
     sections.push({ id: "verification", title: "验证", items: verification });
   }
@@ -129,7 +130,19 @@ function verificationEventToTimelineItem(event: EngineEvent): PreviewTimelineIte
     return baseItem(event, "verification", "开始验证", "started");
   }
   if (event.type === "verification_done") {
+    if ("version" in event.decision && event.decision.version === 2) {
+      return baseItem(event, "verification", event.decision.decision.summary, event.decision.status, validatorResultsMessage(event.decision.validatorResults));
+    }
     return baseItem(event, "verification", event.decision.summary, event.decision.status, verificationChecksMessage(event.decision.checks));
+  }
+  if (event.type === "validator_started") {
+    return baseItem(event, "verification", `Validator ${event.validatorId} started`, "started");
+  }
+  if (event.type === "validator_done") {
+    return baseItem(event, "verification", event.result.label, event.result.status, event.result.evidence);
+  }
+  if (event.type === "verification_decided") {
+    return baseItem(event, "verification", `Verification ${event.decision.status}`, event.decision.status, event.decision.repairInstructions);
   }
 
   return undefined;
@@ -195,17 +208,36 @@ function humanizeCheckName(value: string): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function verificationToTimelineItem(result: VerificationResult): PreviewTimelineItem {
-  return {
+function verificationToTimelineItems(result: VerificationResultRecord): PreviewTimelineItem[] {
+  if (isVerificationResultV2(result)) {
+    return [
+      ...result.validatorResults.map((validatorResult) => ({
+        kind: "verification" as const,
+        label: validatorResult.label,
+        status: validatorResult.status,
+        createdAt: result.createdAt,
+        message: validatorResult.evidence
+      })),
+      {
+        kind: "verification" as const,
+        label: result.decision.summary,
+        status: result.decision.status,
+        createdAt: result.createdAt,
+        message: validatorResultsMessage(result.validatorResults)
+      }
+    ];
+  }
+
+  return [{
     kind: "verification",
     label: result.summary,
     status: result.status,
     createdAt: result.createdAt,
-    message: result.checks.map((check) => `${check.name}: ${check.status}`).join("\n") || undefined
-  };
+    message: result.checks.map((check) => `${check.name ?? check.rubricId ?? "check"}: ${check.status}`).join("\n") || undefined
+  }];
 }
 
-function repairItems(runStatus: RunStatus, results: VerificationResult[]): PreviewTimelineItem[] {
+function repairItems(runStatus: RunStatus, results: VerificationResultRecord[]): PreviewTimelineItem[] {
   const failed = results.find((result) => result.status === "failed");
   if (runStatus !== "repairing" && !failed) return [];
 
@@ -223,4 +255,15 @@ function isEngineEvent(value: unknown): value is EngineEvent {
   if (!value || typeof value !== "object") return false;
   const event = value as Partial<EngineEvent>;
   return typeof event.type === "string" && typeof event.runId === "string" && typeof event.sequence === "number";
+}
+
+function validatorResultsMessage(results: ValidatorResult[]): string | undefined {
+  if (!results.length) return undefined;
+  return results
+    .map((result) => `${result.label}: ${result.status}${result.evidence ? ` - ${result.evidence}` : ""}`)
+    .join("\n");
+}
+
+function isVerificationResultV2(value: VerificationResultRecord): value is VerificationResultV2 {
+  return "version" in value && value.version === 2;
 }

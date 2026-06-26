@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
 
 import type { FormalLoopContract } from "../src/contract/types.js";
+import { compileContract } from "../src/contract/compileContract.js";
 import { LoopRunner } from "../src/runner/loopRunner.js";
 
-const contract: FormalLoopContract = {
+const legacyContract = {
   id: "loop_1",
   title: "AI monitor",
   goal: "Track AI tool updates",
@@ -20,7 +21,9 @@ const contract: FormalLoopContract = {
   status: "active",
   createdAt: "2026-06-24T00:00:00.000Z",
   updatedAt: "2026-06-24T00:00:00.000Z"
-};
+} as unknown as FormalLoopContract;
+
+const contract: FormalLoopContract = compileContract(legacyContract);
 
 describe("LoopRunner", () => {
   test("executes a formal contract body and returns verifier outcome", async () => {
@@ -39,7 +42,7 @@ describe("LoopRunner", () => {
       now: () => "2026-06-24T00:00:00.000Z"
     });
 
-    const result = await runner.run({ contract, runId: "run_1", emit: (event) => events.push(event.type) });
+    const result = await runner.run({ contract: legacyContract, runId: "run_1", emit: (event) => events.push(event.type) });
 
     expect(result).toMatchObject({
       status: "completed",
@@ -76,7 +79,7 @@ describe("LoopRunner", () => {
 
     const emittedAttemptIds: string[] = [];
     const firstAttempt = await runner.run({
-      contract,
+      contract: legacyContract,
       runId: "run_1",
       attemptId: "persisted_attempt_17",
       attemptNumber: 1,
@@ -87,7 +90,7 @@ describe("LoopRunner", () => {
         }
       }
     });
-    const secondAttempt = await runner.run({ contract, runId: "run_2", attemptNumber: 2 });
+    const secondAttempt = await runner.run({ contract: legacyContract, runId: "run_2", attemptNumber: 2 });
 
     expect(firstAttempt.shouldRepair).toBe(true);
     expect(firstAttempt.status).toBe("repairing");
@@ -119,7 +122,7 @@ describe("LoopRunner", () => {
     });
 
     const result = await runner.run({
-      contract,
+      contract: legacyContract,
       runId: "run_human",
       emit: (event) => events.push({
         type: event.type,
@@ -140,6 +143,107 @@ describe("LoopRunner", () => {
       question: undefined,
       status: "waiting_for_human"
     });
+  });
+
+  test("does not auto-pass verification v2 contracts when no validator passes", async () => {
+    const v2Contract = {
+      ...contract,
+      verification: {
+        version: 2,
+        mode: "after_workflow",
+        criteria: [
+          { id: "quality", label: "Quality", description: "Output meets quality.", severity: "must" }
+        ],
+        validators: [
+          {
+            id: "quality-review",
+            type: "rubric_agent",
+            label: "Quality review",
+            criteriaIds: ["quality"],
+            scoreScale: { min: 0, max: 1 },
+            passScore: 1,
+            evidenceRequired: true,
+            severity: "must"
+          }
+        ],
+        decision: {
+          requireAllMustCriteriaCovered: true,
+          failOnMustValidatorFailure: true,
+          failOnShouldValidatorFailure: false,
+          requireEvidenceForAgentScores: true
+        }
+      }
+    } satisfies FormalLoopContract;
+
+    const runner = new LoopRunner({
+      executor: { async run() { return { text: "candidate" }; } },
+      now: () => "2026-06-26T00:00:00.000Z"
+    });
+
+    const result = await runner.run({ contract: v2Contract, runId: "run_1", attemptNumber: 1 });
+
+    expect(result.status).toBe("waiting_for_human");
+    expect(result.shouldRepair).toBe(false);
+    expect(result.verification).toMatchObject({
+      version: 2,
+      status: "needs_human",
+      decision: { needsHumanValidatorIds: ["quality-review"] }
+    });
+  });
+
+  test("emits verification v2 validator and decision events", async () => {
+    const events: string[] = [];
+    const v2Contract = {
+      ...contract,
+      verification: {
+        version: 2,
+        mode: "after_workflow",
+        criteria: [
+          { id: "tests", label: "Tests", description: "Tests pass.", severity: "must" }
+        ],
+        validators: [
+          {
+            id: "unit-tests",
+            type: "command",
+            label: "Unit tests",
+            command: "npm",
+            args: ["test"],
+            criteriaIds: ["tests"],
+            severity: "must",
+            parse: { kind: "none" }
+          }
+        ],
+        decision: {
+          requireAllMustCriteriaCovered: true,
+          failOnMustValidatorFailure: true,
+          failOnShouldValidatorFailure: false,
+          requireEvidenceForAgentScores: true
+        }
+      }
+    } satisfies FormalLoopContract;
+    const runner = new LoopRunner({
+      executor: { async run() { return { text: "candidate" }; } },
+      commandExecutor: async () => ({ exitCode: 0, stdout: "ok", stderr: "" }),
+      now: () => "2026-06-26T00:00:00.000Z"
+    });
+
+    const result = await runner.run({
+      contract: v2Contract,
+      runId: "run_1",
+      attemptId: "attempt_1",
+      emit: (event) => events.push(event.type)
+    });
+
+    expect(result.status).toBe("completed");
+    expect(events).toEqual(expect.arrayContaining([
+      "verification_started",
+      "validator_started",
+      "validator_done",
+      "verification_decided",
+      "verification_done"
+    ]));
+    expect(events.indexOf("validator_started")).toBeLessThan(events.indexOf("validator_done"));
+    expect(events.indexOf("validator_done")).toBeLessThan(events.indexOf("verification_decided"));
   });
 
   test("passes workflow launch context to agent executors", async () => {

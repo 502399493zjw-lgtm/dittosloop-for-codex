@@ -1,9 +1,58 @@
 import { evalScriptAst, type ScriptAst } from "../script/evalScript.js";
-import type { FormalLoopContract, FormalLoopContractInput } from "./types.js";
+import type {
+  FormalLoopContract,
+  FormalLoopContractInput,
+  LegacyVerificationPolicy,
+  VerificationPolicyInput,
+  VerificationPolicyV2
+} from "./types.js";
+
+const defaultDecision = {
+  requireAllMustCriteriaCovered: true,
+  failOnMustValidatorFailure: true,
+  failOnShouldValidatorFailure: false,
+  requireEvidenceForAgentScores: true
+} satisfies VerificationPolicyV2["decision"];
+
+export function migrateVerificationToV2(input: VerificationPolicyInput): VerificationPolicyV2 {
+  if ("version" in input && input.version === 2) {
+    return input;
+  }
+
+  const legacy = input as LegacyVerificationPolicy;
+  const criteria = legacy.rubrics.map((rubric) => ({
+    id: rubric.id,
+    label: rubric.label,
+    description: rubric.requirement,
+    severity: rubric.severity
+  }));
+
+  return {
+    version: 2,
+    mode: legacy.mode === "after_each_agent" ? "after_each_step" : "after_workflow",
+    criteria,
+    validators: criteria.length
+      ? [
+          {
+            id: "rubric-agent",
+            type: "rubric_agent",
+            label: "Rubric review",
+            criteriaIds: criteria.map((criterion) => criterion.id),
+            scoreScale: { min: 0, max: 1 },
+            passScore: 1,
+            evidenceRequired: true,
+            severity: "must"
+          }
+        ]
+      : [],
+    decision: defaultDecision
+  };
+}
 
 export function compileContract(input: FormalLoopContractInput, now: string = new Date().toISOString()): FormalLoopContract {
   return {
     ...input,
+    verification: migrateVerificationToV2(input.verification),
     trigger: input.trigger ?? { mode: "manual" },
     repairPolicy: input.repairPolicy ?? { maxAttempts: 1, strategy: "repair_then_retry" },
     stopPolicy: input.stopPolicy ?? { rule: "user cancels" },

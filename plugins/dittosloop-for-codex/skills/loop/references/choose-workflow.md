@@ -2,7 +2,7 @@
 
 Read this when creating a formal loop or revising the shape of an existing workflow.
 
-Workflow style describes how the loop produces the candidate result. Verification is a separate outer layer: every formal loop should still define rubrics, repair policy, and stop policy.
+Workflow style describes how the loop produces the candidate result. Verification is a separate outer layer: every formal loop should still define criteria, validators, decision policy, repair policy, and stop policy.
 
 Choose one style before building `body.steps`, then make the chosen style visible in the step labels and final summary.
 

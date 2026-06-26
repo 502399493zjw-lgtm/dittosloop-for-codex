@@ -1,4 +1,9 @@
 import type { CodexSubagentSpec, EffectiveAgentProfile, FormalLoopContract, SkillRequirement } from "./contract/types.js";
+import type {
+  AggregatedVerificationDecision,
+  ValidatorResult,
+  VerificationResultV2
+} from "./runner/verificationV2.js";
 
 export type LoopStatus = "active" | "paused" | "archived";
 export type TriggerMode = "manual";
@@ -6,7 +11,7 @@ export type RunStatus = "running" | "waiting_for_human" | "repairing" | "complet
 export type LoopPausedReason = "failures" | "budget" | "escalation";
 export type LoopRunRecordStatus = "queued" | "running" | "waiting_for_human" | "repairing" | "completed" | "failed" | "canceled";
 export type AttemptStatus = "running" | "completed" | "failed";
-export type VerificationStatus = "passed" | "failed" | "skipped";
+export type VerificationStatus = "passed" | "failed" | "needs_human" | "skipped";
 export type HumanRequestStatus = "open" | "resolved";
 export type SkillPreflightStatus = "passed" | "missing" | "unknown";
 export type EventKind =
@@ -142,12 +147,16 @@ export interface VerificationResult {
   status: VerificationStatus;
   summary: string;
   checks: Array<{
-    name: string;
+    name?: string;
+    rubricId?: string;
     status: VerificationStatus;
     output?: string;
+    evidence?: string;
   }>;
   createdAt: string;
 }
+
+export type VerificationResultRecord = VerificationResult | VerificationResultV2;
 
 export interface HumanRequest {
   id: string;
@@ -200,7 +209,7 @@ export interface ArtifactRef {
 
 export interface LoopWorkspaceFile {
   path: string;
-  kind: "memory" | "contract" | "workflow" | "runtime" | "skill" | "rubrics" | "status" | "runs";
+  kind: "memory" | "contract" | "workflow" | "runtime" | "skill" | "rubrics" | "verification" | "status" | "runs";
   language: "javascript" | "markdown" | "json";
   content: string;
   size: number;
@@ -270,6 +279,16 @@ export interface WorkflowTaskRun {
   completedAt?: string;
 }
 
+export interface WorkflowVerificationState {
+  status: "not_started" | "running" | "waiting_for_validator" | "completed" | "failed";
+  validatorResults: ValidatorResult[];
+  pendingValidatorIds: string[];
+  idempotencyKeys: string[];
+  decision?: AggregatedVerificationDecision;
+  resultId?: string;
+  updatedAt: string;
+}
+
 export interface WorkflowContext {
   id: string;
   runId: string;
@@ -283,6 +302,7 @@ export interface WorkflowContext {
   vars: Record<string, unknown>;
   steps: Record<string, WorkflowStepState>;
   taskRuns: WorkflowTaskRun[];
+  verification?: WorkflowVerificationState;
   pendingSessionIds: string[];
   idempotencyKeys: string[];
   createdAt: string;
@@ -300,7 +320,7 @@ export interface LoopState {
   runs: LoopRun[];
   attempts: RunAttempt[];
   events: RunEvent[];
-  verificationResults: VerificationResult[];
+  verificationResults: VerificationResultRecord[];
   humanRequests: HumanRequest[];
   memoryCommits: MemoryCommit[];
   loopMemories: LoopMemory[];
@@ -312,7 +332,7 @@ export interface RunDetail {
   loop: LoopContract;
   attempts: RunAttempt[];
   events: RunEvent[];
-  verificationResults: VerificationResult[];
+  verificationResults: VerificationResultRecord[];
   humanRequests: HumanRequest[];
   memoryCommits: MemoryCommit[];
   artifacts: ArtifactRef[];

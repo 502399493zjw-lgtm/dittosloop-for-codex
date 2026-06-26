@@ -3228,8 +3228,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path) {
-      let input = path;
+    function removeDotSegments(path3) {
+      let input = path3;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3481,8 +3481,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path && path !== "/" ? path : void 0;
+        const [path3, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path3 && path3 !== "/" ? path3 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -7091,10 +7091,10 @@ function assignProp(target, prop, value) {
     configurable: true
   });
 }
-function getElementAtPath(obj, path) {
-  if (!path)
+function getElementAtPath(obj, path3) {
+  if (!path3)
     return obj;
-  return path.reduce((acc, key) => acc?.[key], obj);
+  return path3.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7414,11 +7414,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path, issues) {
+function prefixIssues(path3, issues) {
   return issues.map((iss) => {
     var _a;
     (_a = iss).path ?? (_a.path = []);
-    iss.path.unshift(path);
+    iss.path.unshift(path3);
     return iss;
   });
 }
@@ -13492,8 +13492,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path, errorMaps, issueData } = params;
-  const fullPath = [...path, ...issueData.path || []];
+  const { data, path: path3, errorMaps, issueData } = params;
+  const fullPath = [...path3, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -13609,11 +13609,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path, key) {
+  constructor(parent, value, path3, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path;
+    this._path = path3;
     this._key = key;
   }
   get path() {
@@ -21269,9 +21269,46 @@ function expectNumber(value, label) {
 }
 
 // src/contract/compileContract.ts
+var defaultDecision = {
+  requireAllMustCriteriaCovered: true,
+  failOnMustValidatorFailure: true,
+  failOnShouldValidatorFailure: false,
+  requireEvidenceForAgentScores: true
+};
+function migrateVerificationToV2(input) {
+  if ("version" in input && input.version === 2) {
+    return input;
+  }
+  const legacy = input;
+  const criteria = legacy.rubrics.map((rubric) => ({
+    id: rubric.id,
+    label: rubric.label,
+    description: rubric.requirement,
+    severity: rubric.severity
+  }));
+  return {
+    version: 2,
+    mode: legacy.mode === "after_each_agent" ? "after_each_step" : "after_workflow",
+    criteria,
+    validators: criteria.length ? [
+      {
+        id: "rubric-agent",
+        type: "rubric_agent",
+        label: "Rubric review",
+        criteriaIds: criteria.map((criterion) => criterion.id),
+        scoreScale: { min: 0, max: 1 },
+        passScore: 1,
+        evidenceRequired: true,
+        severity: "must"
+      }
+    ] : [],
+    decision: defaultDecision
+  };
+}
 function compileContract(input, now = (/* @__PURE__ */ new Date()).toISOString()) {
   return {
     ...input,
+    verification: migrateVerificationToV2(input.verification),
     trigger: input.trigger ?? { mode: "manual" },
     repairPolicy: input.repairPolicy ?? { maxAttempts: 1, strategy: "repair_then_retry" },
     stopPolicy: input.stopPolicy ?? { rule: "user cancels" },
@@ -21544,9 +21581,9 @@ async function findPluginSkillLocations(codexHome, pluginId, skillId) {
   }
   return [...matches];
 }
-async function pathExists(path) {
+async function pathExists(path3) {
   try {
-    await access(path);
+    await access(path3);
     return true;
   } catch {
     return false;
@@ -21563,21 +21600,21 @@ function validateOutputAgainstSchema(result, schema) {
   }
   checkValue(parsed, schema, "result");
 }
-function checkValue(value, schema, path) {
+function checkValue(value, schema, path3) {
   const expectedType = schema.type;
   if (typeof expectedType === "string" && !matchesType(value, expectedType)) {
-    throw new Error(`outputSchema validation failed: ${path} must be of type ${expectedType}`);
+    throw new Error(`outputSchema validation failed: ${path3} must be of type ${expectedType}`);
   }
   if (expectedType === "object" || expectedType === void 0 && isPlainObject3(value)) {
     const objectValue = isPlainObject3(value) ? value : void 0;
     const required3 = schema.required;
     if (Array.isArray(required3)) {
       if (!objectValue) {
-        throw new Error(`outputSchema validation failed: ${path} must be an object`);
+        throw new Error(`outputSchema validation failed: ${path3} must be an object`);
       }
       for (const key of required3) {
         if (typeof key === "string" && !(key in objectValue)) {
-          throw new Error(`outputSchema validation failed: ${path} is missing required property "${key}"`);
+          throw new Error(`outputSchema validation failed: ${path3} is missing required property "${key}"`);
         }
       }
     }
@@ -21585,7 +21622,7 @@ function checkValue(value, schema, path) {
     if (objectValue && isPlainObject3(properties)) {
       for (const [key, childSchema] of Object.entries(properties)) {
         if (key in objectValue && isPlainObject3(childSchema)) {
-          checkValue(objectValue[key], childSchema, `${path}.${key}`);
+          checkValue(objectValue[key], childSchema, `${path3}.${key}`);
         }
       }
     }
@@ -21616,6 +21653,8 @@ function isPlainObject3(value) {
 }
 
 // src/contract/validateContract.ts
+import path from "node:path";
+var scoreOperators = /* @__PURE__ */ new Set([">=", ">", "<=", "<", "==", "!="]);
 function validateContract(contract) {
   const errors = [];
   const stepIds = /* @__PURE__ */ new Set();
@@ -21630,21 +21669,7 @@ function validateContract(contract) {
       validateStep(contract, step, stepIds, errors);
     }
   }
-  if (contract.verification.mode !== "after_workflow" && contract.verification.mode !== "after_each_agent") {
-    errors.push("verification.mode must be after_workflow or after_each_agent");
-  }
-  if (!Array.isArray(contract.verification.rubrics)) {
-    errors.push("verification.rubrics must be an array");
-  } else {
-    for (const rubric of contract.verification.rubrics) {
-      required2(rubric.id, "verification rubric id", errors);
-      required2(rubric.label, "verification rubric label", errors);
-      required2(rubric.requirement, "verification rubric requirement", errors);
-      if (rubric.severity !== "must" && rubric.severity !== "should") {
-        errors.push(`verification rubric ${rubric.id || "<missing>"} severity must be must or should`);
-      }
-    }
-  }
+  validateVerificationV2(contract.verification, contract.projectBinding, errors);
   if (!Number.isInteger(contract.repairPolicy.maxAttempts) || contract.repairPolicy.maxAttempts < 0) {
     errors.push("repairPolicy.maxAttempts must be a non-negative integer");
   }
@@ -21803,6 +21828,176 @@ function validatePermissions(permissions, label, errors) {
   }
   if (permissions.network !== void 0 && permissions.network !== "enabled" && permissions.network !== "disabled") {
     errors.push(`${label}.network is invalid`);
+  }
+}
+function validateVerificationV2(verification, _projectBinding, errors) {
+  if (verification.version !== 2) {
+    errors.push("verification.version must be 2");
+  }
+  if (verification.mode !== "after_workflow" && verification.mode !== "after_each_step") {
+    errors.push("verification.mode must be after_workflow or after_each_step");
+  }
+  if (!Array.isArray(verification.criteria)) {
+    errors.push("verification.criteria must be an array");
+  }
+  const criterionIds = /* @__PURE__ */ new Set();
+  const coveredCriteria = /* @__PURE__ */ new Set();
+  for (const criterion of verification.criteria ?? []) {
+    required2(criterion.id, "verification criterion id", errors);
+    required2(criterion.label, "verification criterion label", errors);
+    required2(criterion.description, "verification criterion description", errors);
+    if (criterion.severity !== "must" && criterion.severity !== "should") {
+      errors.push(`verification criterion ${criterion.id || "<missing>"} severity must be must or should`);
+    }
+    if (criterion.id) {
+      if (criterionIds.has(criterion.id)) {
+        errors.push(`criterion id must be unique: ${criterion.id}`);
+      }
+      criterionIds.add(criterion.id);
+    }
+  }
+  if (!Array.isArray(verification.validators) || verification.validators.length === 0) {
+    errors.push("verification.validators must contain at least one validator");
+    return;
+  }
+  const validatorIds = /* @__PURE__ */ new Set();
+  for (const validator of verification.validators) {
+    validateVerificationValidatorMetadata(validator, criterionIds, validatorIds, coveredCriteria, errors);
+  }
+  for (const validator of verification.validators) {
+    validateVerificationValidator(validator, validatorIds, errors);
+  }
+  if (verification.decision.requireAllMustCriteriaCovered) {
+    for (const criterion of verification.criteria ?? []) {
+      if (criterion.severity === "must" && !coveredCriteria.has(criterion.id)) {
+        errors.push(`must criterion is not covered by any validator: ${criterion.id}`);
+      }
+    }
+  }
+}
+function validateVerificationValidatorMetadata(validator, criterionIds, validatorIds, coveredCriteria, errors) {
+  required2(validator.id, "verification validator id", errors);
+  required2(validator.label, "verification validator label", errors);
+  if (validator.id) {
+    if (validatorIds.has(validator.id)) {
+      errors.push(`validator id must be unique: ${validator.id}`);
+    }
+    validatorIds.add(validator.id);
+  }
+  if (validator.severity !== "must" && validator.severity !== "should") {
+    errors.push(`verification validator ${validator.id || "<missing>"} severity must be must or should`);
+  }
+  for (const criterionId of validator.criteriaIds ?? []) {
+    if (!criterionIds.has(criterionId)) {
+      errors.push(`validator references missing criterion: ${criterionId}`);
+    } else {
+      coveredCriteria.add(criterionId);
+    }
+  }
+}
+function validateVerificationValidator(validator, validatorIds, errors) {
+  switch (validator.type) {
+    case "command":
+      validateCommandValidator(validator, errors);
+      return;
+    case "score":
+      validateScoreValidator(validator, validatorIds, errors);
+      return;
+    case "rubric_agent":
+      validateRubricAgentValidator(validator, errors);
+      return;
+    default:
+      errors.push("verification validator has invalid type");
+  }
+}
+function validateCommandValidator(validator, errors) {
+  if (!validator.command || validator.command.trim().length === 0) {
+    errors.push("command validator command is required");
+  }
+  if (validator.cwd === void 0) {
+    return;
+  }
+  if (typeof validator.cwd === "string") {
+    if (path.isAbsolute(validator.cwd)) {
+      errors.push("command validator cwd must not be absolute");
+    }
+    return;
+  }
+  const relativePath = validator.cwd.relativeToProject?.trim();
+  if (!relativePath) {
+    errors.push("command validator cwd relativeToProject is required");
+    return;
+  }
+  if (path.isAbsolute(relativePath)) {
+    errors.push("command validator cwd must not be absolute");
+    return;
+  }
+  const normalized = path.normalize(relativePath);
+  if (normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
+    errors.push("command validator cwd must stay within the project");
+  }
+}
+function validateScoreValidator(validator, validatorIds, errors) {
+  if (!validator.metric || validator.metric.trim().length === 0) {
+    errors.push("score validator metric is required");
+  }
+  if (!scoreOperators.has(validator.operator)) {
+    errors.push("score validator operator is invalid");
+  }
+  if (!Number.isFinite(validator.threshold)) {
+    errors.push("score validator threshold must be finite");
+  }
+  validateScoreSource(validator, validatorIds, errors);
+}
+function validateScoreSource(validator, validatorIds, errors) {
+  const source = validator.source;
+  if (!source || typeof source !== "object") {
+    errors.push("score validator source is invalid");
+    return;
+  }
+  if (!("type" in source)) {
+    errors.push("score validator source is invalid");
+    return;
+  }
+  switch (source.type) {
+    case "workflow_result":
+      if (!source.path || source.path.trim().length === 0) {
+        errors.push("score validator source workflow_result.path is required");
+      }
+      return;
+    case "artifact":
+      if (!source.artifactId || source.artifactId.trim().length === 0) {
+        errors.push("score validator source artifact.artifactId is required");
+      }
+      if (!source.path || source.path.trim().length === 0) {
+        errors.push("score validator source artifact.path is required");
+      }
+      return;
+    case "validator_output":
+      if (!source.validatorId || source.validatorId.trim().length === 0) {
+        errors.push("score validator source validator_output.validatorId is required");
+      } else if (!validatorIds.has(source.validatorId)) {
+        errors.push(`score validator source references missing validator: ${source.validatorId}`);
+      }
+      if (!source.path || source.path.trim().length === 0) {
+        errors.push("score validator source validator_output.path is required");
+      }
+      return;
+    default:
+      errors.push("score validator source is invalid");
+  }
+}
+function validateRubricAgentValidator(validator, errors) {
+  if (!Array.isArray(validator.criteriaIds) || validator.criteriaIds.length === 0) {
+    errors.push("rubric_agent validator criteriaIds must contain at least one criterion");
+  }
+  const scoreValues = [validator.scoreScale.min, validator.scoreScale.max, validator.passScore];
+  if (scoreValues.some((value) => !Number.isFinite(value))) {
+    errors.push("score validator threshold must be finite");
+    return;
+  }
+  if (validator.passScore < validator.scoreScale.min || validator.passScore > validator.scoreScale.max) {
+    errors.push("rubric_agent validator passScore must be inside scoreScale");
   }
 }
 function isRecord(value) {
@@ -21968,6 +22163,417 @@ function shouldRepair(decision, policy, attemptNumber) {
   return decision.status === "failed" && policy.strategy === "repair_then_retry" && attemptNumber < policy.maxAttempts;
 }
 
+// src/runner/verificationV2.ts
+import { spawn } from "node:child_process";
+import path2 from "node:path";
+var MAX_EVIDENCE_CHARS = 8e3;
+async function runVerificationV2(input) {
+  const validatorResults = [...input.priorValidatorResults ?? []];
+  for (const validator of input.policy.validators) {
+    if (validatorResults.some((result2) => result2.validatorId === validator.id)) {
+      continue;
+    }
+    input.emit?.({
+      type: "validator_started",
+      attemptId: input.attemptId,
+      validatorId: validator.id,
+      validatorType: validator.type,
+      label: validator.label
+    });
+    const result = await runDeterministicValidator(validator, input, validatorResults);
+    input.emit?.({ type: "validator_done", attemptId: input.attemptId, result });
+    validatorResults.push(result);
+  }
+  const decision = aggregateVerificationDecision(input.policy, validatorResults);
+  input.emit?.({ type: "verification_decided", attemptId: input.attemptId, decision });
+  return {
+    id: input.id,
+    version: 2,
+    runId: input.runId,
+    attemptId: input.attemptId,
+    status: decision.status,
+    summary: decisionSummary(decision),
+    checks: validatorResultsToDecisionChecks(validatorResults),
+    validatorResults,
+    decision,
+    repairInstructions: decision.repairInstructions,
+    humanQuestion: decision.humanQuestion,
+    createdAt: input.createdAt
+  };
+}
+function aggregateVerificationDecision(policy, validatorResults) {
+  const effectiveResults = validatorResults.map((result) => enforceRubricAgentPolicy(policy, result));
+  const failures = effectiveResults.filter((result) => result.status === "failed");
+  const mustFailures = failures.filter((result) => result.severity === "must");
+  const shouldFailures = failures.filter((result) => result.severity === "should");
+  const needsHuman = effectiveResults.filter((result) => result.status === "needs_human");
+  const uncoveredMustCriterionIds = findUncoveredMustCriterionIds(policy, effectiveResults);
+  const warnings = shouldFailures.map((result) => `${result.label} failed: ${result.summary}`);
+  if (needsHuman.length > 0) {
+    return {
+      status: "needs_human",
+      summary: "Verification needs human review.",
+      failedValidatorIds: failures.map((result) => result.validatorId),
+      needsHumanValidatorIds: needsHuman.map((result) => result.validatorId),
+      failedCriterionIds: unique(failures.flatMap((result) => result.criteriaIds)),
+      uncoveredMustCriterionIds,
+      warnings,
+      humanQuestion: `Review required for validators: ${needsHuman.map((result) => result.validatorId).join(", ")}`
+    };
+  }
+  if (policy.decision.failOnMustValidatorFailure && mustFailures.length > 0) {
+    return failedDecision("Must validator failed.", mustFailures, uncoveredMustCriterionIds, warnings);
+  }
+  if (policy.decision.failOnShouldValidatorFailure && shouldFailures.length > 0) {
+    return failedDecision("Should validator failed.", shouldFailures, uncoveredMustCriterionIds, warnings);
+  }
+  if (policy.decision.requireAllMustCriteriaCovered && uncoveredMustCriterionIds.length > 0) {
+    return {
+      status: "failed",
+      summary: "Must criteria were not covered by verification results.",
+      failedValidatorIds: [],
+      needsHumanValidatorIds: [],
+      failedCriterionIds: uncoveredMustCriterionIds,
+      uncoveredMustCriterionIds,
+      warnings,
+      repairInstructions: `Add verification coverage for must criteria: ${uncoveredMustCriterionIds.join(", ")}`
+    };
+  }
+  return {
+    status: "passed",
+    summary: warnings.length > 0 ? "Verification passed with warnings." : "Verification passed.",
+    failedValidatorIds: [],
+    needsHumanValidatorIds: [],
+    failedCriterionIds: [],
+    uncoveredMustCriterionIds,
+    warnings
+  };
+}
+function recordedRubricAgentResultToValidatorResult(validator, input) {
+  const hasRequiredEvidence = !validator.evidenceRequired || Boolean(input.evidence?.trim());
+  const hasScore = typeof input.score === "number" && Number.isFinite(input.score);
+  const status = rubricAgentStatusFromInput(validator, input.status, input.score, hasScore, hasRequiredEvidence);
+  return {
+    validatorId: validator.id,
+    type: "rubric_agent",
+    label: validator.label,
+    severity: validator.severity,
+    criteriaIds: validator.criteriaIds,
+    status,
+    summary: input.summary ?? rubricAgentSummary(validator, input.score, hasRequiredEvidence),
+    evidence: input.evidence,
+    score: input.score,
+    output: input.output
+  };
+}
+async function runDeterministicValidator(validator, input, validatorResults) {
+  switch (validator.type) {
+    case "command":
+      return runCommandValidator(validator, input);
+    case "score":
+      return runScoreValidator(validator, input, validatorResults);
+    case "rubric_agent":
+      return rubricAgentNeedsHumanResult(validator);
+  }
+}
+async function runCommandValidator(validator, input) {
+  const executor = input.commandExecutor ?? defaultCommandExecutor;
+  const args = validator.args ?? [];
+  const cwd = resolveCommandCwd(validator, input);
+  const execution = await executor({
+    command: validator.command,
+    args,
+    cwd,
+    timeoutMs: validator.timeoutMs
+  });
+  const stdout = truncateEvidence(execution.stdout);
+  const stderr = truncateEvidence(execution.stderr);
+  const error2 = execution.error ? truncateEvidence(execution.error) : void 0;
+  const passed = execution.exitCode === 0 && !execution.timedOut && !error2;
+  return {
+    validatorId: validator.id,
+    type: "command",
+    label: validator.label,
+    severity: validator.severity,
+    criteriaIds: validator.criteriaIds ?? [],
+    status: passed ? "passed" : "failed",
+    summary: passed ? `Command validator ${validator.id} passed.` : `Command validator ${validator.id} failed.`,
+    evidence: commandEvidence(stdout, stderr, error2),
+    command: validator.command,
+    args,
+    cwd,
+    exitCode: execution.exitCode,
+    stdout,
+    stderr,
+    timedOut: execution.timedOut
+  };
+}
+function runScoreValidator(validator, input, validatorResults) {
+  const sourceValue = readScoreSource(validator, input, validatorResults);
+  const base = {
+    validatorId: validator.id,
+    type: "score",
+    label: validator.label,
+    severity: validator.severity,
+    criteriaIds: validator.criteriaIds ?? [],
+    metric: validator.metric,
+    source: validator.source,
+    operator: validator.operator,
+    threshold: validator.threshold
+  };
+  if (sourceValue.status === "needs_human") {
+    return {
+      ...base,
+      status: "needs_human",
+      summary: sourceValue.summary,
+      evidence: sourceValue.summary
+    };
+  }
+  if (typeof sourceValue.value !== "number" || !Number.isFinite(sourceValue.value)) {
+    return {
+      ...base,
+      status: "failed",
+      summary: `Score source for ${validator.metric} did not resolve to a finite number.`,
+      evidence: `Resolved value: ${JSON.stringify(sourceValue.value)}`
+    };
+  }
+  const passed = compareScore(sourceValue.value, validator.operator, validator.threshold);
+  return {
+    ...base,
+    status: passed ? "passed" : "failed",
+    summary: passed ? `${validator.metric} satisfied ${validator.operator} ${validator.threshold}.` : `${validator.metric} did not satisfy ${validator.operator} ${validator.threshold}.`,
+    evidence: `${validator.metric}=${sourceValue.value}`,
+    score: sourceValue.value
+  };
+}
+function rubricAgentNeedsHumanResult(validator) {
+  return {
+    validatorId: validator.id,
+    type: "rubric_agent",
+    label: validator.label,
+    severity: validator.severity,
+    criteriaIds: validator.criteriaIds,
+    status: "needs_human",
+    summary: "Rubric agent validator requires an explicit recorded result."
+  };
+}
+function readScoreSource(validator, input, validatorResults) {
+  const source = validator.source;
+  switch (source.type) {
+    case "workflow_result":
+      return { status: "resolved", value: readPath(input.workflowResult, source.path) };
+    case "validator_output": {
+      const priorResult = validatorResults.find((result) => result.validatorId === source.validatorId);
+      return { status: "resolved", value: readPath(priorResult, source.path) };
+    }
+    case "artifact":
+      return {
+        status: "needs_human",
+        summary: `Artifact score source ${source.artifactId}:${source.path} requires an artifact loader.`
+      };
+  }
+}
+function compareScore(score, operator, threshold) {
+  switch (operator) {
+    case ">=":
+      return score >= threshold;
+    case ">":
+      return score > threshold;
+    case "<=":
+      return score <= threshold;
+    case "<":
+      return score < threshold;
+    case "==":
+      return score === threshold;
+    case "!=":
+      return score !== threshold;
+  }
+}
+function findUncoveredMustCriterionIds(policy, validatorResults) {
+  const coveredCriterionIds = /* @__PURE__ */ new Set();
+  for (const result of validatorResults) {
+    for (const criterionId of result.criteriaIds) {
+      coveredCriterionIds.add(criterionId);
+    }
+  }
+  return policy.criteria.filter((criterion) => criterion.severity === "must" && !coveredCriterionIds.has(criterion.id)).map((criterion) => criterion.id);
+}
+function failedDecision(summary, failures, uncoveredMustCriterionIds, warnings) {
+  return {
+    status: "failed",
+    summary,
+    failedValidatorIds: failures.map((result) => result.validatorId),
+    needsHumanValidatorIds: [],
+    failedCriterionIds: unique(failures.flatMap((result) => result.criteriaIds)),
+    uncoveredMustCriterionIds,
+    warnings,
+    repairInstructions: failures.map((result) => result.summary).join("\n")
+  };
+}
+function enforceRubricAgentPolicy(policy, result) {
+  if (result.type !== "rubric_agent" || result.status !== "passed") {
+    return result;
+  }
+  const validator = policy.validators.find(
+    (candidate) => candidate.id === result.validatorId && candidate.type === "rubric_agent"
+  );
+  const requiresEvidence = policy.decision.requireEvidenceForAgentScores || validator?.type === "rubric_agent" && validator.evidenceRequired;
+  const hasRequiredEvidence = !requiresEvidence || Boolean(result.evidence?.trim());
+  const hasScore = typeof result.score === "number" && Number.isFinite(result.score);
+  if (!hasScore || !hasRequiredEvidence) {
+    return {
+      ...result,
+      status: "needs_human",
+      summary: !hasScore ? "Rubric agent result requires a finite score." : "Rubric agent result requires evidence."
+    };
+  }
+  if (validator?.type === "rubric_agent" && result.score !== void 0 && result.score < validator.passScore) {
+    return {
+      ...result,
+      status: "failed",
+      summary: `${validator.label} failed with score ${result.score}.`
+    };
+  }
+  return result;
+}
+function validatorResultsToDecisionChecks(validatorResults) {
+  return validatorResults.flatMap((result) => {
+    const rubricIds = result.criteriaIds.length > 0 ? result.criteriaIds : [result.validatorId];
+    return rubricIds.map((rubricId) => ({
+      rubricId,
+      status: result.status,
+      evidence: result.evidence
+    }));
+  });
+}
+function rubricAgentStatusFromInput(validator, requestedStatus, score, hasScore, hasRequiredEvidence) {
+  if (requestedStatus === "failed" || requestedStatus === "needs_human") {
+    return requestedStatus;
+  }
+  if (!hasScore || !hasRequiredEvidence) {
+    return "needs_human";
+  }
+  return score >= validator.passScore ? "passed" : "failed";
+}
+function decisionSummary(decision) {
+  if (decision.status === "passed" && decision.warnings.length > 0) {
+    return `${decision.summary} ${decision.warnings.join(" ")}`;
+  }
+  return decision.summary;
+}
+function rubricAgentSummary(validator, score, hasRequiredEvidence) {
+  if (typeof score !== "number" || !Number.isFinite(score)) {
+    return "Rubric agent result requires a finite score.";
+  }
+  if (!hasRequiredEvidence) {
+    return "Rubric agent result requires evidence.";
+  }
+  return score >= validator.passScore ? `${validator.label} passed with score ${score}.` : `${validator.label} failed with score ${score}.`;
+}
+function resolveCommandCwd(validator, input) {
+  const cwd = validator.cwd;
+  if (!cwd) {
+    return input.projectPath;
+  }
+  if (cwd === "project") {
+    return input.projectPath;
+  }
+  if (cwd === "contract") {
+    return input.contractWorkspacePath;
+  }
+  return input.projectPath ? path2.resolve(input.projectPath, cwd.relativeToProject) : cwd.relativeToProject;
+}
+async function defaultCommandExecutor(request) {
+  return new Promise((resolve) => {
+    const child = spawn(request.command, request.args, {
+      cwd: request.cwd,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let timedOut = false;
+    let settled = false;
+    let timer;
+    if (request.timeoutMs && request.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+      }, request.timeoutMs);
+    }
+    child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
+    child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
+    child.on("error", (error2) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve({
+        exitCode: null,
+        stdout: truncateEvidence(Buffer.concat(stdoutChunks).toString("utf8")),
+        stderr: truncateEvidence(Buffer.concat(stderrChunks).toString("utf8")),
+        timedOut,
+        error: error2.message
+      });
+    });
+    child.on("close", (exitCode) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve({
+        exitCode,
+        stdout: truncateEvidence(Buffer.concat(stdoutChunks).toString("utf8")),
+        stderr: truncateEvidence(Buffer.concat(stderrChunks).toString("utf8")),
+        timedOut
+      });
+    });
+  });
+}
+function commandEvidence(stdout, stderr, error2) {
+  return [
+    stdout ? `stdout:
+${stdout}` : void 0,
+    stderr ? `stderr:
+${stderr}` : void 0,
+    error2 ? `error:
+${error2}` : void 0
+  ].filter((section) => Boolean(section)).join("\n\n");
+}
+function truncateEvidence(value) {
+  if (value.length <= MAX_EVIDENCE_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, MAX_EVIDENCE_CHARS)}
+[truncated]`;
+}
+function readPath(source, dottedPath) {
+  if (!dottedPath) {
+    return source;
+  }
+  return dottedPath.split(".").reduce((current, segment) => {
+    if (current === null || current === void 0) {
+      return void 0;
+    }
+    if (Array.isArray(current) && /^\d+$/.test(segment)) {
+      return current[Number(segment)];
+    }
+    if (typeof current === "object" && segment in current) {
+      return current[segment];
+    }
+    return void 0;
+  }, source);
+}
+function unique(values) {
+  return [...new Set(values)];
+}
+
 // src/runner/verifier.ts
 function createPassedDecision(summary, checks = []) {
   return {
@@ -22011,7 +22617,14 @@ var LoopRunner = class {
     );
     const attemptId = request.attemptId ?? `attempt_${request.attemptNumber ?? 1}`;
     emitRuntimeEvent({ type: "verification_started", attemptId });
-    const verification = await this.verify(request.contract, flowResult.result);
+    const verification = await this.verify({
+      contract: request.contract,
+      result: flowResult.result,
+      runId: request.runId,
+      attemptId,
+      now,
+      emit: emitRuntimeEvent
+    });
     emitRuntimeEvent({ type: "verification_done", attemptId, decision: verification });
     const shouldRepair2 = shouldRepair(verification, request.contract.repairPolicy, request.attemptNumber ?? 1);
     const finalStatus = verification.status === "passed" ? "completed" : verification.status === "needs_human" ? "waiting_for_human" : "failed";
@@ -22042,15 +22655,53 @@ var LoopRunner = class {
       shouldRepair: shouldRepair2
     };
   }
-  async verify(contract, result) {
+  async verify(input) {
+    const { contract, result } = input;
+    if (contract.verification.version === 2) {
+      return runVerificationV2({
+        id: `${input.runId}:${input.attemptId}:verification`,
+        runId: input.runId,
+        attemptId: input.attemptId,
+        createdAt: input.now(),
+        policy: contract.verification,
+        workflowResult: result,
+        projectPath: contract.projectBinding?.projectPath,
+        commandExecutor: this.options.commandExecutor,
+        emit: (event) => input.emit(toEngineVerificationEvent(event, input.attemptId))
+      });
+    }
     if (this.options.verifier) {
       return this.options.verifier({ contract, result });
     }
-    return createPassedDecision("No verifier configured; workflow completed.", contract.verification.rubrics.map((rubric) => ({
+    const legacyVerification = contract.verification;
+    return createPassedDecision("No verifier configured; workflow completed.", (legacyVerification.rubrics ?? []).map((rubric) => ({
       rubricId: rubric.id
     })));
   }
 };
+function toEngineVerificationEvent(event, attemptId) {
+  if (event.type === "validator_started") {
+    return {
+      type: "validator_started",
+      attemptId,
+      validatorId: event.validatorId,
+      validatorType: event.validatorType,
+      label: event.label
+    };
+  }
+  if (event.type === "validator_done") {
+    return {
+      type: "validator_done",
+      attemptId,
+      result: event.result
+    };
+  }
+  return {
+    type: "verification_decided",
+    attemptId,
+    decision: event.decision
+  };
+}
 function buildWorkflowExecutionPlan(contract) {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
   return {
@@ -22123,12 +22774,16 @@ function sortLoopWorkspaceFiles(files) {
   const rootOrder = /* @__PURE__ */ new Map([
     ["memory.md", 0],
     ["workflow.json", 1],
+    ["verification.md", 2],
     ["rubrics.md", 2],
     ["status.json", 3],
     ["runs.json", 4],
     ["contract.json", 5]
   ]);
   return [...files].sort((left, right) => {
+    const leftIsSkill = left.path.startsWith("skill/");
+    const rightIsSkill = right.path.startsWith("skill/");
+    if (leftIsSkill !== rightIsSkill) return leftIsSkill ? 1 : -1;
     const leftRank = rootOrder.get(left.path) ?? 100;
     const rightRank = rootOrder.get(right.path) ?? 100;
     if (leftRank !== rightRank) return leftRank - rightRank;
@@ -22151,6 +22806,17 @@ function formalLoopDirectoryFiles(input) {
   const latestVerification = latestRun ? latestVerificationForRun(input.state, latestRun.id) : void 0;
   const rubricStatuses = rubricStatusByLabel(latestVerification);
   const taskRuns = latestRun?.codexSession?.subagents ?? [];
+  const verificationFileEntry = isVerificationPolicyV2(input.contract.verification) ? withSize({
+    path: "verification.md",
+    kind: "verification",
+    language: "markdown",
+    content: verificationFile({ contract: input.contract, latestVerification })
+  }) : withSize({
+    path: "rubrics.md",
+    kind: "rubrics",
+    language: "markdown",
+    content: legacyRubricsFile({ contract: input.contract, rubricStatuses })
+  });
   return [
     withSize({
       path: "workflow.json",
@@ -22177,34 +22843,12 @@ function formalLoopDirectoryFiles(input) {
 `
     }),
     withSize({
-      path: "runtime/dittosloop-for-codex-loop.md",
-      kind: "runtime",
+      path: "skill/dittosloop-for-codex-loop.md",
+      kind: "skill",
       language: "markdown",
-      content: loopRuntimeGuideFile(input.contract)
+      content: loopSkillFile(input.contract)
     }),
-    withSize({
-      path: "rubrics.md",
-      kind: "rubrics",
-      language: "markdown",
-      content: [
-        `# ${input.contract.title} verifier`,
-        "",
-        `Mode: \`${input.contract.verification?.mode ?? "after_workflow"}\``,
-        "",
-        ...(input.contract.verification?.rubrics ?? []).flatMap(
-          (rubric) => [
-            `## ${rubric.label}`,
-            "",
-            `- id: \`${rubric.id}\``,
-            `- severity: \`${rubric.severity}\``,
-            `- status: ${statusText(rubricStatuses.get(rubric.label) ?? "not-run")}`,
-            `- requirement: ${rubric.requirement}`,
-            rubricStatuses.get(`${rubric.label}:output`) ? `- evidence: ${rubricStatuses.get(`${rubric.label}:output`)}` : "",
-            ""
-          ].filter(Boolean)
-        )
-      ].join("\n")
-    }),
+    verificationFileEntry,
     withSize({
       path: "status.json",
       kind: "status",
@@ -22243,13 +22887,7 @@ function formalLoopDirectoryFiles(input) {
             createdAt: latestAttempt.createdAt,
             completedAt: latestAttempt.completedAt
           } : null,
-          latestVerification: latestVerification ? {
-            id: latestVerification.id,
-            status: latestVerification.status,
-            summary: latestVerification.summary,
-            checks: latestVerification.checks ?? [],
-            createdAt: latestVerification.createdAt
-          } : null,
+          latestVerification: latestVerification ? verificationSummaryForStatus(latestVerification) : null,
           runs: input.loopRuns.map((run) => ({
             id: run.id,
             status: run.status,
@@ -22266,20 +22904,20 @@ function formalLoopDirectoryFiles(input) {
     })
   ];
 }
-function loopRuntimeGuideFile(contract) {
+function loopSkillFile(contract) {
   return [
-    "# DittosLoop For Codex runtime guide",
+    "# dittosloop-for-codex:loop",
     "",
     `Loop: ${contract.title}`,
     "",
-    "\u8FD9\u4E2A\u6587\u4EF6\u63CF\u8FF0 DittosLoop For Codex runtime \u5982\u4F55\u4E3A\u8FD9\u4E2A loop \u7BA1\u7406\u6B63\u5F0F contract\u3001\u542F\u52A8\u53EF\u89C1 Codex worker session\u3001\u6267\u884C workflow\u3001\u5199\u56DE\u7ED3\u679C\uFF0C\u5E76\u6309 rubrics \u505A\u6700\u7EC8\u9A8C\u8BC1\u3002",
-    "\u5B83\u4E0D\u662F\u5B89\u88C5\u5230 Codex \u91CC\u7684\u539F\u751F skill\uFF0C\u53EA\u662F\u672C\u5730 runtime \u5FEB\u7167\uFF0C\u5E2E\u52A9\u4F60\u68C0\u67E5\u5F53\u524D loop \u4F1A\u5982\u4F55\u8FD0\u884C\u3002",
+    "\u8FD9\u4E2A loop \u4F7F\u7528 DittosLoop For Codex \u7684 loop skill \u6765\u521B\u5EFA\u6B63\u5F0F contract\u3001\u542F\u52A8\u53EF\u89C1 Codex worker session\u3001\u6267\u884C workflow\u3001\u5199\u56DE\u7ED3\u679C\uFF0C\u5E76\u6309 criteria\u3001validators\u3001decision \u505A\u6700\u7EC8\u9A8C\u8BC1\u3002",
     "",
     "## Runtime role",
     "",
     "- Codex worker session \u672C\u8EAB\u627F\u62C5 orchestrator\u3002",
     "- workflow body \u53EA\u63CF\u8FF0\u771F\u6B63\u88AB\u8C03\u5EA6\u7684 specialist/editor/checker agents\u3002",
-    "- verifier/rubrics \u5C5E\u4E8E\u5916\u90E8\u6700\u7EC8\u9A8C\u8BC1\uFF0C\u4E0D\u4F5C\u4E3A\u666E\u901A agent \u6587\u4EF6\u5939\u5C42\u7EA7\u5C55\u793A\u3002",
+    "- agentProfiles/agentProfileRef \u63CF\u8FF0\u53EF\u590D\u7528\u7684 Codex task guidance \u548C skill expectations\u3002",
+    "- verification criteria/validators/decision \u5C5E\u4E8E\u5916\u90E8\u6700\u7EC8\u9A8C\u8BC1\uFF0C\u4E0D\u4F5C\u4E3A\u666E\u901A agent \u6587\u4EF6\u5939\u5C42\u7EA7\u5C55\u793A\u3002",
     ""
   ].join("\n");
 }
@@ -22303,18 +22941,162 @@ function contractFile(input) {
   )}
 `;
 }
+function legacyRubricsFile(input) {
+  const verification = input.contract.verification;
+  return [
+    `# ${input.contract.title} verifier`,
+    "",
+    `Mode: \`${verification.mode ?? "after_workflow"}\``,
+    "",
+    ...(verification.rubrics ?? []).flatMap(
+      (rubric) => [
+        `## ${rubric.label}`,
+        "",
+        `- id: \`${rubric.id}\``,
+        `- severity: \`${rubric.severity}\``,
+        `- status: ${statusText(input.rubricStatuses.get(rubric.label) ?? "not-run")}`,
+        `- requirement: ${rubric.requirement}`,
+        input.rubricStatuses.get(`${rubric.label}:output`) ? `- evidence: ${input.rubricStatuses.get(`${rubric.label}:output`)}` : "",
+        ""
+      ].filter(Boolean)
+    )
+  ].join("\n");
+}
+function verificationFile(input) {
+  const verification = input.contract.verification;
+  if (!isVerificationPolicyV2(verification)) {
+    return legacyRubricsFile({ contract: input.contract, rubricStatuses: rubricStatusByLabel(input.latestVerification) });
+  }
+  const v2Result = isVerificationResultV2(input.latestVerification) ? input.latestVerification : void 0;
+  const validatorResults = v2Result?.validatorResults ?? [];
+  return [
+    `# ${input.contract.title} verification`,
+    "",
+    `Mode: \`${verification.mode}\``,
+    "",
+    "## Criteria",
+    "| id | severity | status | covering validators |",
+    "| --- | --- | --- | --- |",
+    ...verification.criteria.map((criterion) => {
+      const coveringValidatorIds = verification.validators.filter((validator) => validator.criteriaIds?.includes(criterion.id)).map((validator) => validator.id);
+      return [
+        `| \`${criterion.id}\``,
+        criterion.severity,
+        statusText(criterionStatus(criterion.id, validatorResults)),
+        coveringValidatorIds.map((id) => `\`${id}\``).join(", ") || "none"
+      ].join(" | ") + " |";
+    }),
+    "",
+    "## Validators",
+    "| id | type | severity | status | score | evidence |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...verification.validators.map((validator) => {
+      const result = validatorResults.find((candidate) => validatorResultId(candidate) === validator.id);
+      return [
+        `| \`${validator.id}\``,
+        validator.type,
+        validator.severity,
+        statusText(result?.status ?? "not-run"),
+        validatorScoreText(result),
+        evidenceExcerpt(result?.evidence)
+      ].join(" | ") + " |";
+    }),
+    "",
+    "## Decision",
+    `- status: ${statusText(v2Result?.decision.status ?? v2Result?.status ?? "not-run")}`,
+    `- summary: ${v2Result?.decision.summary ?? v2Result?.summary ?? "No verification result yet."}`,
+    `- requireAllMustCriteriaCovered: ${verification.decision.requireAllMustCriteriaCovered}`,
+    `- failOnMustValidatorFailure: ${verification.decision.failOnMustValidatorFailure}`,
+    `- failOnShouldValidatorFailure: ${verification.decision.failOnShouldValidatorFailure}`,
+    `- requireEvidenceForAgentScores: ${verification.decision.requireEvidenceForAgentScores}`,
+    v2Result?.decision.repairInstructions ? `- repairInstructions: ${v2Result.decision.repairInstructions}` : "",
+    v2Result?.decision.humanQuestion ? `- humanQuestion: ${v2Result.decision.humanQuestion}` : "",
+    ""
+  ].filter(Boolean).join("\n");
+}
 function latestVerificationForRun(state, runId) {
   return [...state.verificationResults].reverse().find((result) => result.runId === runId);
 }
 function rubricStatusByLabel(verification) {
   const statuses = /* @__PURE__ */ new Map();
+  if (isVerificationResultV2(verification)) {
+    for (const check2 of verification.checks ?? []) {
+      statuses.set(check2.rubricId, check2.status);
+      if (check2.evidence) {
+        statuses.set(`${check2.rubricId}:output`, check2.evidence);
+      }
+    }
+    return statuses;
+  }
   for (const check2 of verification?.checks ?? []) {
-    statuses.set(check2.name, check2.status);
-    if (check2.output) {
-      statuses.set(`${check2.name}:output`, check2.output);
+    const name = check2.name ?? check2.rubricId;
+    if (!name) continue;
+    statuses.set(name, check2.status);
+    const evidence = check2.output ?? check2.evidence;
+    if (evidence) {
+      statuses.set(`${name}:output`, evidence);
     }
   }
   return statuses;
+}
+function verificationSummaryForStatus(verification) {
+  if (!isVerificationResultV2(verification)) {
+    return {
+      id: verification.id,
+      status: verification.status,
+      summary: verification.summary,
+      checks: verification.checks ?? [],
+      createdAt: verification.createdAt
+    };
+  }
+  return {
+    id: verification.id,
+    version: 2,
+    status: verification.status,
+    summary: verification.summary,
+    decision: verification.decision,
+    validators: verification.validatorResults.map((result) => ({
+      id: validatorResultId(result),
+      type: result.type,
+      label: result.label,
+      status: result.status,
+      score: "score" in result ? result.score : void 0,
+      maxScore: "maxScore" in result ? result.maxScore : void 0,
+      threshold: "threshold" in result ? result.threshold : void 0,
+      exitCode: "exitCode" in result ? result.exitCode : void 0,
+      evidence: evidenceExcerpt(result.evidence),
+      summary: result.summary
+    })),
+    checks: verification.checks ?? [],
+    createdAt: verification.createdAt
+  };
+}
+function isVerificationPolicyV2(value) {
+  return Boolean(value && typeof value === "object" && value.version === 2);
+}
+function isVerificationResultV2(value) {
+  return Boolean(value && typeof value === "object" && value.version === 2);
+}
+function validatorResultId(result) {
+  const resultWithId = result;
+  return result.validatorId ?? resultWithId.id ?? result.label;
+}
+function criterionStatus(criterionId, results) {
+  const covering = results.filter((result) => result.criteriaIds.includes(criterionId));
+  if (covering.some((result) => result.status === "failed")) return "failed";
+  if (covering.some((result) => result.status === "needs_human")) return "needs_human";
+  if (covering.some((result) => result.status === "passed")) return "passed";
+  return "not-run";
+}
+function validatorScoreText(result) {
+  if (!result || !("score" in result) || typeof result.score !== "number") return "";
+  const maxScore = "maxScore" in result && typeof result.maxScore === "number" ? `/${result.maxScore}` : "";
+  return `${result.score}${maxScore}`;
+}
+function evidenceExcerpt(value) {
+  if (!value) return "";
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
 }
 function statusText(status) {
   const labels = {
@@ -22404,6 +23186,7 @@ function isNodeError(error2) {
 // src/service.ts
 var DEFAULT_LOOP_MEMORY_READ_LIMIT = 80;
 var MAX_LOOP_MEMORY_READ_LIMIT = 200;
+var VERIFICATION_INPUT_KIND_FIELD = "__dittosLoopVerificationInputKind";
 var LoopService = class {
   constructor(options) {
     this.options = options;
@@ -22418,7 +23201,10 @@ var LoopService = class {
   async createLoopContract(input) {
     const timestamp = this.now();
     const resolvedInput = resolveScriptContractInput(input);
-    const contract = compileContract(normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")), timestamp);
+    const contract = compileContractWithVerificationInputKind(
+      normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")),
+      timestamp
+    );
     validateContract(contract);
     await this.options.store.updateState((state) => ({
       ...state,
@@ -22556,7 +23342,14 @@ var LoopService = class {
     const activeContract = existingContext?.contractSnapshot ?? requireFormalContract(initialState, run.loopId);
     const workflowContext = await this.prepareWorkflowContext(run.id, attempt.id, activeContract);
     const contract = workflowContext.contractSnapshot ?? activeContract;
+    const usesV2Verification = usesVerificationV2Runtime(contract.verification);
+    const usesExternalV2Verification = usesExternalV2ValidatorWriteback(contract.verification);
+    const runnerContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
     const attemptNumber = Math.max(1, attemptsForRun.findIndex((candidate) => candidate.id === attempt.id) + 1);
+    if (usesExternalV2Verification && !hasRemainingExecutableSteps(contract, workflowContext) && !hasOpenWorkflowSessions(workflowContext) && pendingRubricAgentValidatorIds(contract.verification, workflowContext).length > 0) {
+      await this.startPendingRubricAgentValidators(run, workflowContext, contract.verification);
+      return (await this.getRunDetail(runId)).run;
+    }
     const engineEvents = [];
     const runner = new LoopRunner({
       executor: input.executor ?? this.createWorkflowContextExecutor(run, attempt.id, workflowContext.id),
@@ -22567,7 +23360,7 @@ var LoopService = class {
     let result;
     try {
       result = await runner.run({
-        contract,
+        contract: runnerContract,
         runId,
         attemptId: attempt.id,
         attemptNumber,
@@ -22590,11 +23383,14 @@ var LoopService = class {
     }
     let finalRun = await this.recordCompletedCodexSessions(runId, engineEvents);
     await this.recordEngineEvents(runId, engineEvents);
+    if (usesV2Verification && isVerificationResultV22(result.verification)) {
+      return this.finalizeV2Verification(runId, workflowContext.id, result.verification);
+    }
     await this.recordVerification(runId, {
       attemptId: attempt.id,
       status: verificationDecisionToResultStatus(result.verification.status),
       summary: result.verification.summary,
-      checks: verificationDecisionChecksToResults(contract, result.verification),
+      checks: verificationDecisionChecksToResults(runnerContract, result.verification),
       repair: result.shouldRepair
     });
     if (result.shouldRepair) {
@@ -23182,6 +23978,59 @@ ${priorOutput}`;
           ]
         };
       }
+      if (targetContract && usesVerificationV2Runtime(targetContract.verification) && resultInput.status === "passed" && isWorkflowTaskResult && workflowContextAfterTaskResult && !hasRemainingWorkflowSteps && !hasPendingWorkflowSessions) {
+        shouldContinueWorkflow = true;
+        continuationAttemptId = attemptId;
+        updatedRun = {
+          ...run,
+          status: "running",
+          codexSession: {
+            ...codexSession,
+            status: codexSession.status === "failed" || codexSession.status === "unavailable" ? codexSession.status : "started"
+          },
+          updatedAt: timestamp,
+          completedAt: void 0
+        };
+        return {
+          ...state,
+          runs: state.runs.map((candidate) => candidate.id === runId ? updatedRun : candidate),
+          attempts: targetAttempt ? state.attempts.map(
+            (attempt) => attempt.id === targetAttempt.id ? {
+              ...attempt,
+              status: "running",
+              completedAt: void 0
+            } : attempt
+          ) : state.attempts,
+          workflowContexts: state.workflowContexts.map(
+            (context) => context.id === workflowContextAfterTaskResult.id ? {
+              ...workflowContextAfterTaskResult,
+              verification: startWorkflowVerificationState(
+                workflowContextAfterTaskResult.verification,
+                timestamp
+              )
+            } : context
+          ),
+          events: [
+            ...state.events,
+            lifecycleEvent(
+              this.nextId("event"),
+              runId,
+              "note",
+              "Codex task result recorded; starting v2 verification",
+              timestamp,
+              {
+                attemptId,
+                workflowContextId: workflowContextAfterTaskResult.id,
+                sessionResult: {
+                  status: resultInput.status,
+                  summary: resultInput.summary,
+                  result: resultInput.result
+                }
+              }
+            )
+          ]
+        };
+      }
       const verification = {
         id: this.nextId("verification"),
         runId,
@@ -23371,6 +24220,133 @@ ${priorOutput}`;
       };
     });
     return event;
+  }
+  async recordValidatorResult(runId, input) {
+    const timestamp = this.now();
+    if (!input.idempotencyKey) {
+      throw new Error("Validator results require an idempotencyKey");
+    }
+    const idempotencyKey = input.idempotencyKey;
+    let contextAfterWrite;
+    let policy;
+    let duplicateResultId;
+    await this.options.store.updateState((state) => {
+      const run = requireRun(state, runId);
+      const context = findWorkflowContextForValidatorResult(state, runId, input);
+      if (input.attemptId && context.attemptId !== input.attemptId) {
+        throw new Error(`Workflow context does not belong to attempt: ${context.id}`);
+      }
+      if (input.sessionId && context.taskRuns.some((taskRun) => taskRun.sessionId === input.sessionId)) {
+        throw new Error("Validator result session cannot be a workflow task session");
+      }
+      const attempt = requireAttempt(state, context.attemptId);
+      if (attempt.runId !== runId) {
+        throw new Error(`Attempt does not belong to run: ${attempt.id}`);
+      }
+      const contract = context.contractSnapshot ?? state.formalContracts.find((candidate) => candidate.id === (context.contractId ?? run.loopId));
+      if (!contract) {
+        throw new Error(`Loop contract not found: ${context.contractId ?? run.loopId}`);
+      }
+      if (!usesExternalV2ValidatorWriteback(contract.verification)) {
+        throw new Error("Validator results can only be recorded for verification v2 workflows");
+      }
+      const validator = contract.verification.validators.find((candidate) => candidate.id === input.validatorId);
+      if (!validator) {
+        throw new Error(`Validator not found: ${input.validatorId}`);
+      }
+      if (validator.type !== input.result.type) {
+        throw new Error(`Validator result type does not match validator: ${input.validatorId}`);
+      }
+      const verification = context.verification ?? createWorkflowVerificationState(timestamp);
+      if (verification.idempotencyKeys.includes(idempotencyKey)) {
+        duplicateResultId = verification.resultId;
+        contextAfterWrite = context;
+        policy = contract.verification;
+        return state;
+      }
+      if (!workflowVerificationAcceptsValidatorWriteback(context, verification)) {
+        throw new Error("Workflow verification has not started");
+      }
+      if (verification.validatorResults.some((result2) => result2.validatorId === input.validatorId)) {
+        throw new Error(`Validator result already recorded: ${input.validatorId}`);
+      }
+      const validatorResult = recordedRubricAgentResultToValidatorResult(
+        validator,
+        normalizeRecordedRubricAgentInput(input.result)
+      );
+      const validatorResults = [...verification.validatorResults, validatorResult];
+      const pendingValidatorIds = pendingRubricAgentValidatorIds(contract.verification, {
+        ...context,
+        verification: {
+          ...verification,
+          validatorResults
+        }
+      }).filter((validatorId) => validatorId !== input.validatorId);
+      const nextVerification = {
+        ...verification,
+        status: pendingValidatorIds.length > 0 ? "waiting_for_validator" : "running",
+        validatorResults,
+        pendingValidatorIds,
+        idempotencyKeys: appendUnique(verification.idempotencyKeys, idempotencyKey),
+        updatedAt: timestamp
+      };
+      contextAfterWrite = {
+        ...context,
+        verification: nextVerification,
+        updatedAt: timestamp
+      };
+      policy = contract.verification;
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, context.id, contextAfterWrite),
+        events: [
+          ...state.events,
+          lifecycleEvent(
+            this.nextId("event"),
+            runId,
+            "note",
+            `Validator result recorded: ${input.validatorId}`,
+            timestamp,
+            {
+              attemptId: context.attemptId,
+              workflowContextId: context.id,
+              validatorId: input.validatorId
+            }
+          )
+        ]
+      };
+    });
+    if (duplicateResultId) {
+      const state = await this.options.store.readState();
+      const existing = state.verificationResults.find((result2) => result2.id === duplicateResultId);
+      if (existing && isVerificationResultV22(existing)) {
+        return existing;
+      }
+    }
+    if (!contextAfterWrite?.verification || !policy) {
+      throw new Error("Validator result was not recorded");
+    }
+    if (contextAfterWrite.verification.pendingValidatorIds.length > 0) {
+      return pendingVerificationResultV2(
+        this.nextId("verification"),
+        runId,
+        contextAfterWrite.attemptId,
+        contextAfterWrite.verification,
+        timestamp
+      );
+    }
+    const result = await runVerificationV2({
+      id: this.nextId("verification"),
+      runId,
+      attemptId: contextAfterWrite.attemptId,
+      createdAt: timestamp,
+      policy,
+      workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
+      projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
+      priorValidatorResults: contextAfterWrite.verification.validatorResults
+    });
+    await this.finalizeV2Verification(runId, contextAfterWrite.id, result);
+    return result;
   }
   async recordVerification(runId, input) {
     const timestamp = this.now();
@@ -23613,7 +24589,11 @@ ${priorOutput}`;
   }
   async listLoopFiles(loopId) {
     const state = await this.options.store.readState();
-    return syncLoopWorkspaceDirectory(this.options.store.dataDir, loopId, loopWorkspaceFiles(state, loopId));
+    return syncLoopWorkspaceDirectory(
+      this.options.store.dataDir,
+      loopId,
+      loopWorkspaceFiles(legacyCompatibleWorkspaceState(state), loopId)
+    );
   }
   async getSnapshot() {
     const state = await this.options.store.readState();
@@ -23643,7 +24623,7 @@ ${priorOutput}`;
     }
     const revisionContractInput = input.contract ? resolveScriptContractInput({ ...input.contract, id: loopId }) : resolveScriptContractInput(applyContractPatch(baseContract, input.patch ?? {}));
     const normalized = normalizeFormalContractInput(revisionContractInput, loopId);
-    const contract = compileContract(
+    const contract = compileContractWithVerificationInputKind(
       {
         ...normalized,
         id: loopId,
@@ -23875,6 +24855,131 @@ ${priorOutput}`;
       };
     });
     return revision;
+  }
+  async recordVerificationV2Result(runId, result) {
+    const timestamp = this.now();
+    await this.options.store.updateState((state) => {
+      requireRun(state, runId);
+      const existing = state.verificationResults.find((candidate) => candidate.id === result.id);
+      if (existing) {
+        if (isVerificationResultV22(existing)) {
+          return state;
+        }
+        throw new Error(`Verification result id already exists: ${result.id}`);
+      }
+      return {
+        ...state,
+        verificationResults: [...state.verificationResults, result],
+        events: [
+          ...state.events,
+          lifecycleEvent(this.nextId("event"), runId, "verification_recorded", result.summary, timestamp, {
+            attemptId: result.attemptId,
+            verificationId: result.id,
+            verificationVersion: 2,
+            decision: result.decision
+          })
+        ]
+      };
+    });
+    return result;
+  }
+  async finalizeV2Verification(runId, workflowContextId, result) {
+    await this.recordVerificationV2Result(runId, result);
+    await this.markWorkflowVerificationCompleted(workflowContextId, result);
+    const state = await this.options.store.readState();
+    const run = requireRun(state, runId);
+    const context = requireWorkflowContext(state, workflowContextId);
+    const contract = context.contractSnapshot ?? requireFormalContract(state, run.loopId);
+    const attemptsForRun = state.attempts.filter((attempt) => attempt.runId === runId);
+    const attemptNumber = Math.max(1, attemptsForRun.findIndex((attempt) => attempt.id === context.attemptId) + 1);
+    if (result.status === "failed" && shouldRepair(result.decision, contract.repairPolicy, attemptNumber)) {
+      await this.markRunRepairing(runId, { reason: repairReasonForV2Result(result) });
+      return (await this.getRunDetail(runId)).run;
+    }
+    if (result.status === "passed") {
+      await this.completeWorkflowContext(workflowContextId);
+      await this.completeAttempt(context.attemptId, {
+        status: "completed",
+        summary: result.summary
+      });
+      return this.completeRun(runId, { status: "completed" });
+    }
+    if (result.status === "needs_human") {
+      await this.completeWorkflowContext(workflowContextId);
+      await this.completeAttempt(context.attemptId, {
+        status: "completed",
+        summary: result.summary
+      });
+      await this.recordHumanRequest(runId, {
+        question: result.humanQuestion ?? result.decision.humanQuestion ?? result.summary
+      });
+      return (await this.getRunDetail(runId)).run;
+    }
+    await this.failWorkflowContext(workflowContextId, result.summary);
+    await this.completeAttempt(context.attemptId, {
+      status: "failed",
+      summary: result.summary
+    });
+    return this.completeRun(runId, { status: "failed" });
+  }
+  async startPendingRubricAgentValidators(run, context, policy) {
+    const timestamp = this.now();
+    const pendingValidatorIds = pendingRubricAgentValidatorIds(policy, context);
+    if (pendingValidatorIds.length === 0) {
+      return;
+    }
+    await this.options.store.updateState((state) => {
+      requireRun(state, run.id);
+      const currentContext = requireWorkflowContext(state, context.id);
+      const verification = currentContext.verification ?? createWorkflowVerificationState(timestamp);
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, currentContext.id, {
+          ...currentContext,
+          verification: {
+            ...verification,
+            status: "waiting_for_validator",
+            pendingValidatorIds,
+            updatedAt: timestamp
+          },
+          updatedAt: timestamp,
+          completedAt: void 0
+        }),
+        events: [
+          ...state.events,
+          ...pendingValidatorIds.map(
+            (validatorId) => lifecycleEvent(this.nextId("event"), run.id, "note", `Waiting for validator result: ${validatorId}`, timestamp, {
+              attemptId: context.attemptId,
+              workflowContextId: context.id,
+              validatorId
+            })
+          )
+        ]
+      };
+    });
+  }
+  async markWorkflowVerificationCompleted(workflowContextId, result) {
+    const timestamp = this.now();
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      const verification = context.verification ?? createWorkflowVerificationState(timestamp);
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+          ...context,
+          verification: {
+            ...verification,
+            status: result.status === "failed" ? "failed" : "completed",
+            validatorResults: result.validatorResults,
+            pendingValidatorIds: [],
+            decision: result.decision,
+            resultId: result.id,
+            updatedAt: timestamp
+          },
+          updatedAt: timestamp
+        })
+      };
+    });
   }
   async prepareWorkflowContext(runId, attemptId, contract) {
     const timestamp = this.now();
@@ -24226,16 +25331,94 @@ function createWorkflowContext(input) {
     vars: {},
     steps: {},
     taskRuns: [],
+    verification: createWorkflowVerificationState(input.timestamp),
     pendingSessionIds: [],
     idempotencyKeys: [],
     createdAt: input.timestamp,
     updatedAt: input.timestamp
   };
 }
+function createWorkflowVerificationState(timestamp) {
+  return {
+    status: "not_started",
+    validatorResults: [],
+    pendingValidatorIds: [],
+    idempotencyKeys: [],
+    updatedAt: timestamp
+  };
+}
+function startWorkflowVerificationState(existing, timestamp) {
+  const verification = existing ?? createWorkflowVerificationState(timestamp);
+  return {
+    ...verification,
+    status: "running",
+    updatedAt: timestamp
+  };
+}
+function workflowVerificationAcceptsValidatorWriteback(context, verification) {
+  return (verification.status === "running" || verification.status === "waiting_for_validator") && workflowContextHasCompletedVerifiableWork(context);
+}
+function workflowContextHasCompletedVerifiableWork(context) {
+  return Object.values(context.steps).some((step) => step.status === "completed" && step.output !== void 0) || context.taskRuns.some((taskRun) => taskRun.status === "completed" && taskRun.result !== void 0);
+}
 function completedWorkflowStepOutputs(context) {
   return Object.fromEntries(
     Object.entries(context.steps).filter(([, step]) => step.status === "completed" && step.output !== void 0).map(([stepId, step]) => [stepId, step.output])
   );
+}
+function pendingRubricAgentValidatorIds(policy, context) {
+  const recordedValidatorIds = new Set(
+    (context.verification?.validatorResults ?? []).map((result) => result.validatorId)
+  );
+  return policy.validators.filter((validator) => validator.type === "rubric_agent" && !recordedValidatorIds.has(validator.id)).map((validator) => validator.id);
+}
+function usesVerificationV2Runtime(policy) {
+  return policy.version === 2 && !isLegacyCompatibleVerificationPolicy(policy);
+}
+function usesExternalV2ValidatorWriteback(policy) {
+  return usesVerificationV2Runtime(policy) && policy.validators.some((validator) => validator.type === "rubric_agent");
+}
+function isLegacyCompatibleVerificationPolicy(policy) {
+  const marker = verificationInputKindMarker(policy);
+  if (marker === "legacy") return true;
+  if (marker === "v2") return false;
+  return hasDefaultLegacyMigrationShape(policy);
+}
+function legacyCompatibleRunnerContract(contract) {
+  if (!isLegacyCompatibleVerificationPolicy(contract.verification)) return contract;
+  return {
+    ...contract,
+    verification: legacyVerificationFromMigratedV2(contract.verification)
+  };
+}
+function legacyCompatibleWorkspaceState(state) {
+  return {
+    ...state,
+    formalContracts: state.formalContracts.map(legacyCompatibleRunnerContract)
+  };
+}
+function legacyVerificationFromMigratedV2(policy) {
+  return {
+    mode: policy.mode === "after_each_step" ? "after_each_agent" : "after_workflow",
+    rubrics: policy.criteria.map((criterion) => ({
+      id: criterion.id,
+      label: criterion.label,
+      requirement: criterion.description,
+      severity: criterion.severity
+    }))
+  };
+}
+function hasDefaultLegacyMigrationShape(policy) {
+  if (policy.version !== 2) return false;
+  if (policy.criteria.length === 0 && policy.validators.length === 0) return true;
+  if (policy.validators.length !== 1) return false;
+  const validator = policy.validators[0];
+  return validator.type === "rubric_agent" && validator.id === "rubric-agent" && validator.label === "Rubric review" && validator.scoreScale.min === 0 && validator.scoreScale.max === 1 && validator.passScore === 1 && validator.evidenceRequired === true && validator.severity === "must" && sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id));
+}
+function sameStringSet(left, right) {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
 }
 function hasOpenWorkflowSessions(context) {
   return context.pendingSessionIds.length > 0 || context.taskRuns.some((taskRun) => taskRun.status === "running" || taskRun.status === "suspended");
@@ -24361,6 +25544,26 @@ function normalizeFormalContractInput(input, id) {
     ...hasProjectBinding ? { projectBinding: normalizedProjectBinding } : {}
   };
 }
+function compileContractWithVerificationInputKind(input, timestamp) {
+  return withVerificationInputKind(compileContract(input, timestamp), verificationInputKind(input.verification));
+}
+function verificationInputKind(verification) {
+  const existing = verificationInputKindMarker(verification);
+  if (existing === "legacy" || existing === "v2") return existing;
+  return "version" in verification && verification.version === 2 ? "v2" : "legacy";
+}
+function verificationInputKindMarker(verification) {
+  return verification[VERIFICATION_INPUT_KIND_FIELD];
+}
+function withVerificationInputKind(contract, inputKind) {
+  return {
+    ...contract,
+    verification: {
+      ...contract.verification,
+      [VERIFICATION_INPUT_KIND_FIELD]: inputKind
+    }
+  };
+}
 function applyContractPatch(baseContract, patch) {
   if (patch.script) {
     return {
@@ -24407,7 +25610,7 @@ function formalContractToLoop(contract) {
     intent: contract.intent ?? contract.goal,
     trigger: contract.trigger,
     verification: {
-      checks: contract.verification.rubrics.map((rubric) => rubric.requirement)
+      checks: verificationRequirementChecks(contract.verification)
     },
     status: contract.status,
     codexProjectId: contract.projectBinding?.codexProjectId,
@@ -24417,6 +25620,20 @@ function formalContractToLoop(contract) {
     updatedAt: contract.updatedAt
   };
 }
+function verificationRequirementChecks(verification) {
+  const legacy = verification;
+  if (legacy.rubrics) {
+    return legacy.rubrics.map((rubric) => rubric.requirement);
+  }
+  return verification.criteria.map((criterion) => criterion.description);
+}
+function formatVerificationCriteria(verification) {
+  const legacy = verification;
+  if (legacy.rubrics) {
+    return legacy.rubrics.map((rubric) => `- [${rubric.severity}] ${rubric.label}: ${rubric.requirement}`).join("\n");
+  }
+  return verification.criteria.map((criterion) => `- [${criterion.severity}] ${criterion.label}: ${criterion.description}`).join("\n");
+}
 function verificationDecisionToResultStatus(status) {
   if (status === "needs_human") {
     return "skipped";
@@ -24425,13 +25642,20 @@ function verificationDecisionToResultStatus(status) {
 }
 function verificationDecisionChecksToResults(contract, decision) {
   return decision.checks.map((check2) => {
-    const rubric = contract.verification.rubrics.find((candidate) => candidate.id === check2.rubricId);
+    const rubric = verificationCriterionLabel(contract.verification, check2.rubricId);
     return {
-      name: rubric?.label ?? check2.rubricId,
+      name: rubric ?? check2.rubricId,
       status: verificationDecisionToResultStatus(check2.status),
       output: check2.evidence
     };
   });
+}
+function verificationCriterionLabel(verification, criterionId) {
+  const legacy = verification;
+  if (legacy.rubrics) {
+    return legacy.rubrics.find((candidate) => candidate.id === criterionId)?.label;
+  }
+  return verification.criteria.find((candidate) => candidate.id === criterionId)?.label;
 }
 function isCompletedCodexSession(value) {
   if (!value || typeof value !== "object") return false;
@@ -24553,6 +25777,28 @@ function findWorkflowContextForSessionResult(state, runId, attemptId, input) {
   }
   return (attemptId ? contexts.find((context) => context.attemptId === attemptId) : void 0) ?? contexts.at(-1);
 }
+function findWorkflowContextForValidatorResult(state, runId, input) {
+  const contexts = state.workflowContexts.filter((context2) => context2.runId === runId);
+  if (input.workflowContextId) {
+    const context2 = contexts.find((candidate) => candidate.id === input.workflowContextId);
+    if (!context2) {
+      throw new Error(`Workflow context does not belong to run: ${input.workflowContextId}`);
+    }
+    return context2;
+  }
+  if (input.attemptId) {
+    const context2 = contexts.find((candidate) => candidate.attemptId === input.attemptId);
+    if (!context2) {
+      throw new Error(`Workflow context not found for attempt: ${input.attemptId}`);
+    }
+    return context2;
+  }
+  const context = contexts.at(-1);
+  if (!context) {
+    throw new Error(`Workflow context not found for run: ${runId}`);
+  }
+  return context;
+}
 function completeWorkflowContextFromSessionResult(context, input, timestamp, options = {}) {
   const finalize = options.finalize ?? true;
   const targetTaskRun = context.taskRuns.find((taskRun) => matchesWorkflowTaskRun(taskRun, input)) ?? (input.attemptId ? context.taskRuns.find((taskRun) => taskRun.attemptId === input.attemptId) : void 0) ?? context.taskRuns.at(-1);
@@ -24615,6 +25861,53 @@ function partiallyMatchesWorkflowTaskRun(taskRun, input) {
   if (input.sessionId && taskRun.sessionId === input.sessionId) return true;
   if (input.stepId && taskRun.stepId === input.stepId) return true;
   return false;
+}
+function normalizeRecordedRubricAgentInput(input) {
+  const criteriaEvidence = input.criteriaResults?.map((result) => result.evidence).filter((evidence) => Boolean(evidence?.trim()));
+  const criteriaScores = input.criteriaResults?.map((result) => result.score).filter((score) => typeof score === "number" && Number.isFinite(score));
+  return {
+    status: input.status,
+    score: input.score ?? criteriaScores?.[0],
+    evidence: input.evidence ?? criteriaEvidence?.join("\n"),
+    summary: input.summary,
+    output: input.output ?? {
+      criteriaResults: input.criteriaResults
+    }
+  };
+}
+function pendingVerificationResultV2(id, runId, attemptId, verification, timestamp) {
+  const decision = {
+    status: "needs_human",
+    summary: `Waiting for validator results: ${verification.pendingValidatorIds.join(", ")}`,
+    failedValidatorIds: [],
+    needsHumanValidatorIds: verification.pendingValidatorIds,
+    failedCriterionIds: [],
+    uncoveredMustCriterionIds: [],
+    warnings: [],
+    humanQuestion: `Waiting for validator results: ${verification.pendingValidatorIds.join(", ")}`
+  };
+  return {
+    id,
+    version: 2,
+    runId,
+    attemptId,
+    status: "needs_human",
+    summary: decision.summary,
+    checks: [],
+    validatorResults: verification.validatorResults,
+    decision,
+    humanQuestion: decision.humanQuestion,
+    createdAt: timestamp
+  };
+}
+function isVerificationResultV22(result) {
+  return result !== null && typeof result === "object" && "version" in result && result.version === 2;
+}
+function repairReasonForV2Result(result) {
+  return [
+    `Failed validators: ${result.decision.failedValidatorIds.join(", ")}`,
+    `failed criteria: ${result.decision.failedCriterionIds.join(", ")}.`
+  ].join("; ") + ` ${result.decision.repairInstructions ?? result.summary}`;
 }
 function engineEventToMessage(event) {
   if (event.type === "agent_started") {
@@ -25168,7 +26461,9 @@ function buildNewLoopSessionPrompt(project) {
     "- loop \u76EE\u6807\u548C\u89E6\u53D1\u65B9\u5F0F",
     "- \u6240\u5C5E Codex \u9879\u76EE",
     "- workflow steps\uFF0C\u6BCF\u4E2A Codex task \u7684 label\u3001prompt\u3001\u53EF\u9009 subagent \u914D\u7F6E",
-    "- verifier rubrics\uFF0C\u5305\u62EC must/should \u7EA7\u522B\u8981\u6C42",
+    "- verification.version: 2\uFF0C\u5305\u542B criteria\u3001validators\u3001decision",
+    "- validator types: command / score / rubric_agent",
+    "- workflow task session \u4E0D\u80FD\u628A\u81EA\u5DF1\u7684 status \u5F53\u6700\u7EC8\u9A8C\u8BC1\uFF1B\u6700\u7EC8\u72B6\u6001\u7531 verification validators \u51B3\u5B9A\u3002",
     "- repair policy\uFF1A\u4E0D\u901A\u8FC7\u65F6\u5982\u4F55\u4FEE\u590D\u548C\u91CD\u8BD5",
     "- stop policy\uFF1A\u4F55\u65F6\u505C\u6B62",
     "- \u7528\u6237\u6700\u7EC8\u60F3\u770B\u7684\u8F93\u51FA\u5F62\u5F0F",
@@ -25176,11 +26471,13 @@ function buildNewLoopSessionPrompt(project) {
     "Contract \u5E94\u81F3\u5C11\u8868\u8FBE\u8FD9\u4E9B\u7ED3\u6784\uFF1A",
     "- title / goal / intent",
     '- body.steps\uFF1A\u4F18\u5148\u7528 task(runtime: "codex") / phase / parallel \u7EC4\u7EC7\u5B9E\u9645\u5DE5\u4F5C\u6D41\uFF1Bagent \u4EC5\u4F5C\u4E3A\u65E7 contract \u517C\u5BB9 spelling',
-    "- verification.rubrics\uFF1A\u7528\u4E8E\u68C0\u67E5 candidate result",
+    "- verification.version: 2\uFF0C\u5305\u542B criteria\u3001validators\u3001decision",
+    "- validator types: command / score / rubric_agent",
+    "- workflow task session \u4E0D\u80FD\u628A\u81EA\u5DF1\u7684 status \u5F53\u6700\u7EC8\u9A8C\u8BC1\uFF1B\u6700\u7EC8\u72B6\u6001\u7531 verification validators \u51B3\u5B9A\u3002",
     "- repairPolicy\u3001stopPolicy\u3001budgetUsd\u3001escalation",
     "- projectBinding\uFF1A\u7ED1\u5B9A\u6240\u9009 Codex \u9879\u76EE",
     "",
-    "\u5B8C\u6210\u540E\u8BF7\u7528\u4E2D\u6587\u7B80\u77ED\u8FD4\u56DE\uFF1Aloop id\u3001\u9879\u76EE\u540D\u3001workflow tasks\u3001verifier rubrics\u3001repair/stop \u7B56\u7565\uFF0C\u4EE5\u53CA\u4E0B\u4E00\u6B65\u662F\u5426\u8981\u7ACB\u5373\u542F\u52A8\u4E00\u6B21 run\u3002"
+    "\u5B8C\u6210\u540E\u8BF7\u7528\u4E2D\u6587\u7B80\u77ED\u8FD4\u56DE\uFF1Aloop id\u3001\u9879\u76EE\u540D\u3001workflow tasks\u3001verification criteria and validators\u3001repair/stop \u7B56\u7565\uFF0C\u4EE5\u53CA\u4E0B\u4E00\u6B65\u662F\u5426\u8981\u7ACB\u5373\u542F\u52A8\u4E00\u6B21 run\u3002"
   ].join("\n");
 }
 function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow, profilePreflight) {
@@ -25190,7 +26487,8 @@ function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow, 
     "Workflow runtime / \u5DE5\u4F5C\u6D41\u8FD0\u884C\u65F6\uFF1A",
     `Contract id: ${contract.id}`,
     "- \u4F7F\u7528\u672C\u5730 DittosLoop workflow runtime \u6267\u884C\u8FD9\u4E2A contract\uFF0C\u4E0D\u8981\u624B\u52A8\u91CD\u5199\u6216\u7ED5\u8FC7\u5DE5\u4F5C\u6D41\u3002",
-    "- \u6309\u5DF2\u7F16\u8BD1\u7684 Workflow steps \u6267\u884C\uFF0C\u518D\u7528 contract rubrics \u9A8C\u8BC1 candidate result\u3002",
+    "- \u6309\u5DF2\u7F16\u8BD1\u7684 Workflow steps \u6267\u884C\uFF0C\u518D\u7528 verification criteria and validators \u9A8C\u8BC1 candidate result\u3002",
+    "- workflow task session \u4E0D\u80FD\u628A\u81EA\u5DF1\u7684 status \u5F53\u6700\u7EC8\u9A8C\u8BC1\uFF1B\u6700\u7EC8\u72B6\u6001\u7531 verification validators \u51B3\u5B9A\u3002",
     "- \u5982\u679C\u9A8C\u8BC1\u5931\u8D25\u4E14\u5141\u8BB8\u4FEE\u590D\uFF0C\u8BF7\u751F\u6210 candidate workflow draft\uFF0C\u5E76\u901A\u8FC7 runtime \u91CD\u8BD5\u3002",
     "- \u4E0D\u8981\u8986\u76D6\u5F53\u524D active workflow contract\uFF1Bworkflow \u6539\u52A8\u53EA\u80FD\u4F5C\u4E3A\u5019\u9009\u4FEE\u8BA2\uFF0C\u7B49\u5F85\u660E\u786E\u91C7\u7EB3\u3002",
     `- Repair policy: ${contract.repairPolicy.strategy}\uFF0C\u6700\u591A\u5C1D\u8BD5 ${contract.repairPolicy.maxAttempts} \u6B21\u3002`,
@@ -25204,8 +26502,8 @@ function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow, 
     "Agent profiles / \u4EE3\u7406\u753B\u50CF\uFF1A",
     formatAgentProfiles(contract, profilePreflight),
     "",
-    "Verifier rubrics / \u9A8C\u8BC1\u89C4\u5219\uFF1A",
-    contract.verification.rubrics.map((rubric) => `- [${rubric.severity}] ${rubric.label}: ${rubric.requirement}`).join("\n")
+    "Verification criteria and validators / \u9A8C\u8BC1\u89C4\u5219\uFF1A",
+    formatVerificationCriteria(contract.verification)
   ].join("\n") : "";
   const loopMemory = memoryWindow ? [
     "",
@@ -25260,13 +26558,16 @@ function buildWorkflowLaunch(contract) {
       contractId: contract.id,
       goal: contract.goal,
       steps: flattenWorkflowLaunchSteps(contract.body.steps, effectiveProfilesByStep),
-      verification: contract.verification,
+      verification: workflowLaunchVerification(contract.verification),
       repairPolicy: contract.repairPolicy,
       stopPolicy: contract.stopPolicy,
       budgetUsd: contract.budgetUsd,
       escalation: contract.escalation
     }
   };
+}
+function workflowLaunchVerification(verification) {
+  return isLegacyCompatibleVerificationPolicy(verification) ? legacyVerificationFromMigratedV2(verification) : verification;
 }
 function flattenWorkflowLaunchSteps(steps, effectiveProfilesByStep, phaseId, depth = 0) {
   const items = [];
@@ -25388,6 +26689,8 @@ var eventKindSchema = external_exports.enum([
   "run_completed"
 ]);
 var verificationStatusSchema = external_exports.enum(["passed", "failed", "skipped"]);
+var verificationDecisionStatusSchema = external_exports.enum(["passed", "failed", "needs_human"]);
+var verificationSeveritySchema = external_exports.enum(["must", "should"]);
 var pausedReasonSchema = external_exports.enum(["failures", "budget", "escalation"]);
 var immediatePausedReasonSchema = external_exports.enum(["budget", "escalation"]);
 var subagentSchema = external_exports.object({
@@ -25474,6 +26777,75 @@ var scriptCallSchema = external_exports.object({
 var scriptSchema = external_exports.object({
   build: external_exports.array(scriptCallSchema).min(1)
 });
+var verificationCriterionSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  label: external_exports.string().min(1),
+  description: external_exports.string().min(1),
+  severity: verificationSeveritySchema
+});
+var verificationDecisionPolicySchema = external_exports.object({
+  requireAllMustCriteriaCovered: external_exports.boolean(),
+  failOnMustValidatorFailure: external_exports.boolean(),
+  failOnShouldValidatorFailure: external_exports.boolean(),
+  requireEvidenceForAgentScores: external_exports.boolean()
+});
+var commandValidatorSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  type: external_exports.literal("command"),
+  label: external_exports.string().min(1),
+  command: external_exports.string().min(1),
+  args: external_exports.array(external_exports.string()).optional(),
+  cwd: external_exports.union([
+    external_exports.literal("project"),
+    external_exports.literal("contract"),
+    external_exports.object({ relativeToProject: external_exports.string().min(1) })
+  ]).optional(),
+  timeoutMs: external_exports.number().int().positive().optional(),
+  criteriaIds: external_exports.array(external_exports.string().min(1)).optional(),
+  severity: verificationSeveritySchema,
+  parse: external_exports.object({ kind: external_exports.literal("none") })
+});
+var scoreSourceSchema = external_exports.discriminatedUnion("type", [
+  external_exports.object({ type: external_exports.literal("workflow_result"), path: external_exports.string().min(1) }),
+  external_exports.object({ type: external_exports.literal("artifact"), artifactId: external_exports.string().min(1), path: external_exports.string().min(1) }),
+  external_exports.object({ type: external_exports.literal("validator_output"), validatorId: external_exports.string().min(1), path: external_exports.string().min(1) })
+]);
+var scoreValidatorSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  type: external_exports.literal("score"),
+  label: external_exports.string().min(1),
+  metric: external_exports.string().min(1),
+  source: scoreSourceSchema,
+  operator: external_exports.enum([">=", ">", "<=", "<", "==", "!="]),
+  threshold: external_exports.number().finite(),
+  criteriaIds: external_exports.array(external_exports.string().min(1)).optional(),
+  severity: verificationSeveritySchema
+});
+var rubricAgentValidatorSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  type: external_exports.literal("rubric_agent"),
+  label: external_exports.string().min(1),
+  criteriaIds: external_exports.array(external_exports.string().min(1)).min(1),
+  scoreScale: external_exports.object({
+    min: external_exports.number().finite(),
+    max: external_exports.number().finite()
+  }),
+  passScore: external_exports.number().finite(),
+  evidenceRequired: external_exports.boolean(),
+  severity: verificationSeveritySchema
+});
+var verificationValidatorSchema = external_exports.discriminatedUnion("type", [
+  commandValidatorSchema,
+  scoreValidatorSchema,
+  rubricAgentValidatorSchema
+]);
+var verificationV2Schema = external_exports.object({
+  version: external_exports.literal(2),
+  mode: external_exports.enum(["after_workflow", "after_each_step"]),
+  criteria: external_exports.array(verificationCriterionSchema).min(1),
+  validators: external_exports.array(verificationValidatorSchema).min(1),
+  decision: verificationDecisionPolicySchema
+});
 var createLoopContractObjectSchema = external_exports.object({
   id: external_exports.string().min(1).optional(),
   title: external_exports.string().min(1),
@@ -25481,15 +26853,7 @@ var createLoopContractObjectSchema = external_exports.object({
   intent: external_exports.string().optional(),
   body: external_exports.object({ steps: external_exports.array(stepSchema).min(1) }).optional(),
   script: scriptSchema.optional(),
-  verification: external_exports.object({
-    mode: external_exports.enum(["after_workflow", "after_each_agent"]),
-    rubrics: external_exports.array(external_exports.object({
-      id: external_exports.string().min(1),
-      label: external_exports.string().min(1),
-      requirement: external_exports.string().min(1),
-      severity: external_exports.enum(["must", "should"])
-    }))
-  }),
+  verification: verificationV2Schema,
   repairPolicy: external_exports.object({
     maxAttempts: external_exports.number().int().nonnegative(),
     strategy: external_exports.enum(["repair_then_retry", "ask_human", "fail_run"])
@@ -25619,6 +26983,31 @@ var recordVerificationSchema = external_exports.object({
   summary: external_exports.string().min(1),
   checks: external_exports.array(verificationCheckSchema).optional(),
   repair: external_exports.boolean().optional()
+});
+var validatorCriteriaResultSchema = external_exports.object({
+  criterionId: external_exports.string().min(1),
+  status: verificationDecisionStatusSchema,
+  score: external_exports.number().finite().optional(),
+  maxScore: external_exports.number().finite().optional(),
+  evidence: external_exports.string().optional()
+});
+var validatorResultInputSchema = external_exports.object({
+  type: external_exports.literal("rubric_agent"),
+  status: verificationDecisionStatusSchema.optional(),
+  score: external_exports.number().finite().optional(),
+  evidence: external_exports.string().optional(),
+  summary: external_exports.string().optional(),
+  output: external_exports.unknown().optional(),
+  criteriaResults: external_exports.array(validatorCriteriaResultSchema).optional()
+});
+var recordValidatorResultSchema = external_exports.object({
+  runId: external_exports.string().min(1),
+  workflowContextId: external_exports.string().min(1),
+  attemptId: external_exports.string().min(1),
+  sessionId: external_exports.string().min(1).optional(),
+  validatorId: external_exports.string().min(1),
+  idempotencyKey: external_exports.string().min(1).optional(),
+  result: validatorResultInputSchema
 });
 var recordHumanRequestSchema = external_exports.object({
   runId: external_exports.string().min(1),
@@ -25750,6 +27139,17 @@ function createToolHandlers(service) {
         humanQuestion: args.humanQuestion
       });
       return toToolResult(await toWorkflowToolResponse(service, run));
+    },
+    record_validator_result: async (input) => {
+      const args = recordValidatorResultSchema.parse(input);
+      return toToolResult(await service.recordValidatorResult(args.runId, {
+        workflowContextId: args.workflowContextId,
+        attemptId: args.attemptId,
+        sessionId: args.sessionId,
+        validatorId: args.validatorId,
+        idempotencyKey: args.idempotencyKey,
+        result: args.result
+      }));
     },
     open_codex_session: async (input) => {
       const args = openCodexSessionSchema.parse(input);
@@ -25902,7 +27302,7 @@ var toolDefinitions = [
   {
     name: "create_loop_contract",
     title: "Create formal loop contract",
-    description: "Create a structured Live Loop contract with workflow body and verification rubrics.",
+    description: "Create a structured Live Loop contract with workflow body, agent profiles, and verification v2 criteria, validators, and decision policy.",
     schema: createLoopContractObjectSchema
   },
   {
@@ -25970,6 +27370,12 @@ var toolDefinitions = [
     title: "Record session result",
     description: "Write a targeted Codex session result back to the workflow runner; complete, suspend, or resume the workflow as appropriate.",
     schema: recordSessionResultSchema
+  },
+  {
+    name: "record_validator_result",
+    title: "Record validator result",
+    description: "Record the result of an asynchronous verification v2 validator.",
+    schema: recordValidatorResultSchema
   },
   {
     name: "open_codex_session",
@@ -26122,7 +27528,7 @@ var HostMediatedSessionBridge = class {
 
 // src/previewServer.ts
 import { createServer } from "node:http";
-import { spawn } from "node:child_process";
+import { spawn as spawn2 } from "node:child_process";
 import { readFile as readFile2 } from "node:fs/promises";
 import { extname, isAbsolute, join as join3, relative as relative2 } from "node:path";
 
@@ -26145,7 +27551,7 @@ function buildTimeline(detail, engineEvents = extractEngineEvents(detail)) {
     sections.push({ id: "workflow", title: "\u5DE5\u4F5C\u6D41", items: workflow2 });
   }
   const verificationEvents = engineEvents.map(verificationEventToTimelineItem).filter((item) => Boolean(item));
-  const verification = verificationEvents.length > 0 ? verificationEvents : detail.verificationResults.map(verificationToTimelineItem);
+  const verification = verificationEvents.length > 0 ? verificationEvents : detail.verificationResults.flatMap(verificationToTimelineItems);
   if (verification.length > 0) {
     sections.push({ id: "verification", title: "\u9A8C\u8BC1", items: verification });
   }
@@ -26207,7 +27613,19 @@ function verificationEventToTimelineItem(event) {
     return baseItem(event, "verification", "\u5F00\u59CB\u9A8C\u8BC1", "started");
   }
   if (event.type === "verification_done") {
+    if ("version" in event.decision && event.decision.version === 2) {
+      return baseItem(event, "verification", event.decision.decision.summary, event.decision.status, validatorResultsMessage(event.decision.validatorResults));
+    }
     return baseItem(event, "verification", event.decision.summary, event.decision.status, verificationChecksMessage(event.decision.checks));
+  }
+  if (event.type === "validator_started") {
+    return baseItem(event, "verification", `Validator ${event.validatorId} started`, "started");
+  }
+  if (event.type === "validator_done") {
+    return baseItem(event, "verification", event.result.label, event.result.status, event.result.evidence);
+  }
+  if (event.type === "verification_decided") {
+    return baseItem(event, "verification", `Verification ${event.decision.status}`, event.decision.status, event.decision.repairInstructions);
   }
   return void 0;
 }
@@ -26253,14 +27671,32 @@ function verificationChecksMessage(checks) {
 function humanizeCheckName(value) {
   return value.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
-function verificationToTimelineItem(result) {
-  return {
+function verificationToTimelineItems(result) {
+  if (isVerificationResultV23(result)) {
+    return [
+      ...result.validatorResults.map((validatorResult) => ({
+        kind: "verification",
+        label: validatorResult.label,
+        status: validatorResult.status,
+        createdAt: result.createdAt,
+        message: validatorResult.evidence
+      })),
+      {
+        kind: "verification",
+        label: result.decision.summary,
+        status: result.decision.status,
+        createdAt: result.createdAt,
+        message: validatorResultsMessage(result.validatorResults)
+      }
+    ];
+  }
+  return [{
     kind: "verification",
     label: result.summary,
     status: result.status,
     createdAt: result.createdAt,
-    message: result.checks.map((check2) => `${check2.name}: ${check2.status}`).join("\n") || void 0
-  };
+    message: result.checks.map((check2) => `${check2.name ?? check2.rubricId ?? "check"}: ${check2.status}`).join("\n") || void 0
+  }];
 }
 function repairItems(runStatus, results) {
   const failed = results.find((result) => result.status === "failed");
@@ -26279,6 +27715,13 @@ function isEngineEvent(value) {
   const event = value;
   return typeof event.type === "string" && typeof event.runId === "string" && typeof event.sequence === "number";
 }
+function validatorResultsMessage(results) {
+  if (!results.length) return void 0;
+  return results.map((result) => `${result.label}: ${result.status}${result.evidence ? ` - ${result.evidence}` : ""}`).join("\n");
+}
+function isVerificationResultV23(value) {
+  return "version" in value && value.version === 2;
+}
 
 // src/previewServer.ts
 var CONTENT_TYPES = {
@@ -26292,7 +27735,7 @@ async function startPreviewServer(options) {
   const port = options.port ?? 47888;
   const templatesFile = options.templatesFile ?? join3(options.staticDir, "..", "templates", "templates.json");
   const platform = options.platform ?? process.platform;
-  const spawnProcess = options.spawnProcess ?? spawn;
+  const spawnProcess = options.spawnProcess ?? spawn2;
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? host}`);
@@ -26694,9 +28137,9 @@ function normalizeCodexProject(value) {
   const record2 = value;
   const id = typeof record2.id === "string" ? record2.id : void 0;
   const name = typeof record2.name === "string" ? record2.name : typeof record2.label === "string" ? record2.label : void 0;
-  const path = typeof record2.path === "string" ? record2.path : void 0;
-  if (!id || !name || !path) return null;
-  return { id, name, path };
+  const path3 = typeof record2.path === "string" ? record2.path : void 0;
+  if (!id || !name || !path3) return null;
+  return { id, name, path: path3 };
 }
 
 // src/store.ts

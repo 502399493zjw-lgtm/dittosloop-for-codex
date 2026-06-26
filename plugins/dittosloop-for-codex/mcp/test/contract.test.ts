@@ -11,6 +11,13 @@ import { validateContract } from "../src/contract/validateContract.js";
 
 const fixedTime = "2026-06-24T00:00:00.000Z";
 
+function passingLegacyVerification() {
+  return {
+    mode: "after_workflow" as const,
+    rubrics: [{ id: "done", label: "Done", requirement: "The workflow result satisfies the loop goal.", severity: "must" as const }]
+  };
+}
+
 describe("formal loop contracts", () => {
   test("compiles defaults for a one-step manual contract", () => {
     const contract = compileContract(
@@ -39,6 +46,10 @@ describe("formal loop contracts", () => {
       status: "active",
       createdAt: fixedTime,
       updatedAt: fixedTime
+    });
+    expect(contract.verification).toMatchObject({
+      version: 2,
+      validators: [{ type: "rubric_agent" }]
     });
   });
 
@@ -78,9 +89,14 @@ describe("formal loop contracts", () => {
     expect(migrated.body.steps).toEqual([
       { id: "legacy-agent", kind: "agent", label: "Run loop", prompt: "Keep project healthy" }
     ]);
-    expect(migrated.verification.rubrics).toEqual([
-      { id: "check-1", label: "npm test", requirement: "npm test", severity: "must" }
-    ]);
+    expect(migrated.verification).toMatchObject({
+      version: 2,
+      mode: "after_workflow",
+      criteria: [],
+      validators: [
+        { id: "check-1-command", type: "command", command: "npm", args: ["test"], severity: "must" }
+      ]
+    });
   });
 
   test("accepts structured Codex subagent specs on task steps", () => {
@@ -114,7 +130,10 @@ describe("formal loop contracts", () => {
             }
           ]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification: {
+          mode: "after_workflow",
+          rubrics: [{ id: "source", label: "Source", requirement: "Uses official sources", severity: "must" }]
+        }
       },
       fixedTime
     );
@@ -257,6 +276,33 @@ describe("formal loop contracts", () => {
   });
 
   test("accepts pipeline phases and human task nodes", () => {
+    const verification = {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "done", label: "Done", description: "The workflow completes.", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "command-pass",
+          type: "command",
+          label: "Command pass",
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: "contract",
+          criteriaIds: ["done"],
+          severity: "must",
+          parse: { kind: "none" }
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    } as const;
+
     const contract = compileContract(
       {
         id: "loop_1",
@@ -284,7 +330,7 @@ describe("formal loop contracts", () => {
             }
           ]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification
       },
       fixedTime
     );
@@ -378,7 +424,7 @@ describe("formal loop contracts", () => {
             }
           ]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification: passingLegacyVerification()
       },
       fixedTime
     );
@@ -464,7 +510,7 @@ describe("formal loop contracts", () => {
             }
           ]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification: passingLegacyVerification()
       },
       fixedTime
     );
@@ -512,7 +558,7 @@ describe("formal loop contracts", () => {
             }
           ]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification: passingLegacyVerification()
       },
       fixedTime
     );
@@ -543,7 +589,7 @@ describe("formal loop contracts", () => {
             }
           ]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification: passingLegacyVerification()
       },
       fixedTime
     );
@@ -563,7 +609,7 @@ describe("formal loop contracts", () => {
         body: {
           steps: [{ id: "research", kind: "agent", label: "Research", prompt: "Scan." }]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification: passingLegacyVerification()
       },
       fixedTime
     );
@@ -591,7 +637,7 @@ describe("formal loop contracts", () => {
         body: {
           steps: [{ id: "research", kind: "agent", label: "Research", prompt: "Scan." }]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification: passingLegacyVerification()
       },
       fixedTime
     );
@@ -615,7 +661,7 @@ describe("formal loop contracts", () => {
         body: {
           steps: [{ id: "review", kind: "agent", label: "Review", prompt: "Review." }]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification: passingLegacyVerification()
       },
       fixedTime
     );
@@ -623,5 +669,300 @@ describe("formal loop contracts", () => {
     expect(() => validateContract(invalidSkills)).toThrow(/requiredSkills|skill/i);
     expect(() => validateContract(invalidToolsAndPermissions)).toThrow(/allowedTools/i);
     expect(() => validateContract(invalidToolsAndPermissions)).toThrow(/permissions/i);
+  });
+
+  test("accepts verification v2 criteria validators and decision policy", () => {
+    const contract = compileContract(
+      {
+        id: "loop_v2",
+        title: "V2 loop",
+        goal: "Run real verification",
+        body: {
+          steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan project" }]
+        },
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "tests-pass", label: "Tests pass", description: "The repository test command passes.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "npm-test",
+              type: "command",
+              label: "npm test",
+              command: "npm",
+              args: ["test"],
+              cwd: "project",
+              timeoutMs: 120000,
+              criteriaIds: ["tests-pass"],
+              severity: "must",
+              parse: { kind: "none" }
+            }
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true
+          }
+        }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+    expect(contract.verification.version).toBe(2);
+  });
+
+  test("accepts score validators with workflow, artifact, and validator-output sources", () => {
+    const contract = compileContract(
+      {
+        id: "loop_score",
+        title: "Score loop",
+        goal: "Validate structured numeric thresholds",
+        body: {
+          steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan project" }]
+        },
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "coverage", label: "Coverage", description: "Coverage stays high enough.", severity: "must" },
+            { id: "artifact-count", label: "Artifact count", description: "Enough artifacts were produced.", severity: "should" },
+            { id: "review-score", label: "Review score", description: "Review score meets the bar.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "coverage-threshold",
+              type: "score",
+              label: "Coverage threshold",
+              metric: "coverage.lines",
+              source: { type: "workflow_result", path: "coverage.lines" },
+              operator: ">=",
+              threshold: 0.8,
+              criteriaIds: ["coverage"],
+              severity: "must"
+            },
+            {
+              id: "artifact-threshold",
+              type: "score",
+              label: "Artifact threshold",
+              metric: "artifacts.count",
+              source: { type: "artifact", artifactId: "report-json", path: "summary.count" },
+              operator: ">=",
+              threshold: 3,
+              criteriaIds: ["artifact-count"],
+              severity: "should"
+            },
+            {
+              id: "review-threshold",
+              type: "score",
+              label: "Review threshold",
+              metric: "review.average",
+              source: { type: "validator_output", validatorId: "quality-review", path: "averageScore" },
+              operator: ">=",
+              threshold: 4,
+              criteriaIds: ["review-score"],
+              severity: "must"
+            },
+            {
+              id: "quality-review",
+              type: "rubric_agent",
+              label: "Quality review",
+              criteriaIds: ["review-score"],
+              scoreScale: { min: 0, max: 5 },
+              passScore: 4,
+              evidenceRequired: true,
+              severity: "must"
+            }
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true
+          }
+        }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+  });
+
+  test("rejects invalid score validator sources, operators, and thresholds", () => {
+    const invalidScoreValidators = compileContract(
+      {
+        id: "loop_bad_score",
+        title: "Bad score loop",
+        goal: "Reject invalid score validator contracts",
+        body: {
+          steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan project" }]
+        },
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "coverage", label: "Coverage", description: "Coverage stays high enough.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "invalid-workflow-score",
+              type: "score",
+              label: "Invalid workflow score",
+              metric: "coverage.lines",
+              source: { type: "workflow_result", path: "" },
+              operator: "approximately",
+              threshold: Number.POSITIVE_INFINITY,
+              criteriaIds: ["coverage"],
+              severity: "must"
+            } as any,
+            {
+              id: "invalid-artifact-score",
+              type: "score",
+              label: "Invalid artifact score",
+              metric: "artifacts.count",
+              source: { type: "artifact", artifactId: "", path: "summary.count" },
+              operator: ">=",
+              threshold: 3,
+              criteriaIds: ["coverage"],
+              severity: "should"
+            },
+            {
+              id: "invalid-validator-output-score",
+              type: "score",
+              label: "Invalid validator output score",
+              metric: "review.average",
+              source: { type: "validator_output", validatorId: "", path: "averageScore" },
+              operator: ">=",
+              threshold: 4,
+              criteriaIds: ["coverage"],
+              severity: "must"
+            }
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true
+          }
+        }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(invalidScoreValidators)).toThrow(/score validator source/i);
+    expect(() => validateContract(invalidScoreValidators)).toThrow(/score validator operator/i);
+    expect(() => validateContract(invalidScoreValidators)).toThrow(/score validator threshold must be finite/i);
+  });
+
+  test("rejects command validator cwd traversal outside the project", () => {
+    const traversalContract = compileContract(
+      {
+        id: "loop_bad_cwd",
+        title: "Bad cwd loop",
+        goal: "Reject project traversal",
+        body: {
+          steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan project" }]
+        },
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "tests-pass", label: "Tests pass", description: "The repository test command passes.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "npm-test",
+              type: "command",
+              label: "npm test",
+              command: "npm",
+              args: ["test"],
+              cwd: { relativeToProject: "../.." },
+              timeoutMs: 120000,
+              criteriaIds: ["tests-pass"],
+              severity: "must",
+              parse: { kind: "none" }
+            }
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true
+          }
+        }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(traversalContract)).toThrow(/command validator cwd must stay within the project/i);
+  });
+
+  test("rejects invalid verification v2 validator references and duplicate ids", () => {
+    const duplicateCriteria = compileContract(
+      {
+        id: "loop_bad",
+        title: "Bad v2 loop",
+        goal: "Reject bad verification",
+        body: { steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan" }] },
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "quality", label: "Quality", description: "Meets quality bar.", severity: "must" },
+            { id: "quality", label: "Quality again", description: "Duplicate id.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "agent-review",
+              type: "rubric_agent",
+              label: "Review",
+              criteriaIds: ["missing"],
+              scoreScale: { min: 0, max: 1 },
+              passScore: 1,
+              evidenceRequired: true,
+              severity: "must"
+            }
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true
+          }
+        }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(duplicateCriteria)).toThrow(/criterion id must be unique/i);
+    expect(() => validateContract(duplicateCriteria)).toThrow(/missing criterion/i);
+  });
+
+  test("migrates legacy verification checks into v2 command and rubric-agent validators", () => {
+    const migrated = migrateLegacyContract({
+      id: "loop_legacy",
+      title: "Legacy",
+      intent: "Keep project healthy",
+      trigger: { mode: "manual" },
+      verification: { checks: ["npm test", "Use official sources"] },
+      status: "active",
+      createdAt: fixedTime,
+      updatedAt: fixedTime
+    });
+
+    expect(migrated.verification).toMatchObject({
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "check-2", label: "Use official sources", description: "Use official sources", severity: "must" }
+      ],
+      validators: [
+        { id: "check-1-command", type: "command", command: "npm", args: ["test"], severity: "must" },
+        { id: "legacy-rubric-agent", type: "rubric_agent", criteriaIds: ["check-2"], evidenceRequired: true }
+      ]
+    });
   });
 });
