@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, expect, test } from "vitest";
 
+import { defaultSkillAvailabilityProvider } from "../src/codex/skillPreflight.js";
 import { LoopService } from "../src/service.js";
 import { LoopStore } from "../src/store.js";
 import type { IdPrefix } from "../src/id.js";
@@ -70,6 +71,27 @@ async function createServiceWithSkillAvailability(
       check: checker
     }
   } as any);
+}
+
+async function createServiceWithStore(
+  store: LoopStore,
+  options: {
+    skillAvailabilityProvider?: {
+      check: (requirement: { id: string }, profile: { id: string; label: string; stepId: string }) => Promise<{
+        status: "passed" | "missing" | "unknown";
+        message: string;
+        locations?: string[];
+      }>;
+    };
+  } = {}
+) {
+  return new LoopService({
+    store,
+    now: () => fixedTime,
+    createId: (prefix) => `${prefix}_1`,
+    previewBaseUrl: "http://127.0.0.1:47888",
+    skillAvailabilityProvider: options.skillAvailabilityProvider
+  });
 }
 
 async function createFormalLoop(
@@ -3693,6 +3715,56 @@ test("profile preflight allows starting when required skills are available", asy
   });
 });
 
+test("profile preflight finds plugin skills stored directly under the plugin cache root", async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), "dittosloop-codex-home-"));
+  tempDirs.push(codexHome);
+  const skillPath = join(
+    codexHome,
+    "plugins",
+    "cache",
+    "demo-plugin",
+    "skills",
+    "research-pack",
+    "SKILL.md"
+  );
+  await mkdir(join(skillPath, ".."), { recursive: true });
+  await writeFile(skillPath, "# Research Pack\n", "utf8");
+
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+
+  try {
+    const result = await defaultSkillAvailabilityProvider.check(
+      {
+        id: "research-pack",
+        source: "plugin",
+        pluginId: "demo-plugin"
+      },
+      {
+        id: "researcher",
+        label: "Researcher",
+        role: "Research specialist",
+        source: "declared",
+        stepId: "research",
+        requiredSkills: [],
+        advisorySkills: []
+      }
+    );
+
+    expect(result).toEqual({
+      status: "passed",
+      message: "Found research-pack",
+      locations: [skillPath]
+    });
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+  }
+});
+
 test("profile preflight blocks required missing skills by default", async () => {
   const service = await createServiceWithSkillAvailability(async (requirement) => ({
     status: "missing",
@@ -3874,6 +3946,115 @@ test("profile preflight allows degraded start when required skills cannot be con
     warnings: [expect.stringMatching(/nice-to-have/)],
     blockers: [expect.stringMatching(/repo-memory/)]
   });
+});
+
+test("profile preflight keeps the launched run on the same contract snapshot used for preflight", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const store = new LoopStore(dir);
+  const service = await createServiceWithStore(store, {
+    skillAvailabilityProvider: {
+      check: async (requirement) => ({
+        status: "passed",
+        message: `${requirement.id} is installed`,
+        locations: [`/mock/.codex/skills/${requirement.id}/SKILL.md`]
+      })
+    }
+  });
+  const loop = await service.createLoopContract({
+    title: "Profile preflight snapshot",
+    goal: "Keep preflight and launch aligned",
+    agentProfiles: {
+      researcher: {
+        id: "researcher",
+        label: "Researcher",
+        role: "Research specialist",
+        requiredSkills: [{ id: "research-pack", source: "user" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "research",
+          kind: "agent",
+          label: "Research",
+          prompt: "Gather the relevant updates.",
+          agentProfileRef: "researcher"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Research completes", severity: "must" }]
+    }
+  });
+
+  const originalUpdateState = store.updateState.bind(store);
+  let driftInjected = false;
+  store.updateState = async (mutator) =>
+    originalUpdateState(async (state) => {
+      let nextState = state;
+      if (!driftInjected) {
+        driftInjected = true;
+        nextState = {
+          ...state,
+          formalContracts: state.formalContracts.map((contract) =>
+            contract.id === loop.id
+              ? {
+                  ...contract,
+                  agentProfiles: {
+                    writer: {
+                      id: "writer",
+                      label: "Writer",
+                      role: "Writer",
+                      requiredSkills: [{ id: "writer-pack", source: "user" }]
+                    }
+                  },
+                  body: {
+                    steps: [
+                      {
+                        id: "write",
+                        kind: "agent",
+                        label: "Write",
+                        prompt: "Write the final brief.",
+                        agentProfileRef: "writer"
+                      }
+                    ]
+                  }
+                }
+              : contract
+          )
+        };
+      }
+
+      return mutator(nextState);
+    });
+
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run research" });
+
+  expect(launch.run.codexSession?.profilePreflight).toMatchObject({
+    checks: [
+      expect.objectContaining({
+        profileId: "researcher",
+        stepId: "research",
+        skill: { id: "research-pack", source: "user" }
+      })
+    ]
+  });
+  expect(launch.launchRequest.workflowPlan?.steps).toEqual([
+    expect.objectContaining({
+      id: "research",
+      label: "Research",
+      prompt: "Gather the relevant updates."
+    })
+  ]);
+  expect(launch.run.codexSession?.subagents).toEqual([
+    expect.objectContaining({
+      stepId: "research",
+      role: "Research",
+      prompt: "Gather the relevant updates."
+    })
+  ]);
 });
 
 test("does not mark a Codex session ready without an openable thread URL", async () => {

@@ -192,7 +192,11 @@ async function findPluginSkillLocations(codexHome: string, pluginId: string, ski
     return [];
   }
 
-  const matches: string[] = [];
+  const matches = new Set<string>();
+  const directSkillPath = join(pluginRoot, "skills", skillId, "SKILL.md");
+  if (await pathExists(directSkillPath)) {
+    matches.add(directSkillPath);
+  }
   const queue = [pluginRoot];
 
   while (queue.length > 0) {
@@ -207,13 +211,13 @@ async function findPluginSkillLocations(codexHome: string, pluginId: string, ski
       const entryPath = join(current, entry.name);
       const candidate = join(entryPath, "skills", skillId, "SKILL.md");
       if (await pathExists(candidate)) {
-        matches.push(candidate);
+        matches.add(candidate);
       }
       queue.push(entryPath);
     }
   }
 
-  return matches;
+  return [...matches];
 }
 
 async function pathExists(path: string): Promise<boolean> {

@@ -694,9 +694,9 @@ export class LoopService {
     if (initialLoopState?.running) {
       throw new Error(`Loop is already running: ${loopId}`);
     }
-    const formalContract = initialState.formalContracts.find((contract) => contract.id === loopId);
-    const profilePreflight = formalContract
-      ? await runSkillProfilePreflight(formalContract, {
+    const launchContract = initialState.formalContracts.find((contract) => contract.id === loopId);
+    const profilePreflight = launchContract
+      ? await runSkillProfilePreflight(launchContract, {
           provider: this.options.skillAvailabilityProvider,
           allowDegradedProfiles: input.allowDegradedProfiles
         })
@@ -717,17 +717,16 @@ export class LoopService {
       }
 
       const goal = input.goal ?? `Run ${loop.title}`;
-      const formalContract = state.formalContracts.find((contract) => contract.id === loopId);
       const runId = this.nextId("run");
       const attemptId = this.nextId("attempt");
       const workflowContextId = this.nextId("workflow");
       const memoryWindow = loopMemoryWindow(state, loopId);
-      const prompt = buildCodexSessionPrompt(loop, goal, formalContract, {
+      const prompt = buildCodexSessionPrompt(loop, goal, launchContract, {
         runId,
         attemptId,
         workflowContextId
       }, memoryWindow);
-      const workflowLaunch = formalContract ? buildWorkflowLaunch(formalContract) : {};
+      const workflowLaunch = launchContract ? buildWorkflowLaunch(launchContract) : {};
       const attemptSummary = `Request a new Codex session for ${loop.title}`;
       const project = runProjectBinding(input, loop);
       const run: LoopRun = {
@@ -741,7 +740,7 @@ export class LoopService {
           mode: "new_session",
           status: "requested",
           ...project,
-          subagents: codexSessionSubagentsForContract(formalContract, prompt),
+          subagents: codexSessionSubagentsForContract(launchContract, prompt),
           ...(profilePreflight ? { profilePreflight } : {}),
           prompt
         },
@@ -759,7 +758,7 @@ export class LoopService {
         id: workflowContextId,
         run,
         attempt,
-        contract: formalContract,
+        contract: launchContract,
         timestamp
       });
 
