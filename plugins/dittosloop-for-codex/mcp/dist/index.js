@@ -22514,6 +22514,7 @@ var LoopService = class {
           projectLabel: session.projectLabel ?? run.codexSession?.projectLabel ?? run.projectLabel,
           projectPath: session.projectPath ?? run.codexSession?.projectPath ?? run.projectPath,
           subagents,
+          profilePreflight: run.codexSession?.profilePreflight,
           prompt: session.prompt ?? run.codexSession?.prompt ?? run.goal
         },
         updatedAt: timestamp
