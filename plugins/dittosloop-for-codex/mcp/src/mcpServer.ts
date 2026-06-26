@@ -73,11 +73,35 @@ const subagentSchema = z.object({
   context: z.record(z.unknown()).optional()
 });
 
+const skillRequirementSchema = z.object({
+  id: z.string().min(1),
+  source: z.enum(["plugin", "project", "user", "system"]).optional(),
+  pluginId: z.string().min(1).optional(),
+  version: z.string().min(1).optional()
+});
+
+const agentProfileSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  role: z.string().min(1),
+  instructions: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  workdir: z.string().min(1).optional(),
+  requiredSkills: z.array(skillRequirementSchema).optional(),
+  advisorySkills: z.array(skillRequirementSchema).optional(),
+  allowedTools: z.array(z.string().min(1)).optional(),
+  permissions: subagentSchema.shape.permissions.optional(),
+  env: z.record(z.string()).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  context: z.record(z.unknown()).optional()
+});
+
 const agentStepSchema = z.object({
   id: z.string().min(1),
   kind: z.literal("agent"),
   label: z.string().min(1),
   prompt: z.string().min(1),
+  agentProfileRef: z.string().min(1).optional(),
   verifierRef: z.string().optional(),
   sessionPolicy: z.literal("new").optional(),
   subagent: subagentSchema.optional()
@@ -89,6 +113,7 @@ const taskStepSchema = z.object({
   runtime: z.literal("codex"),
   label: z.string().min(1),
   prompt: z.string().min(1),
+  agentProfileRef: z.string().min(1).optional(),
   verifierRef: z.string().optional(),
   sessionPolicy: z.literal("new").optional(),
   outputSchema: z.record(z.unknown()).optional(),
@@ -146,6 +171,7 @@ const createLoopContractSchema = z.object({
   }).optional(),
   budgetUsd: z.number().positive().max(20).optional(),
   escalation: z.array(z.string().min(1)).optional(),
+  agentProfiles: z.record(agentProfileSchema).optional(),
   projectBinding: z.object({
     codexProjectId: z.string().optional(),
     projectLabel: z.string().optional(),
@@ -158,7 +184,8 @@ const startCodexSessionSchema = z.object({
   goal: z.string().optional(),
   codexProjectId: z.string().optional(),
   projectLabel: z.string().optional(),
-  projectPath: z.string().optional()
+  projectPath: z.string().optional(),
+  allowDegradedProfiles: z.boolean().optional()
 });
 
 const pauseLoopSchema = z.object({
@@ -343,7 +370,8 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
         goal: args.goal,
         codexProjectId: args.codexProjectId,
         projectLabel: args.projectLabel,
-        projectPath: args.projectPath
+        projectPath: args.projectPath,
+        allowDegradedProfiles: args.allowDegradedProfiles
       }));
     },
     execute_workflow_attempt: async (input) => {

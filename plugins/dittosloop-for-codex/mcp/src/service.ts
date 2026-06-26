@@ -95,6 +95,7 @@ export interface StartCodexSessionRunInput {
   codexProjectId?: string;
   projectLabel?: string;
   projectPath?: string;
+  allowDegradedProfiles?: boolean;
 }
 
 export interface OpenCodexSessionResult {

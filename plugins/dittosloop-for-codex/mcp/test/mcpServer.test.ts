@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import { createToolHandlers, registerDittosLoopTools } from "../src/mcpServer.js";
 import { LoopService } from "../src/service.js";
@@ -592,6 +592,81 @@ test("passes codex task subagent tools through the MCP workflow execution path",
   ]);
 });
 
+test("accepts agent profile fields through the MCP schema boundary", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Profile-aware workflow",
+    goal: "Accept profile references through MCP",
+    agentProfiles: {
+      researcher: {
+        id: "researcher",
+        label: "Researcher",
+        role: "Researcher",
+        instructions: "Use primary sources.",
+        model: "gpt-5.4-mini",
+        workdir: "/tmp/research",
+        requiredSkills: [{ id: "openai-docs", source: "plugin", pluginId: "openai", version: "1.0.0" }],
+        advisorySkills: [{ id: "brainstorming", source: "project" }],
+        allowedTools: ["web.search_query"],
+        permissions: { filesystem: "workspace-write", network: "enabled" },
+        env: { FOO: "bar" },
+        timeoutMs: 300000,
+        context: { topic: "agents" }
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "scan",
+          kind: "agent",
+          label: "Scan",
+          prompt: "Scan updates",
+          agentProfileRef: "researcher"
+        },
+        {
+          id: "write",
+          kind: "task",
+          runtime: "codex",
+          label: "Write",
+          prompt: "Write report",
+          agentProfileRef: "researcher"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow finishes", severity: "must" }]
+    }
+  }));
+
+  expect(contract).toMatchObject({
+    agentProfiles: {
+      researcher: {
+        id: "researcher",
+        label: "Researcher",
+        role: "Researcher",
+        instructions: "Use primary sources.",
+        model: "gpt-5.4-mini",
+        workdir: "/tmp/research",
+        requiredSkills: [{ id: "openai-docs", source: "plugin", pluginId: "openai", version: "1.0.0" }],
+        advisorySkills: [{ id: "brainstorming", source: "project" }],
+        allowedTools: ["web.search_query"],
+        permissions: { filesystem: "workspace-write", network: "enabled" },
+        env: { FOO: "bar" },
+        timeoutMs: 300000,
+        context: { topic: "agents" }
+      }
+    },
+    body: {
+      steps: [
+        { id: "scan", agentProfileRef: "researcher" },
+        { id: "write", agentProfileRef: "researcher" }
+      ]
+    }
+  });
+});
+
 test("accepts taskRunId-only precise session result writeback through MCP", async () => {
   const handlers = await createHandlers();
   const contract = readResult(await handlers.create_loop_contract({
@@ -644,6 +719,42 @@ test("accepts taskRunId-only precise session result writeback through MCP", asyn
       ]
     }
   ]);
+});
+
+test("passes allowDegradedProfiles into startCodexSessionRun", async () => {
+  const startCodexSessionRun = vi.fn(async () => ({
+    run: { id: "run_1" },
+    attempt: { id: "attempt_1" },
+    prompt: "Prompt",
+    launchRequest: {
+      runId: "run_1",
+      attemptId: "attempt_1",
+      workflowContextId: "workflow_1",
+      loopId: "loop_1",
+      title: "DittosLoop: Monitor",
+      prompt: "Prompt"
+    }
+  }));
+  const handlers = createToolHandlers({
+    startCodexSessionRun
+  } as unknown as LoopService);
+
+  await handlers.start_codex_session({
+    loopId: "loop_1",
+    goal: "Check today",
+    allowDegradedProfiles: true,
+    codexProjectId: "codex-project-1",
+    projectLabel: "Codex Project",
+    projectPath: "/tmp/project"
+  });
+
+  expect(startCodexSessionRun).toHaveBeenCalledWith("loop_1", {
+    goal: "Check today",
+    allowDegradedProfiles: true,
+    codexProjectId: "codex-project-1",
+    projectLabel: "Codex Project",
+    projectPath: "/tmp/project"
+  });
 });
 
 test("exposes workflow revision proposal, promotion, listing, and rejection as MCP content", async () => {
