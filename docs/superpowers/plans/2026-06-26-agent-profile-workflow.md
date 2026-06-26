@@ -182,7 +182,7 @@
 
 ## Task 3: Implement local conservative skill preflight
 
-- [ ] Task status
+- [x] Task status
 
   Files:
 
