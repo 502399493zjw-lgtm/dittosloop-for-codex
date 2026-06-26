@@ -6889,8 +6889,8 @@ var require_dist = __commonJS({
 });
 
 // src/index.ts
-import { homedir } from "node:os";
-import { dirname as dirname2, join as join5 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname2, join as join6 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
@@ -21125,6 +21125,278 @@ function compileContract(input, now = (/* @__PURE__ */ new Date()).toISOString()
   };
 }
 
+// src/contract/agentProfiles.ts
+function resolveEffectiveAgentProfile(contract, step) {
+  const requestedRef = step.agentProfileRef ?? step.subagent?.ref;
+  const declaredProfile = requestedRef ? contract.agentProfiles?.[requestedRef] : void 0;
+  if (step.agentProfileRef) {
+    if (!declaredProfile) {
+      return void 0;
+    }
+    return toEffectiveAgentProfile(step, declaredProfile, step.subagent, "declared", step.agentProfileRef);
+  }
+  if (declaredProfile) {
+    return toEffectiveAgentProfile(step, declaredProfile, step.subagent, "declared", requestedRef);
+  }
+  if (!step.subagent) {
+    return void 0;
+  }
+  return toEffectiveAgentProfile(step, void 0, step.subagent, "legacy-inline", requestedRef);
+}
+function resolveEffectiveProfilesByStep(contract) {
+  const profiles = /* @__PURE__ */ new Map();
+  visitSteps(contract.body.steps, (step) => {
+    if (step.kind !== "agent" && step.kind !== "task") return;
+    const profile = resolveEffectiveAgentProfile(contract, step);
+    if (profile) {
+      profiles.set(step.id, profile);
+    }
+  });
+  return profiles;
+}
+function effectiveProfileToSubagent(profile, legacySubagent) {
+  if (!profile && !legacySubagent) {
+    return void 0;
+  }
+  const profileSubagent = profile ? {
+    ref: profile.id,
+    role: profile.role,
+    model: profile.model,
+    tools: profile.allowedTools,
+    workdir: profile.workdir,
+    env: profile.env,
+    permissions: profile.permissions,
+    timeoutMs: profile.timeoutMs,
+    context: profile.context
+  } : void 0;
+  return mergeSubagent(profileSubagent, legacySubagent);
+}
+function visitSteps(steps, visitor) {
+  for (const step of steps) {
+    visitor(step);
+    if (step.kind === "phase" || step.kind === "parallel") {
+      visitSteps(step.children, visitor);
+    }
+  }
+}
+function toEffectiveAgentProfile(step, declaredProfile, inlineSubagent, source, requestedRef) {
+  if (!declaredProfile && !inlineSubagent) {
+    return void 0;
+  }
+  const merged = mergeSubagent(
+    declaredProfile ? {
+      ref: declaredProfile.id,
+      role: declaredProfile.role,
+      model: declaredProfile.model,
+      tools: declaredProfile.allowedTools,
+      workdir: declaredProfile.workdir,
+      env: declaredProfile.env,
+      permissions: declaredProfile.permissions,
+      timeoutMs: declaredProfile.timeoutMs,
+      context: declaredProfile.context
+    } : void 0,
+    inlineSubagent
+  );
+  const id = declaredProfile?.id ?? requestedRef ?? step.subagent?.ref ?? step.id;
+  const label = declaredProfile?.label ?? merged?.role ?? step.label;
+  return {
+    id,
+    label,
+    role: merged?.role ?? declaredProfile?.role ?? step.label,
+    instructions: declaredProfile?.instructions,
+    model: merged?.model,
+    workdir: merged?.workdir,
+    requiredSkills: declaredProfile?.requiredSkills ?? [],
+    advisorySkills: declaredProfile?.advisorySkills ?? [],
+    allowedTools: merged?.tools,
+    permissions: merged?.permissions,
+    env: merged?.env,
+    timeoutMs: merged?.timeoutMs,
+    context: merged?.context,
+    source,
+    stepId: step.id,
+    requestedRef
+  };
+}
+function mergeSubagent(base, overrides) {
+  if (!base && !overrides) {
+    return void 0;
+  }
+  return {
+    ...base,
+    ...overrides,
+    env: overrides?.env ?? base?.env,
+    permissions: overrides?.permissions ?? base?.permissions,
+    context: overrides?.context ?? base?.context,
+    tools: overrides?.tools ?? base?.tools
+  };
+}
+
+// src/codex/skillPreflight.ts
+import { access, readdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+var defaultSkillAvailabilityProvider = {
+  async check(requirement, profile) {
+    const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+    const locations = await findLocationsForRequirement(requirement, profile, codexHome);
+    if (locations.length > 0) {
+      return {
+        status: "passed",
+        message: `Found ${requirement.id}`,
+        locations
+      };
+    }
+    if (requirement.source === "project" && !profile.workdir) {
+      return {
+        status: "unknown",
+        message: `Project skill ${requirement.id} could not be checked because profile ${profile.id} has no workdir`
+      };
+    }
+    if (requirement.source === "plugin" && !requirement.pluginId) {
+      return {
+        status: "unknown",
+        message: `Plugin skill ${requirement.id} could not be checked because no pluginId was provided`
+      };
+    }
+    return {
+      status: requirement.source ? "missing" : "unknown",
+      message: requirement.source ? `Skill ${requirement.id} was not found in the expected ${requirement.source} location` : `Skill ${requirement.id} was not found in known skill locations`
+    };
+  }
+};
+async function runSkillProfilePreflight(contract, options = {}) {
+  const provider = options.provider ?? defaultSkillAvailabilityProvider;
+  const effectiveProfiles = resolveEffectiveProfilesByStep(contract);
+  const checks = [];
+  const warnings = [];
+  const blockers = [];
+  for (const profile of effectiveProfiles.values()) {
+    for (const requirement of profile.requiredSkills) {
+      const result = await provider.check(requirement, profile);
+      const check2 = createPreflightCheck(profile, requirement, true, result);
+      checks.push(check2);
+      if (result.status !== "passed") {
+        blockers.push(buildCheckSummary(profile, requirement, true, result));
+      }
+    }
+    for (const requirement of profile.advisorySkills) {
+      const result = await provider.check(requirement, profile);
+      const check2 = createPreflightCheck(profile, requirement, false, result);
+      checks.push(check2);
+      if (result.status !== "passed") {
+        warnings.push(buildCheckSummary(profile, requirement, false, result));
+      }
+    }
+  }
+  if (checks.length === 0) {
+    return void 0;
+  }
+  return {
+    status: blockers.length > 0 ? options.allowDegradedProfiles ? "degraded" : "blocked" : warnings.length > 0 ? "warning" : "passed",
+    checks,
+    warnings,
+    blockers,
+    allowDegradedProfiles: options.allowDegradedProfiles || void 0
+  };
+}
+function createPreflightCheck(profile, requirement, required3, result) {
+  return {
+    profileId: profile.id,
+    profileLabel: profile.label,
+    stepId: profile.stepId,
+    skill: requirement,
+    required: required3,
+    status: result.status,
+    message: result.message,
+    locations: result.locations
+  };
+}
+function buildCheckSummary(profile, requirement, required3, result) {
+  const prefix = `Profile ${profile.label} (step ${profile.stepId}) ${required3 ? "requires" : "advises"} skill ${requirement.id}`;
+  if (result.status === "passed") {
+    return `${prefix}: ${result.message}`;
+  }
+  if (result.status === "missing") {
+    return `${prefix}, but it is missing. ${result.message}`;
+  }
+  return `${prefix}, but availability is unknown. ${result.message}`;
+}
+async function findLocationsForRequirement(requirement, profile, codexHome) {
+  switch (requirement.source) {
+    case "plugin":
+      return requirement.pluginId ? findPluginSkillLocations(codexHome, requirement.pluginId, requirement.id) : [];
+    case "project":
+      return profile.workdir ? findSkillAtRoot(join(profile.workdir, ".codex", "skills"), requirement.id) : [];
+    case "user":
+      return findSkillAtRoot(join(codexHome, "skills"), requirement.id);
+    case "system":
+      return findSkillAtRoot(join(codexHome, "skills", ".system"), requirement.id);
+    default:
+      return findKnownSkillLocations(requirement, profile, codexHome);
+  }
+}
+async function findKnownSkillLocations(requirement, profile, codexHome) {
+  const locations = /* @__PURE__ */ new Set();
+  if (profile.workdir) {
+    for (const location of await findSkillAtRoot(join(profile.workdir, ".codex", "skills"), requirement.id)) {
+      locations.add(location);
+    }
+  }
+  for (const location of await findSkillAtRoot(join(codexHome, "skills"), requirement.id)) {
+    locations.add(location);
+  }
+  for (const location of await findSkillAtRoot(join(codexHome, "skills", ".system"), requirement.id)) {
+    locations.add(location);
+  }
+  if (requirement.pluginId) {
+    for (const location of await findPluginSkillLocations(codexHome, requirement.pluginId, requirement.id)) {
+      locations.add(location);
+    }
+  }
+  return [...locations];
+}
+async function findSkillAtRoot(root, skillId) {
+  const skillPath = join(root, skillId, "SKILL.md");
+  return await pathExists(skillPath) ? [skillPath] : [];
+}
+async function findPluginSkillLocations(codexHome, pluginId, skillId) {
+  const pluginRoot = join(codexHome, "plugins", "cache", pluginId);
+  if (!await pathExists(pluginRoot)) {
+    return [];
+  }
+  const matches = /* @__PURE__ */ new Set();
+  const directSkillPath = join(pluginRoot, "skills", skillId, "SKILL.md");
+  if (await pathExists(directSkillPath)) {
+    matches.add(directSkillPath);
+  }
+  const queue = [pluginRoot];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const entries = await readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const entryPath = join(current, entry.name);
+      const candidate = join(entryPath, "skills", skillId, "SKILL.md");
+      if (await pathExists(candidate)) {
+        matches.add(candidate);
+      }
+      queue.push(entryPath);
+    }
+  }
+  return [...matches];
+}
+async function pathExists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // src/contract/validateContract.ts
 function validateContract(contract) {
   const errors = [];
@@ -21132,11 +21404,12 @@ function validateContract(contract) {
   required2(contract.id, "id", errors);
   required2(contract.title, "title", errors);
   required2(contract.goal, "goal", errors);
+  validateAgentProfiles(contract, errors);
   if (!contract.body || !Array.isArray(contract.body.steps) || contract.body.steps.length === 0) {
     errors.push("body.steps must contain at least one step");
   } else {
     for (const step of contract.body.steps) {
-      validateStep(step, stepIds, errors);
+      validateStep(contract, step, stepIds, errors);
     }
   }
   if (contract.verification.mode !== "after_workflow" && contract.verification.mode !== "after_each_agent") {
@@ -21175,7 +21448,7 @@ function validateContract(contract) {
     throw new Error(`Loop contract is invalid: ${errors.join("; ")}`);
   }
 }
-function validateStep(step, stepIds, errors) {
+function validateStep(contract, step, stepIds, errors) {
   required2(step.id, "step id", errors);
   required2(step.label, `step ${step.id || "<missing>"} label`, errors);
   if (step.id) {
@@ -21192,6 +21465,9 @@ function validateStep(step, stepIds, errors) {
     if (step.sessionPolicy !== void 0 && step.sessionPolicy !== "new") {
       errors.push(`${step.kind} step ${step.id || "<missing>"} sessionPolicy currently supports only new`);
     }
+    if (step.agentProfileRef && !contract.agentProfiles?.[step.agentProfileRef]) {
+      errors.push(`${step.kind} step ${step.id || "<missing>"} agentProfileRef ${step.agentProfileRef} was not found`);
+    }
     validateSubagent(step.subagent, step, errors);
     return;
   }
@@ -21201,12 +21477,28 @@ function validateStep(step, stepIds, errors) {
       return;
     }
     for (const child of step.children) {
-      validateStep(child, stepIds, errors);
+      validateStep(contract, child, stepIds, errors);
     }
     return;
   }
   const unknownStep = step;
   errors.push(`step ${unknownStep.id || "<missing>"} has invalid kind`);
+}
+function validateAgentProfiles(contract, errors) {
+  if (contract.agentProfiles === void 0) {
+    return;
+  }
+  if (!isRecord(contract.agentProfiles)) {
+    errors.push("agentProfiles must be an object keyed by profile id");
+    return;
+  }
+  for (const [profileId, profile] of Object.entries(contract.agentProfiles)) {
+    if (!isRecord(profile)) {
+      errors.push(`agentProfiles.${profileId} must be an object`);
+      continue;
+    }
+    validateAgentProfile(profileId, profile, errors);
+  }
 }
 function required2(value, label, errors) {
   if (!value || value.trim().length === 0) {
@@ -21230,25 +21522,92 @@ function validateSubagent(subagent, step, errors) {
     errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.network is invalid`);
   }
 }
+function validateAgentProfile(profileId, profile, errors) {
+  required2(profileId, "agentProfiles key", errors);
+  required2(asOptionalString(profile.id), `agentProfiles.${profileId}.id`, errors);
+  required2(asOptionalString(profile.label), `agentProfiles.${profileId}.label`, errors);
+  required2(asOptionalString(profile.role), `agentProfiles.${profileId}.role`, errors);
+  if (asOptionalString(profile.id) && profile.id !== profileId) {
+    errors.push(`agentProfiles.${profileId}.id must match its object key`);
+  }
+  validateSkillRequirements(profile.requiredSkills, `agentProfiles.${profileId}.requiredSkills`, errors);
+  validateSkillRequirements(profile.advisorySkills, `agentProfiles.${profileId}.advisorySkills`, errors);
+  validateAllowedTools(profile.allowedTools, `agentProfiles.${profileId}.allowedTools`, errors);
+  validatePermissions(profile.permissions, `agentProfiles.${profileId}.permissions`, errors);
+  if (profile.timeoutMs !== void 0 && (typeof profile.timeoutMs !== "number" || !Number.isInteger(profile.timeoutMs) || profile.timeoutMs <= 0)) {
+    errors.push(`agentProfiles.${profileId}.timeoutMs must be a positive integer`);
+  }
+}
+function validateSkillRequirements(requirements, label, errors) {
+  if (requirements === void 0) {
+    return;
+  }
+  if (!Array.isArray(requirements)) {
+    errors.push(`${label} must be an array`);
+    return;
+  }
+  for (const [index, requirement] of requirements.entries()) {
+    required2(requirement?.id, `${label}[${index}].id`, errors);
+    if (requirement?.source !== void 0 && requirement.source !== "plugin" && requirement.source !== "project" && requirement.source !== "user" && requirement.source !== "system") {
+      errors.push(`${label}[${index}].source must be plugin, project, user, or system`);
+    }
+  }
+}
+function validateAllowedTools(allowedTools, label, errors) {
+  if (allowedTools === void 0) {
+    return;
+  }
+  if (!Array.isArray(allowedTools) || allowedTools.some((tool) => !tool || tool.trim().length === 0)) {
+    errors.push(`${label} must contain non-empty strings`);
+  }
+}
+function validatePermissions(permissions, label, errors) {
+  if (permissions === void 0) {
+    return;
+  }
+  if (!isRecord(permissions)) {
+    errors.push(`${label} must be an object`);
+    return;
+  }
+  if (permissions.filesystem !== void 0 && !["read-only", "workspace-write", "danger-full-access"].includes(String(permissions.filesystem))) {
+    errors.push(`${label}.filesystem is invalid`);
+  }
+  if (permissions.network !== void 0 && permissions.network !== "enabled" && permissions.network !== "disabled") {
+    errors.push(`${label}.network is invalid`);
+  }
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function asOptionalString(value) {
+  return typeof value === "string" ? value : void 0;
+}
 
 // src/engine/runBody.ts
-async function runBody(body, api) {
+async function runBody(body, api, effectiveProfilesByStep = /* @__PURE__ */ new Map()) {
   const results = [];
   for (const step of body.steps) {
-    results.push(await runStep(step, api));
+    results.push(await runStep(step, api, effectiveProfilesByStep));
   }
   return results;
 }
-async function runStep(step, api, phaseId) {
+async function runStep(step, api, effectiveProfilesByStep, phaseId) {
   if (step.kind === "agent" || step.kind === "task") {
-    return api.agent(step.prompt, { label: step.label, stepId: step.id, phaseId, subagent: step.subagent });
+    const agentProfile = effectiveProfilesByStep.get(step.id);
+    return api.agent(step.prompt, {
+      label: step.label,
+      stepId: step.id,
+      phaseId,
+      subagent: effectiveProfileToSubagent(agentProfile, step.subagent),
+      agentProfile
+    });
   }
   if (step.kind === "phase") {
     const phase = api.phase(step.label, { phaseId: step.id });
     try {
       const results = [];
       for (const child of step.children) {
-        results.push(await runStep(child, api, step.id));
+        results.push(await runStep(child, api, effectiveProfilesByStep, step.id));
       }
       phase.done("ok");
       return results;
@@ -21258,7 +21617,7 @@ async function runStep(step, api, phaseId) {
     }
   }
   return api.parallel(
-    step.children.map((child) => () => runStep(child, api, phaseId)),
+    step.children.map((child) => () => runStep(child, api, effectiveProfilesByStep, phaseId)),
     { label: step.label, stepId: step.id }
   );
 }
@@ -21319,6 +21678,7 @@ async function runFlow(flow, deps) {
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
           subagent: opts?.subagent,
+          agentProfile: opts?.agentProfile,
           workflowRuntime: deps.workflow?.runtime,
           workflowContractId: deps.workflow?.contractId,
           workflowPlan: deps.workflow
@@ -21399,7 +21759,7 @@ var LoopRunner = class {
       });
     };
     const flowResult = await runFlow(
-      (api) => runBody(request.contract.body, api),
+      (api) => runBody(request.contract.body, api, resolveEffectiveProfilesByStep(request.contract)),
       {
         runId: request.runId,
         executor: this.options.executor,
@@ -21452,11 +21812,12 @@ var LoopRunner = class {
   }
 };
 function buildWorkflowExecutionPlan(contract) {
+  const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
   return {
     runtime: "dittosloop-local-workflow",
     contractId: contract.id,
     goal: contract.goal,
-    steps: flattenWorkflowSteps(contract.body.steps),
+    steps: flattenWorkflowSteps(contract.body.steps, effectiveProfilesByStep),
     verification: contract.verification,
     repairPolicy: contract.repairPolicy,
     stopPolicy: contract.stopPolicy,
@@ -21464,8 +21825,9 @@ function buildWorkflowExecutionPlan(contract) {
     escalation: contract.escalation
   };
 }
-function flattenWorkflowSteps(steps, phaseId, depth = 0) {
+function flattenWorkflowSteps(steps, effectiveProfilesByStep, phaseId, depth = 0) {
   return steps.flatMap((step) => {
+    const agentProfile = step.kind === "agent" || step.kind === "task" ? effectiveProfilesByStep.get(step.id) : void 0;
     const current = {
       id: step.id,
       kind: step.kind,
@@ -21475,13 +21837,14 @@ function flattenWorkflowSteps(steps, phaseId, depth = 0) {
       phaseId,
       prompt: step.kind === "agent" || step.kind === "task" ? step.prompt : void 0,
       sessionPolicy: step.kind === "agent" || step.kind === "task" ? step.sessionPolicy : void 0,
-      subagent: step.kind === "agent" || step.kind === "task" ? step.subagent : void 0
+      subagent: step.kind === "agent" || step.kind === "task" ? effectiveProfileToSubagent(agentProfile, step.subagent) : void 0,
+      agentProfile
     };
     if (step.kind === "agent" || step.kind === "task") {
       return [current];
     }
     const childPhaseId = step.kind === "phase" ? step.id : phaseId;
-    return [current, ...flattenWorkflowSteps(step.children, childPhaseId, depth + 1)];
+    return [current, ...flattenWorkflowSteps(step.children, effectiveProfilesByStep, childPhaseId, depth + 1)];
   });
 }
 
@@ -21524,9 +21887,6 @@ function sortLoopWorkspaceFiles(files) {
     ["contract.json", 5]
   ]);
   return [...files].sort((left, right) => {
-    const leftIsSkill = left.path.startsWith("skill/");
-    const rightIsSkill = right.path.startsWith("skill/");
-    if (leftIsSkill !== rightIsSkill) return leftIsSkill ? 1 : -1;
     const leftRank = rootOrder.get(left.path) ?? 100;
     const rightRank = rootOrder.get(right.path) ?? 100;
     if (leftRank !== rightRank) return leftRank - rightRank;
@@ -21564,6 +21924,7 @@ function formalLoopDirectoryFiles(input) {
           latestAttemptStatus: latestAttempt?.status ?? null,
           latestVerificationStatus: latestVerification?.status ?? null,
           body: input.contract.body,
+          agentProfiles: input.contract.agentProfiles ?? {},
           repairPolicy: input.contract.repairPolicy,
           stopPolicy: input.contract.stopPolicy,
           projectBinding: input.contract.projectBinding
@@ -21574,10 +21935,10 @@ function formalLoopDirectoryFiles(input) {
 `
     }),
     withSize({
-      path: "skill/dittosloop-for-codex-loop.md",
-      kind: "skill",
+      path: "runtime/dittosloop-for-codex-loop.md",
+      kind: "runtime",
       language: "markdown",
-      content: loopSkillFile(input.contract)
+      content: loopRuntimeGuideFile(input.contract)
     }),
     withSize({
       path: "rubrics.md",
@@ -21663,13 +22024,14 @@ function formalLoopDirectoryFiles(input) {
     })
   ];
 }
-function loopSkillFile(contract) {
+function loopRuntimeGuideFile(contract) {
   return [
-    "# dittosloop-for-codex:loop",
+    "# DittosLoop For Codex runtime guide",
     "",
     `Loop: ${contract.title}`,
     "",
-    "\u8FD9\u4E2A loop \u4F7F\u7528 DittosLoop For Codex \u7684 loop skill \u6765\u521B\u5EFA\u6B63\u5F0F contract\u3001\u542F\u52A8\u53EF\u89C1 Codex worker session\u3001\u6267\u884C workflow\u3001\u5199\u56DE\u7ED3\u679C\uFF0C\u5E76\u6309 rubrics \u505A\u6700\u7EC8\u9A8C\u8BC1\u3002",
+    "\u8FD9\u4E2A\u6587\u4EF6\u63CF\u8FF0 DittosLoop For Codex runtime \u5982\u4F55\u4E3A\u8FD9\u4E2A loop \u7BA1\u7406\u6B63\u5F0F contract\u3001\u542F\u52A8\u53EF\u89C1 Codex worker session\u3001\u6267\u884C workflow\u3001\u5199\u56DE\u7ED3\u679C\uFF0C\u5E76\u6309 rubrics \u505A\u6700\u7EC8\u9A8C\u8BC1\u3002",
+    "\u5B83\u4E0D\u662F\u5B89\u88C5\u5230 Codex \u91CC\u7684\u539F\u751F skill\uFF0C\u53EA\u662F\u672C\u5730 runtime \u5FEB\u7167\uFF0C\u5E2E\u52A9\u4F60\u68C0\u67E5\u5F53\u524D loop \u4F1A\u5982\u4F55\u8FD0\u884C\u3002",
     "",
     "## Runtime role",
     "",
@@ -21736,10 +22098,10 @@ function statusText(status) {
 }
 
 // src/workspaceDirectory.ts
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { mkdir, readdir as readdir2, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { dirname, join as join2, relative, sep } from "node:path";
 async function syncLoopWorkspaceDirectory(dataDir, loopId, files) {
-  const loopDir = join(dataDir, "loops", loopId);
+  const loopDir = join2(dataDir, "loops", loopId);
   const desiredPaths = new Set(files.map((file) => file.path));
   await mkdir(loopDir, { recursive: true });
   for (const file of files) {
@@ -21764,23 +22126,23 @@ function resolveLoopFilePath(loopDir, filePath) {
   if (filePath.startsWith("/") || parts.some((part) => part === "" || part === "." || part === "..")) {
     throw new Error(`Invalid loop workspace file path: ${filePath}`);
   }
-  return join(loopDir, ...parts);
+  return join2(loopDir, ...parts);
 }
 async function removeStaleFiles(rootDir, currentDir, desiredPaths) {
   let entries;
   try {
-    entries = await readdir(currentDir, { withFileTypes: true });
+    entries = await readdir2(currentDir, { withFileTypes: true });
   } catch (error2) {
     if (isNodeError(error2) && error2.code === "ENOENT") return;
     throw error2;
   }
   for (const entry of entries) {
-    const entryPath = join(currentDir, entry.name);
+    const entryPath = join2(currentDir, entry.name);
     if (entry.isDirectory()) {
       await removeStaleFiles(rootDir, entryPath, desiredPaths);
-      const remaining = await readdir(entryPath);
+      const remaining = await readdir2(entryPath);
       if (remaining.length === 0) {
-        await rm(entryPath, { recursive: false, force: true });
+        await rmdir(entryPath);
       }
       continue;
     }
@@ -22048,9 +22410,11 @@ var LoopService = class {
       phaseId: request.phaseId,
       label: request.label,
       prompt: request.prompt,
-      subagent: request.subagent
+      subagent: request.subagent,
+      agentProfile: request.agentProfile,
+      profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, request.stepId, request.agentProfile)
     }) : void 0;
-    const session = await bridge.createSession({
+    const createdSession = await bridge.createSession({
       runId: run.id,
       attemptId: request.attemptId,
       workflowContextId: request.workflowContextId,
@@ -22059,6 +22423,7 @@ var LoopService = class {
       title: request.label ?? request.stepId ?? "Codex workflow step",
       prompt: request.prompt,
       subagent: request.subagent,
+      agentProfile: request.agentProfile,
       workflowRuntime: request.workflowRuntime,
       workflowContractId: request.workflowContractId,
       workflowPlan: request.workflowPlan,
@@ -22066,6 +22431,11 @@ var LoopService = class {
       projectLabel: run.projectLabel,
       projectPath: run.projectPath
     });
+    const session = {
+      ...createdSession,
+      subagent: createdSession.subagent ?? request.subagent,
+      agentProfile: createdSession.agentProfile ?? request.agentProfile
+    };
     if (workflowContext && taskRunId) {
       await this.attachWorkflowTaskSession(workflowContext.workflowContextId, taskRunId, session);
     }
@@ -22113,7 +22483,9 @@ var LoopService = class {
         threadTitle: void 0,
         threadUrl: void 0,
         prompt: session.prompt,
-        subagent: session.subagent
+        subagent: session.subagent,
+        agentProfile: session.agentProfile,
+        profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, session.stepId, session.agentProfile)
       };
       const existingSubagents = run.codexSession?.subagents ?? [];
       let matchedSubagent = false;
@@ -22166,6 +22538,23 @@ var LoopService = class {
   }
   async startCodexSessionRun(loopId, input = {}) {
     const timestamp = this.now();
+    const initialState = await this.options.store.readState();
+    const initialLoop = requireLoop(initialState, loopId);
+    const initialLoopState = initialState.loopStates.find((candidate) => candidate.loopId === loopId);
+    if (initialLoopState?.paused || initialLoop.status === "paused") {
+      throw new Error(`Loop is paused: ${loopId}`);
+    }
+    if (initialLoopState?.running) {
+      throw new Error(`Loop is already running: ${loopId}`);
+    }
+    const launchContract = initialState.formalContracts.find((contract) => contract.id === loopId);
+    const profilePreflight = launchContract ? await runSkillProfilePreflight(launchContract, {
+      provider: this.options.skillAvailabilityProvider,
+      allowDegradedProfiles: input.allowDegradedProfiles
+    }) : void 0;
+    if (profilePreflight?.status === "blocked") {
+      throw new Error(profilePreflight.blockers[0] ?? `Agent profile skill preflight blocked run ${loopId}`);
+    }
     let launch;
     await this.options.store.updateState((state) => {
       const loop = requireLoop(state, loopId);
@@ -22177,17 +22566,16 @@ var LoopService = class {
         throw new Error(`Loop is already running: ${loopId}`);
       }
       const goal = input.goal ?? `Run ${loop.title}`;
-      const formalContract = state.formalContracts.find((contract) => contract.id === loopId);
       const runId = this.nextId("run");
       const attemptId = this.nextId("attempt");
       const workflowContextId = this.nextId("workflow");
       const memoryWindow = loopMemoryWindow(state, loopId);
-      const prompt = buildCodexSessionPrompt(loop, goal, formalContract, {
+      const prompt = buildCodexSessionPrompt(loop, goal, launchContract, {
         runId,
         attemptId,
         workflowContextId
-      }, memoryWindow);
-      const workflowLaunch = formalContract ? buildWorkflowLaunch(formalContract) : {};
+      }, memoryWindow, profilePreflight);
+      const workflowLaunch = launchContract ? buildWorkflowLaunch(launchContract) : {};
       const attemptSummary = `Request a new Codex session for ${loop.title}`;
       const project = runProjectBinding(input, loop);
       const run = {
@@ -22201,7 +22589,8 @@ var LoopService = class {
           mode: "new_session",
           status: "requested",
           ...project,
-          subagents: codexSessionSubagentsForContract(formalContract, prompt),
+          subagents: codexSessionSubagentsForContract(launchContract, prompt, "requested", profilePreflight),
+          ...profilePreflight ? { profilePreflight } : {},
           prompt
         },
         createdAt: timestamp,
@@ -22218,7 +22607,7 @@ var LoopService = class {
         id: workflowContextId,
         run,
         attempt,
-        contract: formalContract,
+        contract: launchContract,
         timestamp
       });
       launch = {
@@ -23102,7 +23491,9 @@ var LoopService = class {
         threadTitle: session.threadTitle,
         threadUrl: session.threadUrl,
         prompt: session.prompt,
-        subagent: session.subagent
+        subagent: session.subagent,
+        agentProfile: session.agentProfile,
+        profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, session.stepId, session.agentProfile)
       }));
       updatedRun = {
         ...run,
@@ -23116,6 +23507,7 @@ var LoopService = class {
           projectLabel: latestSession.projectLabel ?? run.codexSession?.projectLabel ?? run.projectLabel,
           projectPath: latestSession.projectPath ?? run.codexSession?.projectPath ?? run.projectPath,
           subagents: mergeCodexSessionSubagents(existingSubagents, completedSubagents),
+          profilePreflight: run.codexSession?.profilePreflight,
           prompt: latestSession.prompt ?? run.codexSession?.prompt ?? run.goal
         },
         updatedAt: timestamp
@@ -23245,6 +23637,8 @@ var LoopService = class {
         label: input.label,
         prompt: input.prompt,
         subagent: input.subagent,
+        agentProfile: input.agentProfile,
+        profilePreflight: input.profilePreflight,
         status: "running",
         createdAt: timestamp,
         updatedAt: timestamp
@@ -23304,6 +23698,7 @@ var LoopService = class {
               stepId,
               phaseId: session.phaseId ?? candidate.phaseId,
               sessionId: session.sessionId,
+              agentProfile: candidate.agentProfile ?? session.agentProfile,
               updatedAt: timestamp
             } : candidate
           ),
@@ -23666,6 +24061,7 @@ function applyContractPatch(baseContract, patch) {
     stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
     budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
     escalation: patch.escalation ?? baseContract.escalation,
+    agentProfiles: patch.agentProfiles ?? baseContract.agentProfiles,
     projectBinding: patch.projectBinding ?? baseContract.projectBinding,
     memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
     trigger: patch.trigger ?? baseContract.trigger,
@@ -23714,17 +24110,41 @@ function codexSubagentStatus(status) {
   if (status === "started") return "running";
   return status;
 }
-function codexSessionSubagentsForContract(contract, prompt, status = "requested") {
+function profilePreflightForStep(report, stepId, agentProfile) {
+  if (!report || !stepId) return void 0;
+  const checks = report.checks.filter((check2) => check2.stepId === stepId);
+  if (!checks.length && !agentProfile) return void 0;
+  const checkMessages = new Set(checks.map((check2) => check2.message));
+  const warnings = report.warnings.filter(
+    (warning) => checks.some((check2) => warning.includes(check2.profileLabel) || warning.includes(check2.profileId) || warning.includes(check2.skill.id))
+  );
+  const blockers = report.blockers.filter(
+    (blocker) => checks.some((check2) => blocker.includes(check2.profileLabel) || blocker.includes(check2.profileId) || blocker.includes(check2.skill.id))
+  );
+  const stepWarnings = warnings.length ? warnings : report.warnings.filter((warning) => checkMessages.has(warning));
+  const stepBlockers = blockers.length ? blockers : report.blockers.filter((blocker) => checkMessages.has(blocker));
+  const status = stepBlockers.length > 0 ? report.allowDegradedProfiles ? "degraded" : "blocked" : stepWarnings.length > 0 ? "warning" : "passed";
+  return {
+    status,
+    checks,
+    warnings: stepWarnings,
+    blockers: stepBlockers,
+    allowDegradedProfiles: report.allowDegradedProfiles
+  };
+}
+function codexSessionSubagentsForContract(contract, prompt, status = "requested", preflight) {
   if (!contract) {
     return [{ role: "loop-runner", status, prompt }];
   }
-  const agents = flattenWorkflowLaunchSteps(contract.body.steps).filter((step) => step.kind === "agent" || step.kind === "task").map((step) => ({
+  const agents = flattenWorkflowLaunchSteps(contract.body.steps, resolveEffectiveProfilesByStep(contract)).filter((step) => step.kind === "agent" || step.kind === "task").map((step) => ({
     stepId: step.id,
     phaseId: step.phaseId,
     role: step.label,
     status,
     prompt: step.prompt ?? prompt,
-    subagent: step.subagent
+    subagent: step.subagent,
+    agentProfile: step.agentProfile,
+    profilePreflight: profilePreflightForStep(preflight, step.id, step.agentProfile)
   }));
   return agents.length ? agents : [{ role: "loop-runner", status, prompt }];
 }
@@ -24396,7 +24816,7 @@ function buildNewLoopSessionPrompt(project) {
     "\u5B8C\u6210\u540E\u8BF7\u7528\u4E2D\u6587\u7B80\u77ED\u8FD4\u56DE\uFF1Aloop id\u3001\u9879\u76EE\u540D\u3001workflow tasks\u3001verifier rubrics\u3001repair/stop \u7B56\u7565\uFF0C\u4EE5\u53CA\u4E0B\u4E00\u6B65\u662F\u5426\u8981\u7ACB\u5373\u542F\u52A8\u4E00\u6B21 run\u3002"
   ].join("\n");
 }
-function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow) {
+function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow, profilePreflight) {
   const checks = loop.verification.checks.length ? loop.verification.checks.map((check2) => `- ${check2}`).join("\n") : "- \u8BB0\u5F55\u672C\u8F6E\u5B8C\u6210\u4E86\u4EC0\u4E48\u3001\u9A8C\u8BC1\u4E86\u4EC0\u4E48\uFF0C\u4EE5\u53CA\u8FD8\u9700\u8981\u7528\u6237\u5904\u7406\u7684\u4E8B\u9879\u3002";
   const workflowContract = contract ? [
     "",
@@ -24413,6 +24833,9 @@ function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow) 
     "",
     "Workflow steps / \u5DE5\u4F5C\u6D41\u6B65\u9AA4\uFF1A",
     formatWorkflowSteps(contract),
+    "",
+    "Agent profiles / \u4EE3\u7406\u753B\u50CF\uFF1A",
+    formatAgentProfiles(contract, profilePreflight),
     "",
     "Verifier rubrics / \u9A8C\u8BC1\u89C4\u5219\uFF1A",
     contract.verification.rubrics.map((rubric) => `- [${rubric.severity}] ${rubric.label}: ${rubric.requirement}`).join("\n")
@@ -24461,6 +24884,7 @@ function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow) 
   ].join("\n");
 }
 function buildWorkflowLaunch(contract) {
+  const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
   return {
     workflowRuntime: "dittosloop-local-workflow",
     workflowContractId: contract.id,
@@ -24468,7 +24892,7 @@ function buildWorkflowLaunch(contract) {
       runtime: "dittosloop-local-workflow",
       contractId: contract.id,
       goal: contract.goal,
-      steps: flattenWorkflowLaunchSteps(contract.body.steps),
+      steps: flattenWorkflowLaunchSteps(contract.body.steps, effectiveProfilesByStep),
       verification: contract.verification,
       repairPolicy: contract.repairPolicy,
       stopPolicy: contract.stopPolicy,
@@ -24477,10 +24901,11 @@ function buildWorkflowLaunch(contract) {
     }
   };
 }
-function flattenWorkflowLaunchSteps(steps, phaseId, depth = 0) {
+function flattenWorkflowLaunchSteps(steps, effectiveProfilesByStep, phaseId, depth = 0) {
   const items = [];
   for (const step of steps) {
     if (step.kind === "agent" || step.kind === "task") {
+      const agentProfile = effectiveProfilesByStep.get(step.id);
       items.push({
         id: step.id,
         kind: step.kind,
@@ -24488,7 +24913,8 @@ function flattenWorkflowLaunchSteps(steps, phaseId, depth = 0) {
         label: step.label,
         prompt: step.prompt,
         sessionPolicy: step.sessionPolicy,
-        subagent: step.subagent,
+        subagent: effectiveProfileToSubagent(agentProfile, step.subagent),
+        agentProfile,
         phaseId,
         depth
       });
@@ -24501,18 +24927,30 @@ function flattenWorkflowLaunchSteps(steps, phaseId, depth = 0) {
       phaseId,
       depth
     });
-    items.push(...flattenWorkflowLaunchSteps(step.children, step.kind === "phase" ? step.id : phaseId, depth + 1));
+    items.push(
+      ...flattenWorkflowLaunchSteps(
+        step.children,
+        effectiveProfilesByStep,
+        step.kind === "phase" ? step.id : phaseId,
+        depth + 1
+      )
+    );
   }
   return items;
 }
 function formatWorkflowSteps(contract) {
   const lines = [];
+  const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
   const visit = (steps, depth) => {
     for (const step of steps) {
       const indent = "  ".repeat(depth);
       if (step.kind === "agent" || step.kind === "task") {
+        const agentProfile = effectiveProfilesByStep.get(step.id);
         lines.push(`${indent}- ${step.kind} ${step.id}: ${step.label}`);
         lines.push(`${indent}  prompt: ${step.prompt}`);
+        if (agentProfile) {
+          lines.push(`${indent}  effectiveProfile: ${agentProfile.label} (${agentProfile.id}, ${agentProfile.source})`);
+        }
       } else {
         lines.push(`${indent}- ${step.kind} ${step.id}: ${step.label}`);
         visit(step.children, depth + 1);
@@ -24521,6 +24959,53 @@ function formatWorkflowSteps(contract) {
   };
   visit(contract.body.steps, 0);
   return lines.join("\n");
+}
+function formatAgentProfiles(contract, profilePreflight) {
+  const effectiveProfiles = Array.from(resolveEffectiveProfilesByStep(contract).values());
+  if (!effectiveProfiles.length) {
+    return [
+      "- No explicit agent profiles are declared for executable steps.",
+      "- DittosLoop records these profile expectations and performs best-effort checks; the visible Codex session remains the orchestrator and does not provide native Codex skill enforcement."
+    ].join("\n");
+  }
+  const lines = [
+    "- DittosLoop records these profile expectations and performs best-effort checks; the visible Codex session remains the orchestrator and does not provide native Codex skill enforcement."
+  ];
+  const declaredProfiles = Object.values(contract.agentProfiles ?? {});
+  if (declaredProfiles.length) {
+    lines.push("- Declared profile catalog:");
+    for (const profile of declaredProfiles) {
+      lines.push(`  - ${profile.id}: ${profile.label} / ${profile.role}`);
+    }
+  }
+  lines.push("- Effective profiles by executable step:");
+  for (const profile of effectiveProfiles) {
+    lines.push(`  - ${profile.stepId}: ${profile.label} (${profile.id}, ${profile.source})`);
+    lines.push(`    role: ${profile.role}`);
+    if (profile.requiredSkills.length) {
+      lines.push(`    requiredSkills: ${profile.requiredSkills.map(formatSkillRequirement).join(", ")}`);
+    }
+    if (profile.advisorySkills.length) {
+      lines.push(`    advisorySkills: ${profile.advisorySkills.map(formatSkillRequirement).join(", ")}`);
+    }
+    const checks = profilePreflight?.checks.filter((check2) => check2.stepId === profile.stepId) ?? [];
+    if (checks.length) {
+      lines.push(`    preflight: ${checks.map((check2) => `${check2.skill.id}=${check2.status}`).join(", ")}`);
+    }
+  }
+  if (profilePreflight?.warnings.length) {
+    lines.push("- Preflight warnings:");
+    lines.push(...profilePreflight.warnings.map((warning) => `  - ${warning}`));
+  }
+  if (profilePreflight?.blockers.length) {
+    lines.push("- Preflight blockers:");
+    lines.push(...profilePreflight.blockers.map((blocker) => `  - ${blocker}`));
+  }
+  return lines.join("\n");
+}
+function formatSkillRequirement(requirement) {
+  const source = requirement.pluginId ? `${requirement.source ?? "plugin"}:${requirement.pluginId}` : requirement.source;
+  return source ? `${requirement.id} (${source})` : requirement.id;
 }
 
 // src/mcpServer.ts
@@ -24552,11 +25037,33 @@ var subagentSchema = external_exports.object({
   timeoutMs: external_exports.number().int().positive().optional(),
   context: external_exports.record(external_exports.unknown()).optional()
 });
+var skillRequirementSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  source: external_exports.enum(["plugin", "project", "user", "system"]).optional(),
+  pluginId: external_exports.string().min(1).optional(),
+  version: external_exports.string().min(1).optional()
+});
+var agentProfileSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  label: external_exports.string().min(1),
+  role: external_exports.string().min(1),
+  instructions: external_exports.string().min(1).optional(),
+  model: external_exports.string().min(1).optional(),
+  workdir: external_exports.string().min(1).optional(),
+  requiredSkills: external_exports.array(skillRequirementSchema).optional(),
+  advisorySkills: external_exports.array(skillRequirementSchema).optional(),
+  allowedTools: external_exports.array(external_exports.string().min(1)).optional(),
+  permissions: subagentSchema.shape.permissions.optional(),
+  env: external_exports.record(external_exports.string()).optional(),
+  timeoutMs: external_exports.number().int().positive().optional(),
+  context: external_exports.record(external_exports.unknown()).optional()
+});
 var agentStepSchema = external_exports.object({
   id: external_exports.string().min(1),
   kind: external_exports.literal("agent"),
   label: external_exports.string().min(1),
   prompt: external_exports.string().min(1),
+  agentProfileRef: external_exports.string().min(1).optional(),
   verifierRef: external_exports.string().optional(),
   sessionPolicy: external_exports.literal("new").optional(),
   subagent: subagentSchema.optional()
@@ -24567,6 +25074,7 @@ var taskStepSchema = external_exports.object({
   runtime: external_exports.literal("codex"),
   label: external_exports.string().min(1),
   prompt: external_exports.string().min(1),
+  agentProfileRef: external_exports.string().min(1).optional(),
   verifierRef: external_exports.string().optional(),
   sessionPolicy: external_exports.literal("new").optional(),
   outputSchema: external_exports.record(external_exports.unknown()).optional(),
@@ -24615,6 +25123,7 @@ var createLoopContractSchema = external_exports.object({
   }).optional(),
   budgetUsd: external_exports.number().positive().max(20).optional(),
   escalation: external_exports.array(external_exports.string().min(1)).optional(),
+  agentProfiles: external_exports.record(agentProfileSchema).optional(),
   projectBinding: external_exports.object({
     codexProjectId: external_exports.string().optional(),
     projectLabel: external_exports.string().optional(),
@@ -24626,7 +25135,8 @@ var startCodexSessionSchema = external_exports.object({
   goal: external_exports.string().optional(),
   codexProjectId: external_exports.string().optional(),
   projectLabel: external_exports.string().optional(),
-  projectPath: external_exports.string().optional()
+  projectPath: external_exports.string().optional(),
+  allowDegradedProfiles: external_exports.boolean().optional()
 });
 var pauseLoopSchema = external_exports.object({
   loopId: external_exports.string().min(1),
@@ -24786,7 +25296,8 @@ function createToolHandlers(service) {
         goal: args.goal,
         codexProjectId: args.codexProjectId,
         projectLabel: args.projectLabel,
-        projectPath: args.projectPath
+        projectPath: args.projectPath,
+        allowDegradedProfiles: args.allowDegradedProfiles
       }));
     },
     execute_workflow_attempt: async (input) => {
@@ -25190,6 +25701,7 @@ var HostMediatedSessionBridge = class {
       createdAt: this.now(),
       prompt: request.prompt,
       subagent: request.subagent,
+      agentProfile: request.agentProfile,
       workflowRuntime: request.workflowRuntime,
       workflowContractId: request.workflowContractId,
       workflowPlan: request.workflowPlan,
@@ -25228,7 +25740,7 @@ var HostMediatedSessionBridge = class {
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { readFile as readFile2 } from "node:fs/promises";
-import { extname, isAbsolute, join as join2, relative as relative2 } from "node:path";
+import { extname, isAbsolute, join as join3, relative as relative2 } from "node:path";
 
 // src/preview/eventAdapter.ts
 function enrichRunDetail(detail) {
@@ -25392,7 +25904,7 @@ var CONTENT_TYPES = {
 async function startPreviewServer(options) {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 47888;
-  const templatesFile = options.templatesFile ?? join2(options.staticDir, "..", "templates", "templates.json");
+  const templatesFile = options.templatesFile ?? join3(options.staticDir, "..", "templates", "templates.json");
   const platform = options.platform ?? process.platform;
   const spawnProcess = options.spawnProcess ?? spawn;
   const server = createServer(async (request, response) => {
@@ -25594,7 +26106,7 @@ async function sendJson(response, payload) {
 }
 async function sendStaticFile(response, staticDir, pathname) {
   const safePath = pathname === "/" ? "/index.html" : pathname;
-  const filePath = join2(staticDir, safePath);
+  const filePath = join3(staticDir, safePath);
   const pathFromStaticRoot = relative2(staticDir, filePath);
   if (pathFromStaticRoot.startsWith("..") || isAbsolute(pathFromStaticRoot)) {
     response.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
@@ -25749,15 +26261,15 @@ async function readJsonBody(request) {
 }
 
 // src/runtime.ts
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 function resolveRuntimeConfig(env, pluginRoot, homeDir) {
   const previewPort = parsePreviewPort(env.DITTOSLOOP_PREVIEW_PORT);
   return {
-    dataDir: env.DITTOSLOOP_DATA_DIR || join3(homeDir, ".codex", "dittosloop-for-codex"),
+    dataDir: env.DITTOSLOOP_DATA_DIR || join4(homeDir, ".codex", "dittosloop-for-codex"),
     previewPort,
     previewBaseUrl: `http://127.0.0.1:${previewPort}`,
-    staticDir: join3(pluginRoot, "preview"),
-    templatesFile: join3(pluginRoot, "templates", "templates.json"),
+    staticDir: join4(pluginRoot, "preview"),
+    templatesFile: join4(pluginRoot, "templates", "templates.json"),
     codexProjects: parseCodexProjects(env)
   };
 }
@@ -25803,7 +26315,7 @@ function normalizeCodexProject(value) {
 
 // src/store.ts
 import { mkdir as mkdir2, readFile as readFile3, rename, writeFile as writeFile2 } from "node:fs/promises";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 
 // src/loopOperationalState.ts
 function deriveLoopOperationalState(input) {
@@ -25878,7 +26390,7 @@ function createEmptyState() {
 var LoopStore = class {
   constructor(dataDir) {
     this.dataDir = dataDir;
-    this.statePath = join4(dataDir, STATE_FILE);
+    this.statePath = join5(dataDir, STATE_FILE);
   }
   dataDir;
   statePath;
@@ -25970,8 +26482,8 @@ function deriveLoopMemories(existing, commits) {
 
 // src/index.ts
 async function main() {
-  const pluginRoot = join5(dirname2(fileURLToPath(import.meta.url)), "..", "..");
-  const config2 = resolveRuntimeConfig(process.env, pluginRoot, homedir());
+  const pluginRoot = join6(dirname2(fileURLToPath(import.meta.url)), "..", "..");
+  const config2 = resolveRuntimeConfig(process.env, pluginRoot, homedir2());
   const store = new LoopStore(config2.dataDir);
   const service = new LoopService({
     store,
