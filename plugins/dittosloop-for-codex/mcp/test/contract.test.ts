@@ -264,6 +264,33 @@ describe("formal loop contracts", () => {
   });
 
   test("accepts pipeline phases and human task nodes", () => {
+    const verification = {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "done", label: "Done", description: "The workflow completes.", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "command-pass",
+          type: "command",
+          label: "Command pass",
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: "contract",
+          criteriaIds: ["done"],
+          severity: "must",
+          parse: { kind: "none" }
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    } as const;
+
     const contract = compileContract(
       {
         id: "loop_1",
@@ -291,7 +318,7 @@ describe("formal loop contracts", () => {
             }
           ]
         },
-        verification: { mode: "after_workflow", rubrics: [] }
+        verification
       },
       fixedTime
     );

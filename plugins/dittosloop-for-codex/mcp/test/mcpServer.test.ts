@@ -1047,10 +1047,11 @@ test("create_loop_contract accepts a script AST that compiles to the same body a
         }
       ]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "done", label: "Done", requirement: "Output satisfies the goal", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({
+      id: "done",
+      label: "Done",
+      description: "Output satisfies the goal"
+    })
   }));
 
   expect(fromScript.body.steps).toEqual([
@@ -1076,13 +1077,13 @@ test("create_loop_contract rejects providing both body and script, and providing
     goal: "Reject both body and script",
     body: { steps: [{ id: "a", kind: "agent", label: "A", prompt: "..." }] },
     script: { build: [{ fn: "task", args: [{ id: "a", label: "A", prompt: "..." }] }] },
-    verification: { mode: "after_workflow", rubrics: [] }
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Output is done" })
   })).rejects.toThrow(/exactly one of body or script/i);
 
   await expect(handlers.create_loop_contract({
     title: "Neither",
     goal: "Reject neither body nor script",
-    verification: { mode: "after_workflow", rubrics: [] }
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Output is done" })
   })).rejects.toThrow(/exactly one of body or script/i);
 });
 
@@ -1092,10 +1093,7 @@ test("propose_workflow_revision accepts a script-authored revision", async () =>
     title: "Revisable",
     goal: "Revise via script",
     body: { steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Write." }] },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "done", label: "Done", requirement: "Output ok", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Output ok" })
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Run" }));
 
@@ -1113,10 +1111,7 @@ test("propose_workflow_revision accepts a script-authored revision", async () =>
           { fn: "task", args: [{ id: "review", label: "Review", prompt: "Review." }] }
         ]
       },
-      verification: {
-        mode: "after_workflow",
-        rubrics: [{ id: "done", label: "Done", requirement: "Output ok", severity: "must" }]
-      }
+      verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Output ok" })
     }
   }));
 
