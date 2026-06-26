@@ -2003,9 +2003,9 @@ a:focus-visible {
 
 .dittos-toast {
   position: fixed;
-  top: 46%;
+  top: 50%;
   left: 50%;
-  z-index: 50;
+  z-index: 70;
   max-width: min(360px, calc(100vw - 40px));
   transform: translate(-50%, -50%);
   border: 1px solid var(--hair);
@@ -2017,8 +2017,20 @@ a:focus-visible {
   font-weight: 650;
   line-height: 1.45;
   padding: 12px 16px;
+  pointer-events: none;
   text-align: center;
   transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.dittos-toast.success {
+  background: rgba(14, 8, 7, 0.92);
+  color: var(--surface);
+}
+
+.dittos-toast.error {
+  border-color: rgba(151, 45, 61, 0.35);
+  background: rgba(151, 45, 61, 0.95);
+  color: #fff8f8;
 }
 
 .dittos-toast.leaving {

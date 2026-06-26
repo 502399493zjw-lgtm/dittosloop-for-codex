@@ -241,7 +241,7 @@ test("preview keeps run output out of the run detail board", async () => {
 test("preview script includes codex session launch controls", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
-  expect(app).toContain("startCodexSession");
+  expect(app).toContain("copyLoopLaunchPrompt");
   expect(app).toContain("copyNewLoopPrompt");
   expect(app).toContain("copyText");
   expect(app).toContain("projectForLoop");
@@ -279,6 +279,19 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).not.toContain("script-steps");
 });
 
+test("loop launch copy reuses an existing run prompt and reports failures with toast", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("copyLoopLaunchPrompt(loop)");
+  expect(app).toContain("function existingLoopLaunch(loop)");
+  expect(app).toContain("if (existingLaunch?.prompt)");
+  expect(app).toContain("window.__dittosloopLastLaunchPrompt = existingLaunch.prompt");
+  expect(app).toContain("showToast(\"已复制启动提示，请打开 Codex 新会话粘贴运行。\")");
+  expect(app).toContain("showToast(`复制启动提示失败：${errorMessage(response,");
+  expect(app).not.toContain("renderError(`Codex session request failed: ${response.status}`)");
+  expect(app).not.toContain("renderNotice(\"已复制启动提示");
+});
+
 test("preview closes the workspace when all loop tabs are closed", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
   const styles = await readFile(join(previewDir, "styles.css"), "utf8");
@@ -304,12 +317,14 @@ test("new loop prompt copy uses a centered toast without changing the workspace"
   const styles = await readFile(join(previewDir, "styles.css"), "utf8");
 
   expect(app).toContain("showToast(\"已复制成功，请打开 Codex 新会话粘贴构建。\")");
-  expect(app).toContain("function showToast(message)");
+  expect(app).toContain("function showToast(message, kind = \"success\")");
   expect(app).toContain("dittos-toast");
   expect(app).not.toContain("renderNotice(\"已复制新建循环提示词");
   expect(styles).toContain(".dittos-toast");
   expect(styles).toContain("position: fixed");
+  expect(styles).toContain("top: 50%");
   expect(styles).toContain("left: 50%");
+  expect(styles).toContain(".dittos-toast.error");
 });
 
 test("preview script includes templates gallery launch controls", async () => {

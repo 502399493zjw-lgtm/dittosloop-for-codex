@@ -657,7 +657,7 @@ function renderLoopStage({ snapshot, detail }) {
       ]),
       el("span", "trigger-actions", [
         button("ghost-button launch-button", () => {
-          void startCodexSession(loop);
+          void copyLoopLaunchPrompt(loop);
         }, "复制启动请求"),
         button("danger-button", () => {
           void deleteLoop(loop);
@@ -730,7 +730,7 @@ async function copyNewLoopPrompt() {
     body: JSON.stringify({})
   });
   if (!response.ok) {
-    renderError(`New loop prompt request failed: ${response.status}`);
+    showToast(`复制构建提示失败：${errorMessage(response, "请稍后重试。")}`, "error");
     return;
   }
 
@@ -761,7 +761,21 @@ async function copyText(text) {
   textarea.remove();
 }
 
-async function startCodexSession(loop) {
+async function copyLoopLaunchPrompt(loop) {
+  const existingLaunch = existingLoopLaunch(loop);
+  if (existingLaunch?.prompt) {
+    window.__dittosloopLastLaunchRequest = existingLaunch.launchRequest;
+    window.__dittosloopLastLaunchPrompt = existingLaunch.prompt;
+    await copyText(existingLaunch.prompt);
+    selectedRunId = existingLaunch.run.id;
+    selectedLoopId = existingLaunch.run.loopId;
+    activeLoopTab = "history";
+    writeRouteState("run", selectedRunId);
+    showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
+    await loadRunDetail(existingLaunch.run.id);
+    return;
+  }
+
   const response = await fetch(`/api/loops/${encodeURIComponent(loop.id)}/codex-session`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -770,7 +784,7 @@ async function startCodexSession(loop) {
     })
   });
   if (!response.ok) {
-    renderError(`Codex session request failed: ${response.status}`);
+    showToast(`复制启动提示失败：${errorMessage(response, "请稍后重试。")}`, "error");
     return;
   }
 
@@ -782,9 +796,60 @@ async function startCodexSession(loop) {
   selectedLoopId = launch.run.loopId;
   activeLoopTab = "history";
   writeRouteState("run", selectedRunId);
-  renderNotice("已复制启动提示，请打开 Codex 新会话粘贴运行。");
-  showToast("已复制启动提示。");
+  showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
   await loadSnapshot();
+}
+
+function existingLoopLaunch(loop) {
+  if (!currentSnapshot || !loop?.id) return null;
+
+  const runs = runsForLoop(loop.id, currentSnapshot.runs ?? []);
+  const loopState = (currentSnapshot.loopStates ?? []).find((state) => state.loopId === loop.id);
+  const activeRun = runs.find((run) => run.id === loopState?.activeRunId && run.codexSession?.prompt);
+  const reusableRun = activeRun ?? [...runs].reverse().find((run) => (
+    run.codexSession?.prompt && !isTerminalRunStatus(run.status)
+  ));
+  if (!reusableRun?.codexSession?.prompt) return null;
+
+  const attempts = (currentSnapshot.attempts ?? []).filter((attempt) => attempt.runId === reusableRun.id);
+  const attempt = [...attempts].reverse().find((candidate) => candidate.status === "running") ?? attempts.at(-1);
+  const contexts = (currentSnapshot.workflowContexts ?? []).filter((context) => context.runId === reusableRun.id);
+  const context = attempt
+    ? [...contexts].reverse().find((candidate) => candidate.attemptId === attempt.id) ?? contexts.at(-1)
+    : contexts.at(-1);
+  const project = {
+    codexProjectId: reusableRun.codexProjectId ?? reusableRun.codexSession.codexProjectId,
+    projectLabel: reusableRun.projectLabel ?? reusableRun.codexSession.projectLabel,
+    projectPath: reusableRun.projectPath ?? reusableRun.codexSession.projectPath
+  };
+  const launchRequest = {
+    runId: reusableRun.id,
+    attemptId: attempt?.id,
+    workflowContextId: context?.id,
+    loopId: reusableRun.loopId,
+    title: `DittosLoop: ${loop.title}`,
+    prompt: reusableRun.codexSession.prompt,
+    workflowRuntime: context ? "dittosloop-local-workflow" : undefined,
+    workflowContractId: context?.contractId,
+    ...project
+  };
+
+  return {
+    run: reusableRun,
+    prompt: reusableRun.codexSession.prompt,
+    launchRequest
+  };
+}
+
+function isTerminalRunStatus(status) {
+  return ["completed", "failed", "cancelled", "canceled"].includes(timelineStatus(status));
+}
+
+function errorMessage(response, fallback = "请稍后重试。") {
+  if (!response) return fallback;
+  const status = response.status ? `${response.status}` : "";
+  const statusText = response.statusText ? ` ${response.statusText}` : "";
+  return `${status}${statusText}`.trim() || fallback;
 }
 
 async function deleteLoop(loop) {
@@ -1822,11 +1887,12 @@ function renderNotice(message) {
   elements.loopStage.replaceChildren(el("div", "stage-notice", message));
 }
 
-function showToast(message) {
+function showToast(message, kind = "success") {
   document.querySelector(".dittos-toast")?.remove();
-  const toast = el("div", "dittos-toast", message);
-  toast.setAttribute("role", "status");
-  toast.setAttribute("aria-live", "polite");
+  const toast = el("div", `dittos-toast ${kind}`, message);
+  const isError = kind === "error";
+  toast.setAttribute("role", isError ? "alert" : "status");
+  toast.setAttribute("aria-live", isError ? "assertive" : "polite");
   document.body.append(toast);
   window.setTimeout(() => {
     toast.classList.add("leaving");
