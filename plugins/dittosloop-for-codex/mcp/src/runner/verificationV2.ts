@@ -145,19 +145,21 @@ export function aggregateVerificationDecision(
   policy: VerificationPolicyV2,
   validatorResults: ValidatorResult[]
 ): AggregatedVerificationDecision {
-  const mustFailures = validatorResults.filter((result) => result.severity === "must" && result.status === "failed");
-  const shouldFailures = validatorResults.filter((result) => result.severity === "should" && result.status === "failed");
-  const needsHuman = validatorResults.filter((result) => result.status === "needs_human");
-  const uncoveredMustCriterionIds = findUncoveredMustCriterionIds(policy, validatorResults);
+  const effectiveResults = validatorResults.map((result) => enforceRubricAgentPolicy(policy, result));
+  const failures = effectiveResults.filter((result) => result.status === "failed");
+  const mustFailures = failures.filter((result) => result.severity === "must");
+  const shouldFailures = failures.filter((result) => result.severity === "should");
+  const needsHuman = effectiveResults.filter((result) => result.status === "needs_human");
+  const uncoveredMustCriterionIds = findUncoveredMustCriterionIds(policy, effectiveResults);
   const warnings = shouldFailures.map((result) => `${result.label} failed: ${result.summary}`);
 
   if (needsHuman.length > 0) {
     return {
       status: "needs_human",
       summary: "Verification needs human review.",
-      failedValidatorIds: mustFailures.map((result) => result.validatorId),
+      failedValidatorIds: failures.map((result) => result.validatorId),
       needsHumanValidatorIds: needsHuman.map((result) => result.validatorId),
-      failedCriterionIds: [],
+      failedCriterionIds: unique(failures.flatMap((result) => result.criteriaIds)),
       uncoveredMustCriterionIds,
       warnings,
       humanQuestion: `Review required for validators: ${needsHuman.map((result) => result.validatorId).join(", ")}`
@@ -202,9 +204,7 @@ export function recordedRubricAgentResultToValidatorResult(
 ): RubricAgentValidatorResult {
   const hasRequiredEvidence = !validator.evidenceRequired || Boolean(input.evidence?.trim());
   const hasScore = typeof input.score === "number" && Number.isFinite(input.score);
-  const inferredStatus = hasScore && hasRequiredEvidence
-    ? (input.score! >= validator.passScore ? "passed" : "failed")
-    : "needs_human";
+  const status = rubricAgentStatusFromInput(validator, input.status, input.score, hasScore, hasRequiredEvidence);
 
   return {
     validatorId: validator.id,
@@ -212,7 +212,7 @@ export function recordedRubricAgentResultToValidatorResult(
     label: validator.label,
     severity: validator.severity,
     criteriaIds: validator.criteriaIds,
-    status: input.status ?? inferredStatus,
+    status,
     summary: input.summary ?? rubricAgentSummary(validator, input.score, hasRequiredEvidence),
     evidence: input.evidence,
     score: input.score,
@@ -401,6 +401,56 @@ function failedDecision(
     warnings,
     repairInstructions: failures.map((result) => result.summary).join("\n")
   };
+}
+
+function enforceRubricAgentPolicy(policy: VerificationPolicyV2, result: ValidatorResult): ValidatorResult {
+  if (result.type !== "rubric_agent" || result.status !== "passed") {
+    return result;
+  }
+
+  const validator = policy.validators.find((candidate) =>
+    candidate.id === result.validatorId && candidate.type === "rubric_agent"
+  );
+  const requiresEvidence = policy.decision.requireEvidenceForAgentScores
+    || (validator?.type === "rubric_agent" && validator.evidenceRequired);
+  const hasRequiredEvidence = !requiresEvidence || Boolean(result.evidence?.trim());
+  const hasScore = typeof result.score === "number" && Number.isFinite(result.score);
+
+  if (!hasScore || !hasRequiredEvidence) {
+    return {
+      ...result,
+      status: "needs_human",
+      summary: !hasScore
+        ? "Rubric agent result requires a finite score."
+        : "Rubric agent result requires evidence."
+    };
+  }
+
+  if (validator?.type === "rubric_agent" && result.score < validator.passScore) {
+    return {
+      ...result,
+      status: "failed",
+      summary: `${validator.label} failed with score ${result.score}.`
+    };
+  }
+
+  return result;
+}
+
+function rubricAgentStatusFromInput(
+  validator: VerificationRubricAgentValidator,
+  requestedStatus: VerificationDecisionStatus | undefined,
+  score: number | undefined,
+  hasScore: boolean,
+  hasRequiredEvidence: boolean
+): VerificationDecisionStatus {
+  if (requestedStatus === "failed" || requestedStatus === "needs_human") {
+    return requestedStatus;
+  }
+  if (!hasScore || !hasRequiredEvidence) {
+    return "needs_human";
+  }
+  return score! >= validator.passScore ? "passed" : "failed";
 }
 
 function decisionSummary(decision: AggregatedVerificationDecision): string {

@@ -2,7 +2,11 @@ import { expect, test } from "vitest";
 
 import type { VerificationPolicyV2 } from "../src/contract/types.js";
 import { shouldRepair } from "../src/runner/repair.js";
-import { aggregateVerificationDecision, runVerificationV2 } from "../src/runner/verificationV2.js";
+import {
+  aggregateVerificationDecision,
+  recordedRubricAgentResultToValidatorResult,
+  runVerificationV2
+} from "../src/runner/verificationV2.js";
 import { createFailedDecision, createPassedDecision } from "../src/runner/verifier.js";
 
 test("creates structured verifier decisions from rubric checks", () => {
@@ -176,6 +180,91 @@ test("repair policy accepts verification v2 aggregated decisions", () => {
   const decision = aggregateVerificationDecision(verificationPolicyWithValidators([]), []);
 
   expect(shouldRepair(decision, { maxAttempts: 2, strategy: "repair_then_retry" }, 1)).toBe(true);
+});
+
+test("verification v2 recorded rubric results cannot pass without required evidence", () => {
+  const policy = verificationPolicyWithValidators([
+    {
+      id: "human-review",
+      type: "rubric_agent",
+      label: "Human review",
+      criteriaIds: ["tests-pass"],
+      scoreScale: { min: 0, max: 1 },
+      passScore: 1,
+      evidenceRequired: true,
+      severity: "must"
+    }
+  ]);
+  const validator = policy.validators[0];
+  if (validator.type !== "rubric_agent") {
+    throw new Error("expected rubric_agent validator");
+  }
+
+  const result = recordedRubricAgentResultToValidatorResult(validator, { status: "passed", score: 1 });
+  const decision = aggregateVerificationDecision(policy, [result]);
+
+  expect(result).toMatchObject({ validatorId: "human-review", status: "needs_human" });
+  expect(decision).toMatchObject({
+    status: "needs_human",
+    needsHumanValidatorIds: ["human-review"]
+  });
+});
+
+test("verification v2 needs-human aggregation preserves failed criterion ids", () => {
+  const policy = verificationPolicyWithValidators([
+    {
+      id: "unit-tests",
+      type: "command",
+      label: "Unit tests",
+      command: "npm",
+      args: ["test"],
+      criteriaIds: ["tests-pass"],
+      severity: "must",
+      parse: { kind: "none" }
+    },
+    {
+      id: "human-review",
+      type: "rubric_agent",
+      label: "Human review",
+      criteriaIds: ["tests-pass"],
+      scoreScale: { min: 0, max: 1 },
+      passScore: 1,
+      evidenceRequired: true,
+      severity: "must"
+    }
+  ]);
+  const decision = aggregateVerificationDecision(policy, [
+    {
+      validatorId: "unit-tests",
+      type: "command",
+      label: "Unit tests",
+      severity: "must",
+      criteriaIds: ["tests-pass"],
+      status: "failed",
+      summary: "Tests failed.",
+      command: "npm",
+      args: ["test"],
+      exitCode: 1,
+      stdout: "",
+      stderr: "boom"
+    },
+    {
+      validatorId: "human-review",
+      type: "rubric_agent",
+      label: "Human review",
+      severity: "must",
+      criteriaIds: ["tests-pass"],
+      status: "needs_human",
+      summary: "Review required."
+    }
+  ]);
+
+  expect(decision).toMatchObject({
+    status: "needs_human",
+    failedValidatorIds: ["unit-tests"],
+    failedCriterionIds: ["tests-pass"],
+    needsHumanValidatorIds: ["human-review"]
+  });
 });
 
 function verificationPolicyWithValidators(validators: VerificationPolicyV2["validators"]): VerificationPolicyV2 {
