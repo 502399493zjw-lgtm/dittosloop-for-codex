@@ -87,6 +87,14 @@ function validateStep(contract: FormalLoopContract, step: Step, stepIds: Set<str
     if (step.kind === "task" && step.runtime !== "codex") {
       errors.push(`task step ${step.id || "<missing>"} runtime must be codex`);
     }
+    if (step.kind === "task" && step.human === true) {
+      if (!step.prompt || step.prompt.trim().length === 0) {
+        errors.push(`human task step ${step.id || "<missing>"} requires a prompt question`);
+      }
+      if (step.runtime !== "codex") {
+        errors.push(`human task step ${step.id || "<missing>"} runtime must be codex`);
+      }
+    }
     if (step.sessionPolicy !== undefined && step.sessionPolicy !== "new") {
       errors.push(`${step.kind} step ${step.id || "<missing>"} sessionPolicy currently supports only new`);
     }
@@ -98,6 +106,9 @@ function validateStep(contract: FormalLoopContract, step: Step, stepIds: Set<str
   }
 
   if (step.kind === "phase" || step.kind === "parallel") {
+    if (step.kind === "phase" && step.pipeline !== undefined && typeof step.pipeline !== "boolean") {
+      errors.push(`phase step ${step.id || "<missing>"} pipeline must be a boolean`);
+    }
     if (!Array.isArray(step.children) || step.children.length === 0) {
       errors.push(`${step.kind} step ${step.id || "<missing>"} must include children`);
       return;

@@ -160,7 +160,7 @@ async function loadSnapshot() {
       selectedLoopId = null;
       selectedRunId = null;
       render(emptySnapshot);
-      renderTemplates([], "当前是离线文件预览，请从 DittosLoop 预览链接打开后读取模版库。");
+      renderTemplates([], "当前是离线文件预览，请从 DittosLoop 预览链接打开后读取Loop示例库。");
       renderLoopStage({ snapshot: emptySnapshot });
       return;
     }
@@ -191,7 +191,7 @@ async function loadTemplates() {
     renderTemplates(currentTemplates);
   } catch (error) {
     currentTemplates = [];
-    renderTemplates([], error instanceof Error ? error.message : "模版库暂不可用。");
+    renderTemplates([], error instanceof Error ? error.message : "Loop示例库暂不可用。");
   }
 }
 
@@ -208,8 +208,8 @@ function renderTemplates(templates = currentTemplates, errorMessage = "") {
   const visibleTemplates = filteredTemplates(templates);
   const header = el("header", "templates-header", [
     el("div", "templates-title-block", [
-      el("span", "templates-kicker", "模版库"),
-      el("strong", "", "各种模版")
+      el("span", "templates-kicker", "Loop示例库"),
+      el("strong", "", "各类Loop示例")
     ]),
     el("span", "templates-count", `${visibleTemplates.length}/${templates.length}`)
   ]);
@@ -226,7 +226,7 @@ function renderTemplates(templates = currentTemplates, errorMessage = "") {
   if (!templates.length) {
     elements.templates.replaceChildren(
       header,
-      el("div", "template-empty", "正在读取模版库...")
+      el("div", "template-empty", "正在读取Loop示例库...")
     );
     return;
   }
@@ -237,7 +237,7 @@ function renderTemplates(templates = currentTemplates, errorMessage = "") {
       filters,
       visibleTemplates.length
         ? el("div", "template-grid", visibleTemplates.map((template) => renderTemplateCard(template)))
-        : el("div", "template-empty", "没有符合当前筛选的模版。")
+        : el("div", "template-empty", "没有符合当前筛选的Loop示例。")
     ].filter(Boolean)
   );
 }
@@ -335,7 +335,7 @@ function renderTemplateFilterButton(kind, filter, counts = null) {
   filterButton.setAttribute("aria-pressed", String(active));
   if (kind === "category") {
     filterButton.setAttribute("data-template-category", filter.id);
-    filterButton.setAttribute("aria-label", `${filter.label}，${count ?? 0} 个模版`);
+    filterButton.setAttribute("aria-label", `${filter.label}，${count ?? 0} 个Loop示例`);
   } else {
     filterButton.setAttribute("data-template-cadence", filter.id);
   }
@@ -357,7 +357,7 @@ function renderTemplateCard(template) {
       renderTemplateSource(template),
       button("template-use-button", () => {
         void useTemplate(template);
-      }, "用模版")
+      }, "用Loop示例")
     ])
   ]);
   card.setAttribute("data-template-category", template.category);
@@ -397,19 +397,19 @@ function templateCategoryLabel(category) {
 }
 
 async function useTemplate(template) {
-  renderTemplateNotice("正在生成模版 prompt...", { kind: "info" });
+  renderTemplateNotice("正在生成Loop示例 prompt...", { kind: "info" });
 
   try {
     const response = await fetch(`/api/templates/${encodeURIComponent(template.id)}/prompt`, { cache: "no-store" });
     if (!response.ok) {
       console.error(`Template prompt request failed: ${response.status}`);
-      renderTemplateNotice("模版 prompt 生成失败，请刷新后再试。", { kind: "error" });
+      renderTemplateNotice("Loop示例 prompt 生成失败，请刷新后再试。", { kind: "error" });
       return;
     }
 
     const { prompt } = await response.json();
     if (typeof prompt !== "string" || !prompt.trim()) {
-      renderTemplateNotice("模版 prompt 生成失败，请刷新后再试。", { kind: "error" });
+      renderTemplateNotice("Loop示例 prompt 生成失败，请刷新后再试。", { kind: "error" });
       return;
     }
 
@@ -421,7 +421,7 @@ async function useTemplate(template) {
     renderTemplateNotice("复制失败，请允许浏览器剪贴板权限后再试。", { kind: "warning" });
   } catch (error) {
     console.error(error);
-    renderTemplateNotice("模版 prompt 生成失败，请确认预览服务仍在运行。", { kind: "error" });
+    renderTemplateNotice("Loop示例 prompt 生成失败，请确认预览服务仍在运行。", { kind: "error" });
   }
 }
 
@@ -657,8 +657,8 @@ function renderLoopStage({ snapshot, detail }) {
       ]),
       el("span", "trigger-actions", [
         button("ghost-button launch-button", () => {
-          void startCodexSession(loop);
-        }, "生成启动请求"),
+          void copyLoopLaunchPrompt(loop);
+        }, "复制启动请求"),
         button("danger-button", () => {
           void deleteLoop(loop);
         }, "删除")
@@ -716,7 +716,7 @@ function loopProjectLabel(loop, snapshot) {
 
 function projectForLoop(snapshot, loop) {
   const projects = projectChoices(snapshot);
-  if (!loop) return projects[0] ?? null;
+  if (!loop) return null;
 
   return projects.find((project) => {
     return project.id === loop.codexProjectId || project.path === loop.projectPath || project.name === loop.projectLabel;
@@ -724,22 +724,13 @@ function projectForLoop(snapshot, loop) {
 }
 
 async function copyNewLoopPrompt() {
-  const project = projectChoices(currentSnapshot)[0];
-  const body = project
-    ? {
-        codexProjectId: project.id,
-        projectLabel: project.name,
-        projectPath: project.path
-      }
-    : {};
-
   const response = await fetch("/api/new-loop-session", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify({})
   });
   if (!response.ok) {
-    renderError(`New loop prompt request failed: ${response.status}`);
+    showToast(`复制构建提示失败：${errorMessage(response, "请稍后重试。")}`, "error");
     return;
   }
 
@@ -770,10 +761,18 @@ async function copyText(text) {
   textarea.remove();
 }
 
-async function startCodexSession(loop) {
-  const project = projectForLoop(currentSnapshot, loop) ?? projectChoices(currentSnapshot)[0];
-  if (!project) {
-    renderError("没有可用的 Codex App 项目，无法创建 Codex 会话请求。");
+async function copyLoopLaunchPrompt(loop) {
+  const existingLaunch = existingLoopLaunch(loop);
+  if (existingLaunch?.prompt) {
+    window.__dittosloopLastLaunchRequest = existingLaunch.launchRequest;
+    window.__dittosloopLastLaunchPrompt = existingLaunch.prompt;
+    await copyText(existingLaunch.prompt);
+    selectedRunId = existingLaunch.run.id;
+    selectedLoopId = existingLaunch.run.loopId;
+    activeLoopTab = "history";
+    writeRouteState("run", selectedRunId);
+    await loadRunDetail(existingLaunch.run.id);
+    showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
     return;
   }
 
@@ -781,27 +780,76 @@ async function startCodexSession(loop) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      goal: loop.intent,
-      codexProjectId: project.id,
-      projectLabel: project.name,
-      projectPath: project.path
+      goal: loop.intent
     })
   });
   if (!response.ok) {
-    renderError(`Codex session request failed: ${response.status}`);
+    showToast(`复制启动提示失败：${errorMessage(response, "请稍后重试。")}`, "error");
     return;
   }
 
   const launch = await response.json();
   window.__dittosloopLastLaunchRequest = launch.launchRequest;
-  window.dispatchEvent(new CustomEvent("dittosloop:create-codex-thread", { detail: launch.launchRequest }));
-  window.parent?.postMessage({ type: "dittosloop:create-codex-thread", launchRequest: launch.launchRequest }, "*");
+  window.__dittosloopLastLaunchPrompt = launch.prompt;
+  await copyText(launch.prompt);
   selectedRunId = launch.run.id;
   selectedLoopId = launch.run.loopId;
   activeLoopTab = "history";
   writeRouteState("run", selectedRunId);
-  renderNotice("已生成 Codex 会话请求，等待 Codex App 打开新会话。");
   await loadSnapshot();
+  showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
+}
+
+function existingLoopLaunch(loop) {
+  if (!currentSnapshot || !loop?.id) return null;
+
+  const runs = runsForLoop(loop.id, currentSnapshot.runs ?? []);
+  const loopState = (currentSnapshot.loopStates ?? []).find((state) => state.loopId === loop.id);
+  const activeRun = runs.find((run) => run.id === loopState?.activeRunId && run.codexSession?.prompt);
+  const reusableRun = activeRun ?? [...runs].reverse().find((run) => (
+    run.codexSession?.prompt && !isTerminalRunStatus(run.status)
+  ));
+  if (!reusableRun?.codexSession?.prompt) return null;
+
+  const attempts = (currentSnapshot.attempts ?? []).filter((attempt) => attempt.runId === reusableRun.id);
+  const attempt = [...attempts].reverse().find((candidate) => candidate.status === "running") ?? attempts.at(-1);
+  const contexts = (currentSnapshot.workflowContexts ?? []).filter((context) => context.runId === reusableRun.id);
+  const context = attempt
+    ? [...contexts].reverse().find((candidate) => candidate.attemptId === attempt.id) ?? contexts.at(-1)
+    : contexts.at(-1);
+  const project = {
+    codexProjectId: reusableRun.codexProjectId ?? reusableRun.codexSession.codexProjectId,
+    projectLabel: reusableRun.projectLabel ?? reusableRun.codexSession.projectLabel,
+    projectPath: reusableRun.projectPath ?? reusableRun.codexSession.projectPath
+  };
+  const launchRequest = {
+    runId: reusableRun.id,
+    attemptId: attempt?.id,
+    workflowContextId: context?.id,
+    loopId: reusableRun.loopId,
+    title: `DittosLoop: ${loop.title}`,
+    prompt: reusableRun.codexSession.prompt,
+    workflowRuntime: context ? "dittosloop-local-workflow" : undefined,
+    workflowContractId: context?.contractId,
+    ...project
+  };
+
+  return {
+    run: reusableRun,
+    prompt: reusableRun.codexSession.prompt,
+    launchRequest
+  };
+}
+
+function isTerminalRunStatus(status) {
+  return ["completed", "failed", "cancelled", "canceled"].includes(timelineStatus(status));
+}
+
+function errorMessage(response, fallback = "请稍后重试。") {
+  if (!response) return fallback;
+  const status = response.status ? `${response.status}` : "";
+  const statusText = response.statusText ? ` ${response.statusText}` : "";
+  return `${status}${statusText}`.trim() || fallback;
 }
 
 async function deleteLoop(loop) {
@@ -1261,7 +1309,7 @@ function codexSessionRequestAgents(run) {
       status: run.codexSession.threadId ? "completed" : run.codexSession.status,
       description: run.codexSession.threadId
         ? "已关联真实 Codex worker 会话，可打开查看运行结果。"
-        : "等待 Codex App 创建任务会话。",
+        : "启动提示已复制，等待在 Codex 新会话中粘贴运行。",
       meta: "host-mediated session",
       threadId: run.codexSession.threadId,
       threadTitle: run.codexSession.threadTitle,
@@ -1517,6 +1565,8 @@ function timelineItemAgent(section, item, index) {
     status: timelineStatus(item.status),
     description: item.message,
     meta: item.createdAt ? `${section.title} · ${formatDate.format(new Date(item.createdAt))}` : section.title,
+    pipeline: item.pipeline === true,
+    human: item.human === true,
     threadId: session?.threadId,
     threadTitle: session?.threadTitle,
     threadUrl: session?.threadUrl,
@@ -1590,9 +1640,11 @@ function buildCodexSessionTimelineAgents(detail) {
     {
       id: `${run.id}-session`,
       avatar: "启",
-      name: "创建 Codex 会话",
+      name: "启动 Codex 会话",
       status: run.codexSession.threadId ? "completed" : run.codexSession.status,
-      description: run.codexSession.threadId ? "真实 Codex worker session 已创建并关联。" : "等待 Codex App 创建真实会话。",
+      description: run.codexSession.threadId
+        ? "真实 Codex worker session 已创建并关联。"
+        : "启动提示已复制，等待在 Codex 新会话中粘贴运行。",
       meta: formatDate.format(new Date(run.createdAt)),
       threadId: run.codexSession.threadId,
       threadTitle: run.codexSession.threadTitle,
@@ -1649,6 +1701,8 @@ function workflowAgentCards(detail) {
       status: timelineStatus(item.status),
       description: item.message,
       meta: item.createdAt ? formatDate.format(new Date(item.createdAt)) : "workflow agent",
+      pipeline: item.pipeline === true,
+      human: item.human === true,
       threadId: session?.threadId,
       threadTitle: session?.threadTitle,
       threadUrl: session?.threadUrl,
@@ -1705,12 +1759,15 @@ function phaseDone(status) {
 }
 
 function renderAgentCard(agent) {
-  const sessionLabel = agent.threadTitle ?? (agent.threadId ? shortThreadId(agent.threadId) : "待 Codex App 创建");
+  const sessionLabel = agent.threadTitle ?? (agent.threadId ? shortThreadId(agent.threadId) : "待手动启动");
   const card = el("div", `agent-card ${agent.threadUrl ? "has-session" : ""}`, [
     el("div", "agent-card-row", [
       el("span", "agent-avatar", agentInitial(agent)),
       el("div", "agent-main", [
-        el("span", "agent-name", agent.name),
+        el("span", "agent-name", [
+          el("span", "", agent.name),
+          ...renderAgentBadges(agent)
+        ]),
         agent.description ? el("p", "agent-description", agent.description) : null,
         agent.meta ? el("span", "agent-meta", agent.meta) : null,
         agent.detailList?.length
@@ -1732,6 +1789,17 @@ function renderAgentCard(agent) {
     card.dataset.threadId = agent.threadId;
   }
   return card;
+}
+
+function renderAgentBadges(agent) {
+  const badges = [];
+  if (agent.pipeline) {
+    badges.push(el("span", "agent-badge pipeline", "管道"));
+  }
+  if (agent.human) {
+    badges.push(el("span", "agent-badge human", "人工"));
+  }
+  return badges;
 }
 
 function agentInitial(agent) {
@@ -1785,7 +1853,7 @@ function sessionActionForRun(run, className = "open-session-button", pendingClas
     return openSessionButtonForRun(run.id, "打开会话", className);
   }
   if (run.codexSession) {
-    return el("span", pendingClassName, "等待 Codex App 创建");
+    return el("span", pendingClassName, "等待手动启动");
   }
   return null;
 }
@@ -1897,11 +1965,12 @@ function renderNotice(message) {
   elements.loopStage.replaceChildren(el("div", "stage-notice", message));
 }
 
-function showToast(message) {
+function showToast(message, kind = "success") {
   document.querySelector(".dittos-toast")?.remove();
-  const toast = el("div", "dittos-toast", message);
-  toast.setAttribute("role", "status");
-  toast.setAttribute("aria-live", "polite");
+  const toast = el("div", `dittos-toast ${kind}`, message);
+  const isError = kind === "error";
+  toast.setAttribute("role", isError ? "alert" : "status");
+  toast.setAttribute("aria-live", isError ? "assertive" : "polite");
   document.body.append(toast);
   window.setTimeout(() => {
     toast.classList.add("leaving");

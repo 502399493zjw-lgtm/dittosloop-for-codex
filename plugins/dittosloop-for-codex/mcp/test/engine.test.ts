@@ -106,6 +106,55 @@ describe("engine runtime", () => {
     });
   });
 
+  test("pipeline phase runs children in order and flags pipeline on events", async () => {
+    const events: EngineEvent[] = [];
+    const seenPrompts: string[] = [];
+    const executor: Executor = {
+      async run(req) {
+        seenPrompts.push(req.stepId ?? "");
+        expect(req.pipeline).toBe(true);
+        return { text: `${req.stepId}:done` };
+      }
+    };
+
+    await runFlow(
+      (api) => runBody({
+        steps: [
+          {
+            id: "produce",
+            kind: "phase",
+            label: "Produce",
+            pipeline: true,
+            children: [
+              { id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft" },
+              { id: "review", kind: "task", runtime: "codex", label: "Review", prompt: "Review" }
+            ]
+          }
+        ]
+      }, api),
+      {
+        runId: "run_pipeline",
+        executor,
+        emit: (event) => events.push(event),
+        now: () => "2026-06-24T00:00:00.000Z"
+      }
+    );
+
+    expect(seenPrompts).toEqual(["draft", "review"]);
+    expect(events.map((event) => event.type)).toEqual([
+      "run_started",
+      "phase_started",
+      "agent_started",
+      "agent_done",
+      "agent_started",
+      "agent_done",
+      "phase_done",
+      "run_completed"
+    ]);
+    expect(events.find((event) => event.type === "phase_started")).toMatchObject({ phaseId: "produce", pipeline: true });
+    expect(events.filter((event) => event.type === "agent_started").every((event) => (event as { pipeline?: boolean }).pipeline === true)).toBe(true);
+  });
+
   test("runBody preserves the parent phase id on nested agent events", async () => {
     const events: EngineEvent[] = [];
     const executor: Executor = {

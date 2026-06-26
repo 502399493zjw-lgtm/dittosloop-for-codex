@@ -4403,11 +4403,11 @@ var require_core = __commonJS({
     Ajv2.ValidationError = validation_error_1.default;
     Ajv2.MissingRefError = ref_error_1.default;
     exports.default = Ajv2;
-    function checkOptions(checkOpts, options, msg, log = "error") {
+    function checkOptions(checkOpts, options, msg, log2 = "error") {
       for (const key in checkOpts) {
         const opt = key;
         if (opt in options)
-          this.logger[log](`${msg}: option ${key}. ${checkOpts[opt]}`);
+          this.logger[log2](`${msg}: option ${key}. ${checkOpts[opt]}`);
       }
     }
     function getSchEnv(keyRef) {
@@ -18606,12 +18606,12 @@ var Protocol = class {
     this._taskMessageQueue = _options?.taskMessageQueue;
     if (this._taskStore) {
       this.setRequestHandler(GetTaskRequestSchema, async (request, extra) => {
-        const task = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
-        if (!task) {
+        const task2 = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+        if (!task2) {
           throw new McpError(ErrorCode.InvalidParams, "Failed to retrieve task: Task not found");
         }
         return {
-          ...task
+          ...task2
         };
       });
       this.setRequestHandler(GetTaskPayloadRequestSchema, async (request, extra) => {
@@ -18642,15 +18642,15 @@ var Protocol = class {
               await this._transport?.send(queuedMessage.message, { relatedRequestId: extra.requestId });
             }
           }
-          const task = await this._taskStore.getTask(taskId, extra.sessionId);
-          if (!task) {
+          const task2 = await this._taskStore.getTask(taskId, extra.sessionId);
+          if (!task2) {
             throw new McpError(ErrorCode.InvalidParams, `Task not found: ${taskId}`);
           }
-          if (!isTerminal(task.status)) {
+          if (!isTerminal(task2.status)) {
             await this._waitForTaskUpdate(taskId, extra.signal);
             return await handleTaskResult();
           }
-          if (isTerminal(task.status)) {
+          if (isTerminal(task2.status)) {
             const result = await this._taskStore.getTaskResult(taskId, extra.sessionId);
             this._clearTaskQueue(taskId);
             return {
@@ -18681,12 +18681,12 @@ var Protocol = class {
       });
       this.setRequestHandler(CancelTaskRequestSchema, async (request, extra) => {
         try {
-          const task = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
-          if (!task) {
+          const task2 = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+          if (!task2) {
             throw new McpError(ErrorCode.InvalidParams, `Task not found: ${request.params.taskId}`);
           }
-          if (isTerminal(task.status)) {
-            throw new McpError(ErrorCode.InvalidParams, `Cannot cancel task in terminal status: ${task.status}`);
+          if (isTerminal(task2.status)) {
+            throw new McpError(ErrorCode.InvalidParams, `Cannot cancel task in terminal status: ${task2.status}`);
           }
           await this._taskStore.updateTaskStatus(request.params.taskId, "cancelled", "Client cancelled task execution.", extra.sessionId);
           this._clearTaskQueue(request.params.taskId);
@@ -18974,10 +18974,10 @@ var Protocol = class {
     if (isJSONRPCResultResponse(response) && response.result && typeof response.result === "object") {
       const result = response.result;
       if (result.task && typeof result.task === "object") {
-        const task = result.task;
-        if (typeof task.taskId === "string") {
+        const task2 = result.task;
+        if (typeof task2.taskId === "string") {
           isTaskResponse = true;
-          this._taskProgressTokens.set(task.taskId, messageId);
+          this._taskProgressTokens.set(task2.taskId, messageId);
         }
       }
     }
@@ -19028,8 +19028,8 @@ var Protocol = class {
    * @experimental Use `client.experimental.tasks.requestStream()` to access this method.
    */
   async *requestStream(request, resultSchema, options) {
-    const { task } = options ?? {};
-    if (!task) {
+    const { task: task2 } = options ?? {};
+    if (!task2) {
       try {
         const result = await this.request(request, resultSchema, options);
         yield { type: "result", result };
@@ -19051,18 +19051,18 @@ var Protocol = class {
         throw new McpError(ErrorCode.InternalError, "Task creation did not return a task");
       }
       while (true) {
-        const task2 = await this.getTask({ taskId }, options);
-        yield { type: "taskStatus", task: task2 };
-        if (isTerminal(task2.status)) {
-          if (task2.status === "completed") {
+        const task3 = await this.getTask({ taskId }, options);
+        yield { type: "taskStatus", task: task3 };
+        if (isTerminal(task3.status)) {
+          if (task3.status === "completed") {
             const result = await this.getTaskResult({ taskId }, resultSchema, options);
             yield { type: "result", result };
-          } else if (task2.status === "failed") {
+          } else if (task3.status === "failed") {
             yield {
               type: "error",
               error: new McpError(ErrorCode.InternalError, `Task ${taskId} failed`)
             };
-          } else if (task2.status === "cancelled") {
+          } else if (task3.status === "cancelled") {
             yield {
               type: "error",
               error: new McpError(ErrorCode.InternalError, `Task ${taskId} was cancelled`)
@@ -19070,12 +19070,12 @@ var Protocol = class {
           }
           return;
         }
-        if (task2.status === "input_required") {
+        if (task3.status === "input_required") {
           const result = await this.getTaskResult({ taskId }, resultSchema, options);
           yield { type: "result", result };
           return;
         }
-        const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
+        const pollInterval = task3.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
         await new Promise((resolve) => setTimeout(resolve, pollInterval));
         options?.signal?.throwIfAborted();
       }
@@ -19092,7 +19092,7 @@ var Protocol = class {
    * Do not use this method to emit notifications! Use notification() instead.
    */
   request(request, resultSchema, options) {
-    const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
+    const { relatedRequestId, resumptionToken, onresumptiontoken, task: task2, relatedTask } = options ?? {};
     return new Promise((resolve, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
@@ -19104,7 +19104,7 @@ var Protocol = class {
       if (this._options?.enforceStrictCapabilities === true) {
         try {
           this.assertCapabilityForMethod(request.method);
-          if (task) {
+          if (task2) {
             this.assertTaskCapability(request.method);
           }
         } catch (e) {
@@ -19129,10 +19129,10 @@ var Protocol = class {
           }
         };
       }
-      if (task) {
+      if (task2) {
         jsonrpcRequest.params = {
           ...jsonrpcRequest.params,
-          task
+          task: task2
         };
       }
       if (relatedTask) {
@@ -19426,9 +19426,9 @@ var Protocol = class {
   async _waitForTaskUpdate(taskId, signal) {
     let interval = this._options?.defaultTaskPollInterval ?? 1e3;
     try {
-      const task = await this._taskStore?.getTask(taskId);
-      if (task?.pollInterval) {
-        interval = task.pollInterval;
+      const task2 = await this._taskStore?.getTask(taskId);
+      if (task2?.pollInterval) {
+        interval = task2.pollInterval;
       }
     } catch {
     }
@@ -19460,22 +19460,22 @@ var Protocol = class {
         }, sessionId);
       },
       getTask: async (taskId) => {
-        const task = await taskStore.getTask(taskId, sessionId);
-        if (!task) {
+        const task2 = await taskStore.getTask(taskId, sessionId);
+        if (!task2) {
           throw new McpError(ErrorCode.InvalidParams, "Failed to retrieve task: Task not found");
         }
-        return task;
+        return task2;
       },
       storeTaskResult: async (taskId, status, result) => {
         await taskStore.storeTaskResult(taskId, status, result, sessionId);
-        const task = await taskStore.getTask(taskId, sessionId);
-        if (task) {
+        const task2 = await taskStore.getTask(taskId, sessionId);
+        if (task2) {
           const notification = TaskStatusNotificationSchema.parse({
             method: "notifications/tasks/status",
-            params: task
+            params: task2
           });
           await this.notification(notification);
-          if (isTerminal(task.status)) {
+          if (isTerminal(task2.status)) {
             this._cleanupTaskProgressHandler(taskId);
           }
         }
@@ -19484,12 +19484,12 @@ var Protocol = class {
         return taskStore.getTaskResult(taskId, sessionId);
       },
       updateTaskStatus: async (taskId, status, statusMessage) => {
-        const task = await taskStore.getTask(taskId, sessionId);
-        if (!task) {
+        const task2 = await taskStore.getTask(taskId, sessionId);
+        if (!task2) {
           throw new McpError(ErrorCode.InvalidParams, `Task "${taskId}" not found - it may have been cleaned up`);
         }
-        if (isTerminal(task.status)) {
-          throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task.status}" to "${status}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
+        if (isTerminal(task2.status)) {
+          throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task2.status}" to "${status}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
         }
         await taskStore.updateTaskStatus(taskId, status, statusMessage, sessionId);
         const updatedTask = await taskStore.getTask(taskId, sessionId);
@@ -20534,15 +20534,15 @@ var McpServer = class {
       await Promise.resolve(handler.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
-    let task = createTaskResult.task;
-    const pollInterval = task.pollInterval ?? 5e3;
-    while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
+    let task2 = createTaskResult.task;
+    const pollInterval = task2.pollInterval ?? 5e3;
+    while (task2.status !== "completed" && task2.status !== "failed" && task2.status !== "cancelled") {
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
       }
-      task = updatedTask;
+      task2 = updatedTask;
     }
     return await extra.taskStore.getTaskResult(taskId);
   }
@@ -21112,6 +21112,162 @@ function createId(prefix) {
   return `${prefix}_${timestamp}_${random}`;
 }
 
+// src/script/builder.ts
+function task(opts) {
+  const step = {
+    id: opts.id,
+    kind: "task",
+    runtime: "codex",
+    label: opts.label,
+    prompt: opts.prompt
+  };
+  if (opts.verifierRef !== void 0) step.verifierRef = opts.verifierRef;
+  if (opts.sessionPolicy !== void 0) step.sessionPolicy = opts.sessionPolicy;
+  if (opts.outputSchema !== void 0) step.outputSchema = opts.outputSchema;
+  if (opts.subagent !== void 0) step.subagent = opts.subagent;
+  return step;
+}
+function agent(opts) {
+  const step = {
+    id: opts.id,
+    kind: "agent",
+    label: opts.label,
+    prompt: opts.prompt
+  };
+  if (opts.verifierRef !== void 0) step.verifierRef = opts.verifierRef;
+  if (opts.sessionPolicy !== void 0) step.sessionPolicy = opts.sessionPolicy;
+  if (opts.subagent !== void 0) step.subagent = opts.subagent;
+  return step;
+}
+function phase(id, label, children) {
+  return { id, kind: "phase", label, children };
+}
+function parallel(id, label, children) {
+  return { id, kind: "parallel", label, children };
+}
+function pipeline(id, label, children) {
+  return { id, kind: "phase", label, pipeline: true, children };
+}
+function log(message) {
+  return { kind: "directive", directive: "log", message };
+}
+function budget(usd) {
+  return { kind: "directive", directive: "budget", usd };
+}
+function human(id, label, question) {
+  return {
+    id,
+    kind: "task",
+    runtime: "codex",
+    label,
+    prompt: question,
+    human: true
+  };
+}
+function isScriptDirective(value) {
+  return value.kind === "directive";
+}
+function workflow(input) {
+  const steps = [];
+  const logs = [];
+  let budgetUsd;
+  for (const entry of input.steps) {
+    if (isScriptDirective(entry)) {
+      if (entry.directive === "log") {
+        logs.push(entry.message);
+      } else {
+        budgetUsd = entry.usd;
+      }
+      continue;
+    }
+    steps.push(entry);
+  }
+  const result = { steps };
+  if (budgetUsd !== void 0) result.budgetUsd = budgetUsd;
+  if (logs.length > 0) result.logs = logs;
+  return result;
+}
+
+// src/script/evalScript.ts
+function evalScriptAst(ast) {
+  if (!ast || !Array.isArray(ast.build)) {
+    throw new Error("Script AST must have a build array of builder calls");
+  }
+  const steps = [];
+  for (const call of ast.build) {
+    steps.push(dispatch(call));
+  }
+  return workflow({ steps });
+}
+function dispatch(call) {
+  if (!call || typeof call.fn !== "string") {
+    throw new Error("Each builder call requires a string fn");
+  }
+  const args = call.args ?? [];
+  switch (call.fn) {
+    case "task":
+      return task(expectObject(args[0], "task"));
+    case "agent":
+      return agent(expectObject(args[0], "agent"));
+    case "phase":
+      return phase(expectString(args[0], "phase id"), expectString(args[1], "phase label"), expectChildren(args[2], "phase"));
+    case "parallel":
+      return parallel(
+        expectString(args[0], "parallel id"),
+        expectString(args[1], "parallel label"),
+        expectChildren(args[2], "parallel")
+      );
+    case "pipeline":
+      return pipeline(
+        expectString(args[0], "pipeline id"),
+        expectString(args[1], "pipeline label"),
+        expectChildren(args[2], "pipeline")
+      );
+    case "human":
+      return human(
+        expectString(args[0], "human id"),
+        expectString(args[1], "human label"),
+        expectString(args[2], "human question")
+      );
+    case "log":
+      return log(expectString(args[0], "log message"));
+    case "budget":
+      return budget(expectNumber(args[0], "budget usd"));
+    default:
+      throw new Error(`Unknown builder fn: ${call.fn}`);
+  }
+}
+function expectChildren(value, fn) {
+  if (!Array.isArray(value)) {
+    throw new Error(`${fn} children must be an array of builder calls`);
+  }
+  return value.map((child) => {
+    const node = dispatch(child);
+    if (node.kind === "directive") {
+      throw new Error(`${fn} children cannot be directives`);
+    }
+    return node;
+  });
+}
+function expectObject(value, fn) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${fn} requires an options object`);
+  }
+  return value;
+}
+function expectString(value, label) {
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string`);
+  }
+  return value;
+}
+function expectNumber(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`);
+  }
+  return value;
+}
+
 // src/contract/compileContract.ts
 function compileContract(input, now = (/* @__PURE__ */ new Date()).toISOString()) {
   return {
@@ -21397,6 +21553,68 @@ async function pathExists(path) {
   }
 }
 
+// src/script/validateOutput.ts
+function validateOutputAgainstSchema(result, schema) {
+  let parsed;
+  try {
+    parsed = JSON.parse(result);
+  } catch {
+    throw new Error("outputSchema validation failed: result is not valid JSON");
+  }
+  checkValue(parsed, schema, "result");
+}
+function checkValue(value, schema, path) {
+  const expectedType = schema.type;
+  if (typeof expectedType === "string" && !matchesType(value, expectedType)) {
+    throw new Error(`outputSchema validation failed: ${path} must be of type ${expectedType}`);
+  }
+  if (expectedType === "object" || expectedType === void 0 && isPlainObject3(value)) {
+    const objectValue = isPlainObject3(value) ? value : void 0;
+    const required3 = schema.required;
+    if (Array.isArray(required3)) {
+      if (!objectValue) {
+        throw new Error(`outputSchema validation failed: ${path} must be an object`);
+      }
+      for (const key of required3) {
+        if (typeof key === "string" && !(key in objectValue)) {
+          throw new Error(`outputSchema validation failed: ${path} is missing required property "${key}"`);
+        }
+      }
+    }
+    const properties = schema.properties;
+    if (objectValue && isPlainObject3(properties)) {
+      for (const [key, childSchema] of Object.entries(properties)) {
+        if (key in objectValue && isPlainObject3(childSchema)) {
+          checkValue(objectValue[key], childSchema, `${path}.${key}`);
+        }
+      }
+    }
+  }
+}
+function matchesType(value, expectedType) {
+  switch (expectedType) {
+    case "object":
+      return isPlainObject3(value);
+    case "array":
+      return Array.isArray(value);
+    case "string":
+      return typeof value === "string";
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "integer":
+      return typeof value === "number" && Number.isInteger(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "null":
+      return value === null;
+    default:
+      return true;
+  }
+}
+function isPlainObject3(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 // src/contract/validateContract.ts
 function validateContract(contract) {
   const errors = [];
@@ -21462,6 +21680,14 @@ function validateStep(contract, step, stepIds, errors) {
     if (step.kind === "task" && step.runtime !== "codex") {
       errors.push(`task step ${step.id || "<missing>"} runtime must be codex`);
     }
+    if (step.kind === "task" && step.human === true) {
+      if (!step.prompt || step.prompt.trim().length === 0) {
+        errors.push(`human task step ${step.id || "<missing>"} requires a prompt question`);
+      }
+      if (step.runtime !== "codex") {
+        errors.push(`human task step ${step.id || "<missing>"} runtime must be codex`);
+      }
+    }
     if (step.sessionPolicy !== void 0 && step.sessionPolicy !== "new") {
       errors.push(`${step.kind} step ${step.id || "<missing>"} sessionPolicy currently supports only new`);
     }
@@ -21472,6 +21698,9 @@ function validateStep(contract, step, stepIds, errors) {
     return;
   }
   if (step.kind === "phase" || step.kind === "parallel") {
+    if (step.kind === "phase" && step.pipeline !== void 0 && typeof step.pipeline !== "boolean") {
+      errors.push(`phase step ${step.id || "<missing>"} pipeline must be a boolean`);
+    }
     if (!Array.isArray(step.children) || step.children.length === 0) {
       errors.push(`${step.kind} step ${step.id || "<missing>"} must include children`);
       return;
@@ -21591,7 +21820,7 @@ async function runBody(body, api, effectiveProfilesByStep = /* @__PURE__ */ new 
   }
   return results;
 }
-async function runStep(step, api, effectiveProfilesByStep, phaseId) {
+async function runStep(step, api, effectiveProfilesByStep, phaseId, pipeline2 = false) {
   if (step.kind === "agent" || step.kind === "task") {
     const agentProfile = effectiveProfilesByStep.get(step.id);
     return api.agent(step.prompt, {
@@ -21599,32 +21828,34 @@ async function runStep(step, api, effectiveProfilesByStep, phaseId) {
       stepId: step.id,
       phaseId,
       subagent: effectiveProfileToSubagent(agentProfile, step.subagent),
-      agentProfile
+      agentProfile,
+      ...pipeline2 ? { pipeline: true } : {},
+      ...step.kind === "task" && step.human ? { human: true } : {}
     });
   }
   if (step.kind === "phase") {
-    const phase = api.phase(step.label, { phaseId: step.id });
+    const phase2 = api.phase(step.label, { phaseId: step.id, pipeline: step.pipeline === true });
     try {
       const results = [];
       for (const child of step.children) {
-        results.push(await runStep(child, api, effectiveProfilesByStep, step.id));
+        results.push(await runStep(child, api, effectiveProfilesByStep, step.id, step.pipeline === true));
       }
-      phase.done("ok");
+      phase2.done("ok");
       return results;
     } catch (error2) {
-      phase.done("failed");
+      phase2.done("failed");
       throw error2;
     }
   }
   return api.parallel(
-    step.children.map((child) => () => runStep(child, api, effectiveProfilesByStep, phaseId)),
+    step.children.map((child) => () => runStep(child, api, effectiveProfilesByStep, phaseId, pipeline2)),
     { label: step.label, stepId: step.id }
   );
 }
 
 // src/engine/parallel.ts
-async function parallel(tasks) {
-  const results = await Promise.allSettled(tasks.map((task) => task()));
+async function parallel2(tasks) {
+  const results = await Promise.allSettled(tasks.map((task2) => task2()));
   const rejected = results.find((result) => result.status === "rejected");
   if (rejected) {
     throw rejected.reason;
@@ -21647,17 +21878,20 @@ async function runFlow(flow, deps) {
   const api = {
     phase(title, opts) {
       const phaseId = opts?.phaseId ?? title;
+      const pipeline2 = opts?.pipeline === true ? true : void 0;
       let closed = false;
-      emit({ type: "phase_started", label: title, title, phaseId });
+      emit({ type: "phase_started", label: title, title, phaseId, pipeline: pipeline2 });
       return {
         done(status = "ok") {
           if (closed) return;
           closed = true;
-          emit({ type: "phase_done", phaseId, title, status });
+          emit({ type: "phase_done", phaseId, title, status, pipeline: pipeline2 });
         }
       };
     },
     async agent(prompt, opts) {
+      const pipeline2 = opts?.pipeline === true ? true : void 0;
+      const human2 = opts?.human === true ? true : void 0;
       const cachedOutput = opts?.stepId ? deps.completedStepOutputs?.[opts.stepId] : void 0;
       if (cachedOutput !== void 0) {
         emit({
@@ -21666,17 +21900,21 @@ async function runFlow(flow, deps) {
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
           result: cachedOutput,
-          status: "ok"
+          status: "ok",
+          pipeline: pipeline2,
+          human: human2
         });
         return cachedOutput;
       }
-      emit({ type: "agent_started", label: opts?.label, stepId: opts?.stepId, phaseId: opts?.phaseId, prompt });
+      emit({ type: "agent_started", label: opts?.label, stepId: opts?.stepId, phaseId: opts?.phaseId, prompt, pipeline: pipeline2, human: human2 });
       try {
         const result = await deps.executor.run({
           prompt,
           label: opts?.label,
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
+          pipeline: opts?.pipeline,
+          human: opts?.human,
           subagent: opts?.subagent,
           agentProfile: opts?.agentProfile,
           workflowRuntime: deps.workflow?.runtime,
@@ -21689,6 +21927,8 @@ async function runFlow(flow, deps) {
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
           result: result.text,
+          pipeline: pipeline2,
+          human: human2,
           session: result.data?.session
         });
         return result.text;
@@ -21700,7 +21940,7 @@ async function runFlow(flow, deps) {
     },
     async parallel(tasks, opts) {
       emit({ type: "parallel_started", label: opts?.label, count: tasks.length });
-      const results = await parallel(tasks);
+      const results = await parallel2(tasks);
       emit({ type: "parallel_completed", label: opts?.label, count: tasks.length });
       return results;
     },
@@ -21837,6 +22077,8 @@ function flattenWorkflowSteps(steps, effectiveProfilesByStep, phaseId, depth = 0
       phaseId,
       prompt: step.kind === "agent" || step.kind === "task" ? step.prompt : void 0,
       sessionPolicy: step.kind === "agent" || step.kind === "task" ? step.sessionPolicy : void 0,
+      pipeline: step.kind === "phase" ? step.pipeline : void 0,
+      human: step.kind === "task" ? step.human : void 0,
       subagent: step.kind === "agent" || step.kind === "task" ? effectiveProfileToSubagent(agentProfile, step.subagent) : void 0,
       agentProfile
     };
@@ -21981,9 +22223,9 @@ function formalLoopDirectoryFiles(input) {
           ...input.loopState?.activeRunStatus ? { activeRunStatus: input.loopState.activeRunStatus } : {},
           workflow: {
             totalTasks: taskRuns.length,
-            completedTasks: taskRuns.filter((task) => task.status === "completed").length,
-            runningTasks: taskRuns.filter((task) => task.status === "running" || task.status === "requested").length,
-            failedTasks: taskRuns.filter((task) => task.status === "failed").length,
+            completedTasks: taskRuns.filter((task2) => task2.status === "completed").length,
+            runningTasks: taskRuns.filter((task2) => task2.status === "running" || task2.status === "requested").length,
+            failedTasks: taskRuns.filter((task2) => task2.status === "failed").length,
             tasks: taskRuns
           },
           latestRun: latestRun ? {
@@ -22121,6 +22363,9 @@ async function syncLoopWorkspaceDirectory(dataDir, loopId, files) {
     })
   );
 }
+async function deleteLoopWorkspaceDirectory(dataDir, loopId) {
+  await rm(join2(dataDir, "loops", loopId), { recursive: true, force: true });
+}
 function resolveLoopFilePath(loopDir, filePath) {
   const parts = filePath.split("/");
   if (filePath.startsWith("/") || parts.some((part) => part === "" || part === "." || part === "..")) {
@@ -22172,7 +22417,8 @@ var LoopService = class {
   previewBaseUrl;
   async createLoopContract(input) {
     const timestamp = this.now();
-    const contract = compileContract(normalizeFormalContractInput(input, input.id ?? this.nextId("loop")), timestamp);
+    const resolvedInput = resolveScriptContractInput(input);
+    const contract = compileContract(normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")), timestamp);
     validateContract(contract);
     await this.options.store.updateState((state) => ({
       ...state,
@@ -22277,9 +22523,11 @@ var LoopService = class {
         memoryCommits: state.memoryCommits.filter(
           (commit) => commit.loopId !== loopId && (!commit.runId || !deletedRunIds.has(commit.runId))
         ),
+        loopMemories: state.loopMemories.filter((memory) => memory.loopId !== loopId),
         artifacts: state.artifacts.filter((artifact) => !deletedRunIds.has(artifact.runId))
       };
     });
+    await deleteLoopWorkspaceDirectory(this.options.store.dataDir, loopId);
     return deletedLoop;
   }
   async executeWorkflowAttempt(runId, input = {}) {
@@ -22387,20 +22635,54 @@ var LoopService = class {
       throw new Error("No workflow executor or Codex session bridge is configured.");
     }
     return {
-      run: async (request) => this.runCodexSessionStep(
-        bridge,
-        run,
-        {
-          ...request,
-          attemptId,
-          workflowContextId
-        },
-        {
-          attemptId,
-          workflowContextId
-        }
-      )
+      run: async (request) => {
+        const prompt = request.pipeline ? await this.injectPipelinePromptContext(workflowContextId, request) : request.prompt;
+        return this.runCodexSessionStep(
+          bridge,
+          run,
+          {
+            ...request,
+            prompt,
+            attemptId,
+            workflowContextId
+          },
+          {
+            attemptId,
+            workflowContextId
+          }
+        );
+      }
     };
+  }
+  // For a pipeline phase, thread the prior sibling step's memoized output into the next
+  // child's prompt context. Reads the prior output from the persisted WorkflowContext and
+  // the sibling ordering from the contractSnapshot (the replay boundary).
+  async injectPipelinePromptContext(workflowContextId, request) {
+    if (!request.stepId || !request.phaseId) {
+      return request.prompt;
+    }
+    const state = await this.options.store.readState();
+    const context = findWorkflowContextById(state, workflowContextId);
+    if (!context) {
+      return request.prompt;
+    }
+    const contract = context.contractSnapshot;
+    const phase2 = contract ? findPipelinePhase(contract.body.steps, request.phaseId) : void 0;
+    if (!phase2) {
+      return request.prompt;
+    }
+    const prevStepId = previousPipelineSiblingId(phase2, request.stepId);
+    if (!prevStepId) {
+      return request.prompt;
+    }
+    const priorOutput = context.steps[prevStepId]?.output;
+    if (priorOutput === void 0) {
+      return request.prompt;
+    }
+    return `${request.prompt}
+
+[pipeline] Prior step (${prevStepId}) output:
+${priorOutput}`;
   }
   async runCodexSessionStep(bridge, run, request, workflowContext) {
     const taskRunId = workflowContext ? await this.markWorkflowTaskRunning(workflowContext.workflowContextId, {
@@ -22810,6 +23092,13 @@ var LoopService = class {
       );
       const isWorkflowTaskResult = Boolean(targetContext && hasWorkflowTaskLocator(resultInput));
       const targetContract = targetContext ? targetContext.contractSnapshot ?? state.formalContracts.find((candidate) => candidate.id === (targetContext.contractId ?? run.loopId)) : void 0;
+      if (resultInput.status === "passed" && targetContext && targetContract) {
+        const validationStepId = resultInput.stepId ?? targetTaskRun?.stepId;
+        const outputSchema = validationStepId ? findStepOutputSchema(targetContract.body.steps, validationStepId) : void 0;
+        if (outputSchema && resultInput.result !== void 0) {
+          validateOutputAgainstSchema(resultInput.result, outputSchema);
+        }
+      }
       const workflowContextAfterTaskResult = targetContext ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp, { finalize: false }) : void 0;
       const hasRemainingWorkflowSteps = Boolean(
         targetContract && workflowContextAfterTaskResult && hasRemainingExecutableSteps(targetContract, workflowContextAfterTaskResult)
@@ -23352,7 +23641,7 @@ var LoopService = class {
     if (!input.contract && !input.patch) {
       throw new Error("Workflow revision requires a patch or contract");
     }
-    const revisionContractInput = input.contract ? { ...input.contract, id: loopId } : applyContractPatch(baseContract, input.patch ?? {});
+    const revisionContractInput = input.contract ? resolveScriptContractInput({ ...input.contract, id: loopId }) : resolveScriptContractInput(applyContractPatch(baseContract, input.patch ?? {}));
     const normalized = normalizeFormalContractInput(revisionContractInput, loopId);
     const contract = compileContract(
       {
@@ -24035,8 +24324,30 @@ function requireWorkflowRevisionSessionContext(state, loopId, input, revision) {
   }
   return { run, attempt };
 }
+function resolveScriptContractInput(input) {
+  const { script, ...rest } = input;
+  if (!script) {
+    if (!rest.body) {
+      throw new Error("Loop contract requires body.steps or a script");
+    }
+    return rest;
+  }
+  if (rest.body) {
+    throw new Error("Loop contract cannot include both body and script");
+  }
+  const built = evalScriptAst(script);
+  return {
+    ...rest,
+    body: { steps: built.steps },
+    ...built.budgetUsd !== void 0 && rest.budgetUsd === void 0 ? { budgetUsd: built.budgetUsd } : {}
+  };
+}
 function normalizeFormalContractInput(input, id) {
-  const { codexProjectId, projectLabel, projectPath, projectBinding, ...contractInput } = input;
+  const { codexProjectId, projectLabel, projectPath, projectBinding, script, body, ...contractInput } = input;
+  void script;
+  if (!body) {
+    throw new Error("Loop contract requires body.steps");
+  }
   const normalizedProjectBinding = {
     codexProjectId: projectBinding?.codexProjectId ?? codexProjectId,
     projectLabel: projectBinding?.projectLabel ?? projectLabel,
@@ -24045,11 +24356,31 @@ function normalizeFormalContractInput(input, id) {
   const hasProjectBinding = Object.values(normalizedProjectBinding).some(Boolean);
   return {
     ...contractInput,
+    body,
     id,
     ...hasProjectBinding ? { projectBinding: normalizedProjectBinding } : {}
   };
 }
 function applyContractPatch(baseContract, patch) {
+  if (patch.script) {
+    return {
+      ...baseContract,
+      ...patch,
+      id: baseContract.id,
+      title: patch.title ?? baseContract.title,
+      goal: patch.goal ?? baseContract.goal,
+      body: void 0,
+      verification: patch.verification ?? baseContract.verification,
+      repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
+      stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+      budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+      escalation: patch.escalation ?? baseContract.escalation,
+      projectBinding: patch.projectBinding ?? baseContract.projectBinding,
+      memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
+      trigger: patch.trigger ?? baseContract.trigger,
+      status: patch.status ?? baseContract.status
+    };
+  }
   return {
     ...baseContract,
     ...patch,
@@ -24493,6 +24824,41 @@ function requireAttempt(state, attemptId) {
     throw new Error(`Attempt not found: ${attemptId}`);
   }
   return attempt;
+}
+function findWorkflowContextById(state, workflowContextId) {
+  return state.workflowContexts.find((candidate) => candidate.id === workflowContextId);
+}
+function findPipelinePhase(steps, phaseId) {
+  for (const step of steps) {
+    if (step.kind === "phase") {
+      if (step.id === phaseId && step.pipeline === true) {
+        return step;
+      }
+      const nested = findPipelinePhase(step.children, phaseId);
+      if (nested) return nested;
+    } else if (step.kind === "parallel") {
+      const nested = findPipelinePhase(step.children, phaseId);
+      if (nested) return nested;
+    }
+  }
+  return void 0;
+}
+function previousPipelineSiblingId(phase2, stepId) {
+  const index = phase2.children.findIndex((child) => child.id === stepId);
+  if (index <= 0) return void 0;
+  return phase2.children[index - 1]?.id;
+}
+function findStepOutputSchema(steps, stepId) {
+  for (const step of steps) {
+    if ((step.kind === "task" || step.kind === "agent") && step.id === stepId) {
+      return step.kind === "task" ? step.outputSchema : void 0;
+    }
+    if (step.kind === "phase" || step.kind === "parallel") {
+      const nested = findStepOutputSchema(step.children, stepId);
+      if (nested) return nested;
+    }
+  }
+  return void 0;
 }
 function requireWorkflowContext(state, workflowContextId) {
   const context = state.workflowContexts.find((candidate) => candidate.id === workflowContextId);
@@ -25079,6 +25445,7 @@ var taskStepSchema = external_exports.object({
   verifierRef: external_exports.string().optional(),
   sessionPolicy: external_exports.literal("new").optional(),
   outputSchema: external_exports.record(external_exports.unknown()).optional(),
+  human: external_exports.boolean().optional(),
   subagent: subagentSchema.optional()
 });
 var stepSchema = external_exports.lazy(
@@ -25089,6 +25456,7 @@ var stepSchema = external_exports.lazy(
       id: external_exports.string().min(1),
       kind: external_exports.literal("phase"),
       label: external_exports.string().min(1),
+      pipeline: external_exports.boolean().optional(),
       children: external_exports.array(stepSchema)
     }),
     external_exports.object({
@@ -25099,12 +25467,20 @@ var stepSchema = external_exports.lazy(
     })
   ])
 );
-var createLoopContractSchema = external_exports.object({
+var scriptCallSchema = external_exports.object({
+  fn: external_exports.string().min(1),
+  args: external_exports.array(external_exports.unknown()).optional()
+});
+var scriptSchema = external_exports.object({
+  build: external_exports.array(scriptCallSchema).min(1)
+});
+var createLoopContractObjectSchema = external_exports.object({
   id: external_exports.string().min(1).optional(),
   title: external_exports.string().min(1),
   goal: external_exports.string().min(1),
   intent: external_exports.string().optional(),
-  body: external_exports.object({ steps: external_exports.array(stepSchema).min(1) }),
+  body: external_exports.object({ steps: external_exports.array(stepSchema).min(1) }).optional(),
+  script: scriptSchema.optional(),
   verification: external_exports.object({
     mode: external_exports.enum(["after_workflow", "after_each_agent"]),
     rubrics: external_exports.array(external_exports.object({
@@ -25131,6 +25507,10 @@ var createLoopContractSchema = external_exports.object({
     projectPath: external_exports.string().optional()
   }).optional()
 });
+var createLoopContractSchema = createLoopContractObjectSchema.refine(
+  (value) => Boolean(value.body) !== Boolean(value.script),
+  { message: "exactly one of body or script is required" }
+);
 var startCodexSessionSchema = external_exports.object({
   loopId: external_exports.string().min(1),
   goal: external_exports.string().optional(),
@@ -25158,12 +25538,14 @@ var proposeWorkflowRevisionSchema = external_exports.object({
   authorThreadId: external_exports.string().min(1).optional(),
   reason: external_exports.string().min(1).optional(),
   rationale: external_exports.string().min(1).optional(),
-  contract: createLoopContractSchema.optional(),
-  patch: createLoopContractSchema.partial().optional()
+  contract: createLoopContractObjectSchema.optional(),
+  patch: createLoopContractObjectSchema.partial().optional()
 }).refine((value) => Boolean(value.reason || value.rationale), {
   message: "reason or rationale is required"
 }).refine((value) => Boolean(value.contract || value.patch), {
   message: "contract or patch is required"
+}).refine((value) => !(value.contract?.body && value.contract?.script), {
+  message: "contract cannot include both body and script"
 });
 var listWorkflowRevisionsSchema = external_exports.object({
   loopId: external_exports.string().min(1)
@@ -25757,9 +26139,9 @@ function extractEngineEvents(detail) {
 }
 function buildTimeline(detail, engineEvents = extractEngineEvents(detail)) {
   const sections = [];
-  const workflow = engineEvents.map(workflowEventToTimelineItem).filter((item) => Boolean(item));
-  if (workflow.length > 0) {
-    sections.push({ id: "workflow", title: "\u5DE5\u4F5C\u6D41", items: workflow });
+  const workflow2 = engineEvents.map(workflowEventToTimelineItem).filter((item) => Boolean(item));
+  if (workflow2.length > 0) {
+    sections.push({ id: "workflow", title: "\u5DE5\u4F5C\u6D41", items: workflow2 });
   }
   const verificationEvents = engineEvents.map(verificationEventToTimelineItem).filter((item) => Boolean(item));
   const verification = verificationEvents.length > 0 ? verificationEvents : detail.verificationResults.map(verificationToTimelineItem);
@@ -25771,9 +26153,9 @@ function buildTimeline(detail, engineEvents = extractEngineEvents(detail)) {
   if (repair.length > 0) {
     sections.push({ id: "repair", title: "\u4FEE\u590D", items: repair });
   }
-  const human = engineEvents.map(humanEventToTimelineItem).filter((item) => Boolean(item));
-  if (human.length > 0) {
-    sections.push({ id: "human", title: "\u4EBA\u5DE5\u5904\u7406", items: human });
+  const human2 = engineEvents.map(humanEventToTimelineItem).filter((item) => Boolean(item));
+  if (human2.length > 0) {
+    sections.push({ id: "human", title: "\u4EBA\u5DE5\u5904\u7406", items: human2 });
   }
   const runDone = engineEvents.map(runDoneEventToTimelineItem).filter((item) => Boolean(item));
   if (runDone.length > 0) {
@@ -25854,6 +26236,8 @@ function baseItem(event, kind, label, status, message) {
     sequence: event.sequence,
     stepId: "stepId" in event ? event.stepId : "nodeId" in event ? event.nodeId : "phaseId" in event ? event.phaseId : void 0,
     phaseId: "phaseId" in event ? event.phaseId : void 0,
+    pipeline: "pipeline" in event && event.pipeline === true ? true : void 0,
+    human: "human" in event && event.human === true ? true : void 0,
     message: typeof message === "string" ? message : void 0,
     session: "session" in event ? event.session : void 0
   };

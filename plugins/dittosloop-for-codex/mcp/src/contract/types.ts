@@ -75,6 +75,7 @@ export interface TaskStep {
   sessionPolicy?: "new";
   outputSchema?: Record<string, unknown>;
   agentProfileRef?: string;
+  human?: boolean;
   subagent?: CodexSubagentSpec;
 }
 
@@ -89,6 +90,7 @@ export interface PhaseStep {
   id: string;
   kind: "phase";
   label: string;
+  pipeline?: boolean;
   children: Step[];
 }
 

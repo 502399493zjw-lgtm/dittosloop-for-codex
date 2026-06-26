@@ -157,7 +157,7 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("renderAgentCard");
   expect(app).toContain("agent-card");
   expect(app).toContain("agent-avatar");
-  expect(app).toContain("待 Codex App 创建");
+  expect(app).toContain("待手动启动");
   expect(app).toContain("threadId");
   expect(app).toContain("Codex worker 会话");
   expect(app).toContain("codexSessionRequestAgents");
@@ -217,6 +217,22 @@ test("preview script references agent profile and preflight workflow metadata", 
   expect(app).toContain("allowDegradedProfiles");
 });
 
+test("preview renders pipeline and human badges on workflow nodes", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+  const styles = await readFile(join(previewDir, "styles.css"), "utf8");
+
+  expect(app).toContain("renderAgentBadges");
+  expect(app).toContain("agent-badge pipeline");
+  expect(app).toContain("agent-badge human");
+  expect(app).toContain("管道");
+  expect(app).toContain("人工");
+  expect(app).toContain("item.pipeline === true");
+  expect(app).toContain("item.human === true");
+  expect(styles).toContain(".agent-badge");
+  expect(styles).toContain(".agent-badge.pipeline");
+  expect(styles).toContain(".agent-badge.human");
+});
+
 test("preview renders agent cards with minimal avatars and no diamond marker", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
   const styles = await readFile(join(previewDir, "styles.css"), "utf8");
@@ -256,7 +272,7 @@ test("preview keeps run output out of the run detail board", async () => {
 test("preview script includes codex session launch controls", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
-  expect(app).toContain("startCodexSession");
+  expect(app).toContain("copyLoopLaunchPrompt");
   expect(app).toContain("copyNewLoopPrompt");
   expect(app).toContain("copyText");
   expect(app).toContain("projectForLoop");
@@ -272,21 +288,39 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("/codex-session");
   expect(app).toContain("/api/new-loop-session");
   expect(app).toContain("已复制成功，请打开 Codex 新会话粘贴构建。");
-  expect(app).toContain("创建 Codex 会话请求");
+  expect(app).toContain("复制启动请求");
+  expect(app).toContain("已复制启动提示，请打开 Codex 新会话粘贴运行。");
   expect(app).toContain("sessionActionForRun");
-  expect(app).toContain("等待 Codex App 创建");
-  expect(app).toContain("dittosloop:create-codex-thread");
+  expect(app).toContain("window.__dittosloopLastLaunchPrompt");
   expect(app).toContain("launchRequest");
   expect(app).toContain("codexProjectId");
   expect(app).toContain("deleteLoop");
   expect(app).toContain("danger-button");
   expect(app).toContain("window.confirm");
+  expect(app).not.toContain("创建 Codex 会话请求");
+  expect(app).not.toContain("Codex App 创建");
+  expect(app).not.toContain("dittosloop:create-codex-thread");
+  expect(app).not.toContain("没有可用的 Codex App 项目");
+  expect(app).not.toContain("projectChoices(currentSnapshot)[0]");
   expect(app).not.toContain("再次点击删除");
   expect(app).not.toContain("未连接 Codex 项目");
   expect(app).not.toContain("未关联会话");
   expect(app).not.toContain("待创建会话");
   expect(app).not.toContain("本轮剧本");
   expect(app).not.toContain("script-steps");
+});
+
+test("loop launch copy reuses an existing run prompt and reports failures with toast", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("copyLoopLaunchPrompt(loop)");
+  expect(app).toContain("function existingLoopLaunch(loop)");
+  expect(app).toContain("if (existingLaunch?.prompt)");
+  expect(app).toContain("window.__dittosloopLastLaunchPrompt = existingLaunch.prompt");
+  expect(app).toContain("showToast(\"已复制启动提示，请打开 Codex 新会话粘贴运行。\")");
+  expect(app).toContain("showToast(`复制启动提示失败：${errorMessage(response,");
+  expect(app).not.toContain("renderError(`Codex session request failed: ${response.status}`)");
+  expect(app).not.toContain("renderNotice(\"已复制启动提示");
 });
 
 test("preview closes the workspace when all loop tabs are closed", async () => {
@@ -314,12 +348,14 @@ test("new loop prompt copy uses a centered toast without changing the workspace"
   const styles = await readFile(join(previewDir, "styles.css"), "utf8");
 
   expect(app).toContain("showToast(\"已复制成功，请打开 Codex 新会话粘贴构建。\")");
-  expect(app).toContain("function showToast(message)");
+  expect(app).toContain("function showToast(message, kind = \"success\")");
   expect(app).toContain("dittos-toast");
   expect(app).not.toContain("renderNotice(\"已复制新建循环提示词");
   expect(styles).toContain(".dittos-toast");
   expect(styles).toContain("position: fixed");
+  expect(styles).toContain("top: 50%");
   expect(styles).toContain("left: 50%");
+  expect(styles).toContain(".dittos-toast.error");
 });
 
 test("preview script includes templates gallery launch controls", async () => {
@@ -333,7 +369,8 @@ test("preview script includes templates gallery launch controls", async () => {
   expect(html).toContain("id=\"project-view\"");
   expect(html).toContain("id=\"template-view\"");
   expect(html).toContain("项目");
-  expect(html).toContain("模版");
+  expect(html).toContain("Loop示例");
+  expect(html).not.toContain("模版");
   expect(app).toContain("renderTemplates");
   expect(app).toContain("setListView");
   expect(app).toContain("activeListView");
@@ -352,7 +389,7 @@ test("preview script includes templates gallery launch controls", async () => {
   expect(app).toContain("data-template-cadence");
   expect(app).toContain("/api/templates");
   expect(app).toContain("useTemplate");
-  expect(app).toContain("用模版");
+  expect(app).toContain("用Loop示例");
   expect(app).toContain("templateToast");
   expect(app).toContain("renderTemplateNotice");
   expect(app).toContain("renderTemplateToast");
@@ -368,7 +405,7 @@ test("preview script includes templates gallery launch controls", async () => {
   expect(styles).toContain("translate(-50%, -50%)");
   expect(styles).toContain(".template-filter-count");
   expect(styles).not.toContain(".template-feedback");
-  expect(app).toContain("正在生成模版 prompt...");
+  expect(app).toContain("正在生成Loop示例 prompt...");
   expect(app).toContain("/api/templates/${encodeURIComponent(template.id)}/prompt");
   expect(app).toContain("copyTemplatePrompt");
   expect(app).toContain("copyTemplatePromptWithSelection");
@@ -378,7 +415,11 @@ test("preview script includes templates gallery launch controls", async () => {
   expect(app).not.toContain("templateToast.prompt");
   expect(app).not.toContain("launchMode: \"host\"");
   expect(app).not.toContain("__dittosloopTemplateLaunchRequest");
-  expect(app).toContain("各种模版");
+  expect(app).toContain("各类Loop示例");
+  expect(app).toContain("Loop示例库");
+  expect(app).toContain("正在读取Loop示例库...");
+  expect(app).toContain("没有符合当前筛选的Loop示例。");
+  expect(app).not.toContain("模版");
   expect(app).toContain("全部类型");
   expect(app).toContain("内容");
   expect(app).toContain("评估");
@@ -409,7 +450,7 @@ test("preview file fallback explains templates need the local preview server", a
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
   expect(app).toContain("window.location.protocol === \"file:\"");
-  expect(app).toContain("renderTemplates([], \"当前是离线文件预览，请从 DittosLoop 预览链接打开后读取模版库。\")");
+  expect(app).toContain("renderTemplates([], \"当前是离线文件预览，请从 DittosLoop 预览链接打开后读取Loop示例库。\")");
   expect(app).not.toContain("renderTemplates([]);");
 });
 
@@ -1437,6 +1478,47 @@ test("starts a codex session run from the preview api", async () => {
     projectLabel: "dittos loop"
   });
   expect(launch.prompt).toContain("AI Dev Tools Update Monitor");
+});
+
+test("starts a projectless codex session run from the preview api", async () => {
+  const service = await createService();
+  const loop = await createFormalLoop(service, {
+    title: "Projectless update monitor",
+    goal: "Watch release updates"
+  });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/loops/${loop.id}/codex-session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      goal: "Check projectless updates"
+    })
+  });
+  const launch = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(launch.run).toMatchObject({
+    loopId: loop.id,
+    goal: "Check projectless updates",
+    codexSession: {
+      mode: "new_session",
+      status: "requested"
+    }
+  });
+  expect(launch.run).not.toHaveProperty("codexProjectId");
+  expect(launch.run).not.toHaveProperty("projectLabel");
+  expect(launch.run).not.toHaveProperty("projectPath");
+  expect(launch.launchRequest).toMatchObject({
+    runId: launch.run.id,
+    loopId: loop.id,
+    title: "DittosLoop: Projectless update monitor"
+  });
+  expect(launch.launchRequest).not.toHaveProperty("codexProjectId");
+  expect(launch.launchRequest).not.toHaveProperty("projectLabel");
+  expect(launch.launchRequest).not.toHaveProperty("projectPath");
+  expect(launch.prompt).toContain("Projectless update monitor");
 });
 
 test("records a codex thread from the preview api", async () => {

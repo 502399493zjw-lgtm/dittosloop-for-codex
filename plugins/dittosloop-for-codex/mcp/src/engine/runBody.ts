@@ -20,7 +20,8 @@ async function runStep(
   step: Step,
   api: FlowApi,
   effectiveProfilesByStep: Map<string, EffectiveAgentProfile>,
-  phaseId?: string
+  phaseId?: string,
+  pipeline = false
 ): Promise<unknown> {
   if (step.kind === "agent" || step.kind === "task") {
     const agentProfile = effectiveProfilesByStep.get(step.id);
@@ -29,16 +30,18 @@ async function runStep(
       stepId: step.id,
       phaseId,
       subagent: effectiveProfileToSubagent(agentProfile, step.subagent),
-      agentProfile
+      agentProfile,
+      ...(pipeline ? { pipeline: true } : {}),
+      ...(step.kind === "task" && step.human ? { human: true } : {})
     });
   }
 
   if (step.kind === "phase") {
-    const phase = api.phase(step.label, { phaseId: step.id });
+    const phase = api.phase(step.label, { phaseId: step.id, pipeline: step.pipeline === true });
     try {
       const results: unknown[] = [];
       for (const child of step.children) {
-        results.push(await runStep(child, api, effectiveProfilesByStep, step.id));
+        results.push(await runStep(child, api, effectiveProfilesByStep, step.id, step.pipeline === true));
       }
       phase.done("ok");
       return results;
@@ -49,7 +52,7 @@ async function runStep(
   }
 
   return api.parallel(
-    step.children.map((child) => () => runStep(child, api, effectiveProfilesByStep, phaseId)),
+    step.children.map((child) => () => runStep(child, api, effectiveProfilesByStep, phaseId, pipeline)),
     { label: step.label, stepId: step.id }
   );
 }

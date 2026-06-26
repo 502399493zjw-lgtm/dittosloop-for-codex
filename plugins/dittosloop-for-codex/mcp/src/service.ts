@@ -2,8 +2,10 @@ import { createId, type IdPrefix } from "./id.js";
 import { compileContract } from "./contract/compileContract.js";
 import { effectiveProfileToSubagent, resolveEffectiveProfilesByStep } from "./contract/agentProfiles.js";
 import { runSkillProfilePreflight, type SkillAvailabilityProvider } from "./codex/skillPreflight.js";
+import { evalScriptAst, type ScriptAst } from "./script/evalScript.js";
+import { validateOutputAgainstSchema } from "./script/validateOutput.js";
 import type { CodexSessionBridge, CodexSessionRef } from "./codex/sessionBridge.js";
-import type { EffectiveAgentProfile, FormalLoopContract, FormalLoopContractInput } from "./contract/types.js";
+import type { EffectiveAgentProfile, FormalLoopContract, FormalLoopContractInput, PhaseStep, Step } from "./contract/types.js";
 import { validateContract } from "./contract/validateContract.js";
 import type { AgentRequest, AgentResult, EngineEvent, Executor } from "./engine/types.js";
 import { LoopRunner, type LoopRunResult, type LoopVerifier } from "./runner/loopRunner.js";
@@ -35,7 +37,7 @@ import type {
 } from "./types.js";
 import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
-import { syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
+import { deleteLoopWorkspaceDirectory, syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
 
 export interface LoopServiceOptions {
   store: LoopStore;
@@ -55,8 +57,10 @@ export interface ReadLoopMemoryInput {
   offset?: number;
 }
 
-export type CreateLoopContractInput = Omit<FormalLoopContractInput, "id"> & {
+export type CreateLoopContractInput = Omit<FormalLoopContractInput, "id" | "body"> & {
   id?: string;
+  body?: FormalLoopContractInput["body"];
+  script?: ScriptAst;
   codexProjectId?: string;
   projectLabel?: string;
   projectPath?: string;
@@ -277,7 +281,8 @@ export class LoopService {
 
   async createLoopContract(input: CreateLoopContractInput): Promise<FormalLoopContract> {
     const timestamp = this.now();
-    const contract = compileContract(normalizeFormalContractInput(input, input.id ?? this.nextId("loop")), timestamp);
+    const resolvedInput = resolveScriptContractInput(input);
+    const contract = compileContract(normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")), timestamp);
 
     validateContract(contract);
 
@@ -400,9 +405,12 @@ export class LoopService {
         memoryCommits: state.memoryCommits.filter(
           (commit) => commit.loopId !== loopId && (!commit.runId || !deletedRunIds.has(commit.runId))
         ),
+        loopMemories: state.loopMemories.filter((memory) => memory.loopId !== loopId),
         artifacts: state.artifacts.filter((artifact) => !deletedRunIds.has(artifact.runId))
       };
     });
+
+    await deleteLoopWorkspaceDirectory(this.options.store.dataDir, loopId);
 
     return deletedLoop!;
   }
@@ -524,12 +532,16 @@ export class LoopService {
     }
 
     return {
-      run: async (request) =>
-        this.runCodexSessionStep(
+      run: async (request) => {
+        const prompt = request.pipeline
+          ? await this.injectPipelinePromptContext(workflowContextId, request)
+          : request.prompt;
+        return this.runCodexSessionStep(
           bridge,
           run,
           {
             ...request,
+            prompt,
             attemptId,
             workflowContextId
           },
@@ -537,8 +549,37 @@ export class LoopService {
             attemptId,
             workflowContextId
           }
-        )
+        );
+      }
     };
+  }
+
+  // For a pipeline phase, thread the prior sibling step's memoized output into the next
+  // child's prompt context. Reads the prior output from the persisted WorkflowContext and
+  // the sibling ordering from the contractSnapshot (the replay boundary).
+  private async injectPipelinePromptContext(workflowContextId: string, request: AgentRequest): Promise<string> {
+    if (!request.stepId || !request.phaseId) {
+      return request.prompt;
+    }
+    const state = await this.options.store.readState();
+    const context = findWorkflowContextById(state, workflowContextId);
+    if (!context) {
+      return request.prompt;
+    }
+    const contract = context.contractSnapshot;
+    const phase = contract ? findPipelinePhase(contract.body.steps, request.phaseId) : undefined;
+    if (!phase) {
+      return request.prompt;
+    }
+    const prevStepId = previousPipelineSiblingId(phase, request.stepId);
+    if (!prevStepId) {
+      return request.prompt;
+    }
+    const priorOutput = context.steps[prevStepId]?.output;
+    if (priorOutput === undefined) {
+      return request.prompt;
+    }
+    return `${request.prompt}\n\n[pipeline] Prior step (${prevStepId}) output:\n${priorOutput}`;
   }
 
   private async runCodexSessionStep(
@@ -1009,6 +1050,20 @@ export class LoopService {
         ? targetContext.contractSnapshot ??
           state.formalContracts.find((candidate) => candidate.id === (targetContext.contractId ?? run.loopId))
         : undefined;
+
+      // Enforce the target step's outputSchema (from contractSnapshot, the replay boundary)
+      // for passed results BEFORE mutating any state. A non-conforming result is rejected and
+      // the WorkflowContext is left untouched.
+      if (resultInput.status === "passed" && targetContext && targetContract) {
+        const validationStepId = resultInput.stepId ?? targetTaskRun?.stepId;
+        const outputSchema = validationStepId
+          ? findStepOutputSchema(targetContract.body.steps, validationStepId)
+          : undefined;
+        if (outputSchema && resultInput.result !== undefined) {
+          validateOutputAgainstSchema(resultInput.result, outputSchema);
+        }
+      }
+
       const workflowContextAfterTaskResult = targetContext
         ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp, { finalize: false })
         : undefined;
@@ -1699,8 +1754,8 @@ export class LoopService {
     }
 
     const revisionContractInput = input.contract
-      ? { ...input.contract, id: loopId }
-      : applyContractPatch(baseContract, input.patch ?? {});
+      ? resolveScriptContractInput({ ...input.contract, id: loopId })
+      : resolveScriptContractInput(applyContractPatch(baseContract, input.patch ?? {}));
     const normalized = normalizeFormalContractInput(revisionContractInput, loopId);
     const contract = compileContract(
       {
@@ -2546,8 +2601,34 @@ function requireWorkflowRevisionSessionContext(
   return { run, attempt };
 }
 
+// If the input carries a `script` (JSON builder-call AST), evaluate it through the
+// pure builders to produce body.steps + folded budget, then drop the script field so
+// the rest of the pipeline sees an ordinary raw-Step[] contract input.
+function resolveScriptContractInput(input: CreateLoopContractInput): CreateLoopContractInput & { body: FormalLoopContractInput["body"] } {
+  const { script, ...rest } = input;
+  if (!script) {
+    if (!rest.body) {
+      throw new Error("Loop contract requires body.steps or a script");
+    }
+    return rest as CreateLoopContractInput & { body: FormalLoopContractInput["body"] };
+  }
+  if (rest.body) {
+    throw new Error("Loop contract cannot include both body and script");
+  }
+  const built = evalScriptAst(script);
+  return {
+    ...rest,
+    body: { steps: built.steps },
+    ...(built.budgetUsd !== undefined && rest.budgetUsd === undefined ? { budgetUsd: built.budgetUsd } : {})
+  } as CreateLoopContractInput & { body: FormalLoopContractInput["body"] };
+}
+
 function normalizeFormalContractInput(input: CreateLoopContractInput, id: string): FormalLoopContractInput {
-  const { codexProjectId, projectLabel, projectPath, projectBinding, ...contractInput } = input;
+  const { codexProjectId, projectLabel, projectPath, projectBinding, script, body, ...contractInput } = input;
+  void script;
+  if (!body) {
+    throw new Error("Loop contract requires body.steps");
+  }
   const normalizedProjectBinding = {
     codexProjectId: projectBinding?.codexProjectId ?? codexProjectId,
     projectLabel: projectBinding?.projectLabel ?? projectLabel,
@@ -2557,6 +2638,7 @@ function normalizeFormalContractInput(input: CreateLoopContractInput, id: string
 
   return {
     ...contractInput,
+    body,
     id,
     ...(hasProjectBinding ? { projectBinding: normalizedProjectBinding } : {})
   };
@@ -2566,6 +2648,27 @@ function applyContractPatch(
   baseContract: FormalLoopContract,
   patch: Partial<CreateLoopContractInput>
 ): CreateLoopContractInput {
+  // A patch may carry a script (builder AST) instead of a body. When it does, defer to
+  // the script and do not inherit the base body so resolveScriptContractInput can compile it.
+  if (patch.script) {
+    return {
+      ...baseContract,
+      ...patch,
+      id: baseContract.id,
+      title: patch.title ?? baseContract.title,
+      goal: patch.goal ?? baseContract.goal,
+      body: undefined,
+      verification: patch.verification ?? baseContract.verification,
+      repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
+      stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+      budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+      escalation: patch.escalation ?? baseContract.escalation,
+      projectBinding: patch.projectBinding ?? baseContract.projectBinding,
+      memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
+      trigger: patch.trigger ?? baseContract.trigger,
+      status: patch.status ?? baseContract.status
+    };
+  }
   return {
     ...baseContract,
     ...patch,
@@ -3203,6 +3306,45 @@ function requireAttempt(state: LoopState, attemptId: string): RunAttempt {
   }
 
   return attempt;
+}
+
+function findWorkflowContextById(state: LoopState, workflowContextId: string): WorkflowContext | undefined {
+  return state.workflowContexts.find((candidate) => candidate.id === workflowContextId);
+}
+
+function findPipelinePhase(steps: Step[], phaseId: string): PhaseStep | undefined {
+  for (const step of steps) {
+    if (step.kind === "phase") {
+      if (step.id === phaseId && step.pipeline === true) {
+        return step;
+      }
+      const nested = findPipelinePhase(step.children, phaseId);
+      if (nested) return nested;
+    } else if (step.kind === "parallel") {
+      const nested = findPipelinePhase(step.children, phaseId);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
+function previousPipelineSiblingId(phase: PhaseStep, stepId: string): string | undefined {
+  const index = phase.children.findIndex((child) => child.id === stepId);
+  if (index <= 0) return undefined;
+  return phase.children[index - 1]?.id;
+}
+
+function findStepOutputSchema(steps: Step[], stepId: string): Record<string, unknown> | undefined {
+  for (const step of steps) {
+    if ((step.kind === "task" || step.kind === "agent") && step.id === stepId) {
+      return step.kind === "task" ? step.outputSchema : undefined;
+    }
+    if (step.kind === "phase" || step.kind === "parallel") {
+      const nested = findStepOutputSchema(step.children, stepId);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
 }
 
 function requireWorkflowContext(state: LoopState, workflowContextId: string): WorkflowContext {
