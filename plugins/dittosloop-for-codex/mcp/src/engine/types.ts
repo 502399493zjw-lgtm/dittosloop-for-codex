@@ -1,4 +1,9 @@
 import type { CodexSubagentSpec } from "../contract/types.js";
+import type {
+  AggregatedVerificationDecision,
+  ValidatorResult,
+  VerificationResultV2
+} from "../runner/verificationV2.js";
 
 export interface AgentRequest {
   prompt: string;
@@ -58,6 +63,8 @@ export interface VerificationDecisionSnapshot {
   humanQuestion?: string;
 }
 
+export type VerificationDoneDecision = VerificationDecisionSnapshot | VerificationResultV2;
+
 export interface Executor {
   run(request: AgentRequest): Promise<AgentResult>;
 }
@@ -75,7 +82,10 @@ export type EngineEvent =
   | EngineEventBase<"parallel_started", { label?: string; count: number }>
   | EngineEventBase<"parallel_completed", { label?: string; count: number }>
   | EngineEventBase<"verification_started", { attemptId: string }>
-  | EngineEventBase<"verification_done", { attemptId: string; decision: VerificationDecisionSnapshot }>
+  | EngineEventBase<"validator_started", { attemptId: string; validatorId: string; validatorType: string; label?: string }>
+  | EngineEventBase<"validator_done", { attemptId: string; result: ValidatorResult }>
+  | EngineEventBase<"verification_decided", { attemptId: string; decision: AggregatedVerificationDecision }>
+  | EngineEventBase<"verification_done", { attemptId: string; decision: VerificationDoneDecision }>
   | EngineEventBase<"repair_started", { attemptId: string; reason: string }>
   | EngineEventBase<"human_request", { question: string }>
   | EngineEventBase<"log", { message: string }>

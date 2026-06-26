@@ -61,7 +61,7 @@ async function createFormalLoop(
     projectPath?: string;
   } = {}
 ) {
-  return service.createLoopContract({
+  const contract = await service.createLoopContract({
     title: input.title ?? "Code health",
     goal: input.goal ?? "Keep checks visible",
     codexProjectId: input.codexProjectId,
@@ -89,6 +89,12 @@ async function createFormalLoop(
       ]
     }
   });
+
+  expect(contract.verification).toMatchObject({
+    version: 2,
+    validators: [expect.objectContaining({ type: "rubric_agent" })]
+  });
+  return contract;
 }
 
 async function startFormalRun(
@@ -109,6 +115,18 @@ async function startFormalRun(
   const run = await seedLegacyRun(service, loopProjection, { goal: input.goal ?? "Run checks" });
 
   return { loop, run };
+}
+
+async function removeVerificationInputKindMarker(service: LoopService, loopId: string) {
+  await (service as any).options.store.updateState((state) => ({
+    ...state,
+    formalContracts: state.formalContracts.map((contract) => {
+      if (contract.id !== loopId) return contract;
+
+      const { __dittosLoopVerificationInputKind, ...verification } = contract.verification as any;
+      return { ...contract, verification };
+    })
+  }));
 }
 
 async function seedLegacyLoop(
@@ -273,6 +291,76 @@ function createSkewedPendingSessionBridge() {
   };
 
   return { bridge, requests };
+}
+
+function v2RubricAgentLoopInput() {
+  return {
+    title: "Verifier owned loop",
+    goal: "Separate work from verification",
+    body: {
+      steps: [{ id: "draft", kind: "task" as const, runtime: "codex" as const, label: "Draft", prompt: "Draft answer" }]
+    },
+    verification: {
+      version: 2 as const,
+      mode: "after_workflow" as const,
+      criteria: [
+        { id: "quality", label: "Quality", description: "Verifier accepts the result.", severity: "must" as const }
+      ],
+      validators: [
+        {
+          id: "quality-review",
+          type: "rubric_agent" as const,
+          label: "Quality review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must" as const
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    }
+  };
+}
+
+function v2LegacyLikeRubricAgentLoopInput() {
+  return {
+    title: "Explicit V2 legacy-like loop",
+    goal: "Keep explicit v2 async even when it looks like migrated legacy",
+    body: {
+      steps: [{ id: "draft", kind: "task" as const, runtime: "codex" as const, label: "Draft", prompt: "Draft answer" }]
+    },
+    verification: {
+      version: 2 as const,
+      mode: "after_workflow" as const,
+      criteria: [
+        { id: "quality", label: "Quality", description: "Verifier accepts the result.", severity: "must" as const }
+      ],
+      validators: [
+        {
+          id: "rubric-agent",
+          type: "rubric_agent" as const,
+          label: "Rubric review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must" as const
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    }
+  };
 }
 
 async function createPendingServiceWithSequentialIds() {
@@ -441,17 +529,71 @@ test("renders loop directory files from stored loop state", async () => {
       ]
     },
     verification: {
+      version: 2,
       mode: "after_workflow",
-      rubrics: [{ id: "daily-report", label: "中文日报", requirement: "输出中文日报。", severity: "must" }]
+      criteria: [
+        { id: "daily-report", label: "中文日报", description: "输出中文日报。", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "quality-review",
+          type: "rubric_agent",
+          label: "Quality review",
+          criteriaIds: ["daily-report"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must"
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
     }
   });
   const { run } = await service.startCodexSessionRun(formal.id, { goal: "生成今天的中文日报" });
   await service.commitMemory(formal.id, { runId: run.id, summary: "保留昨天的来源筛选规则。" });
-  await service.recordVerification(run.id, {
-    status: "passed",
-    summary: "日报通过验证。",
-    checks: [{ name: "中文日报", status: "passed", output: "包含来源" }]
-  });
+  await (service as any).options.store.updateState((state: any) => ({
+    ...state,
+    verificationResults: [
+      ...state.verificationResults,
+      {
+        id: "verification_v2_1",
+        version: 2,
+        runId: run.id,
+        attemptId: "attempt_1",
+        status: "passed",
+        summary: "Verification passed.",
+        checks: [{ rubricId: "daily-report", status: "passed", evidence: "包含来源" }],
+        validatorResults: [
+          {
+            id: "quality-review",
+            type: "rubric_agent",
+            label: "Quality review",
+            status: "passed",
+            criteriaIds: ["daily-report"],
+            score: 1,
+            maxScore: 1,
+            evidence: "包含来源",
+            output: { notes: "中文日报完整。" }
+          }
+        ],
+        decision: {
+          status: "passed",
+          summary: "Verification passed.",
+          failedValidatorIds: [],
+          needsHumanValidatorIds: [],
+          failedCriterionIds: [],
+          uncoveredMustCriterionIds: [],
+          warnings: []
+        },
+        createdAt: fixedTime
+      }
+    ]
+  }));
   const dataDir = (service as any).options.store.dataDir as string;
   const loopDir = join(dataDir, "loops", formal.id);
   await mkdir(join(loopDir, "skill"), { recursive: true });
@@ -464,11 +606,12 @@ test("renders loop directory files from stored loop state", async () => {
   expect(files.map((file) => file.path)).toEqual([
     "memory.md",
     "workflow.json",
-    "rubrics.md",
+    "verification.md",
     "status.json",
     "contract.json",
     "skill/dittosloop-for-codex-loop.md"
   ]);
+  expect(files.map((file) => file.path)).not.toContain("rubrics.md");
   expect(files.every((file) => file.size === Buffer.byteLength(file.content, "utf8"))).toBe(true);
   expect(files.find((file) => file.path === "flow.js")).toBeUndefined();
   expect(files.find((file) => file.path === "agents.md")).toBeUndefined();
@@ -478,16 +621,62 @@ test("renders loop directory files from stored loop state", async () => {
   expect(files.find((file) => file.path === "skill/dittosloop-for-codex-loop.md")?.content).toContain("dittosloop-for-codex:loop");
   expect(files.find((file) => file.path === "status.json")?.content).toContain("\"latestRun\"");
   expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
-  expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("包含来源");
+  const verificationFile = files.find((file) => file.path === "verification.md")?.content ?? "";
+  expect(verificationFile).toContain("## Criteria");
+  expect(verificationFile).toContain("## Validators");
+  expect(verificationFile).toContain("## Decision");
+  expect(verificationFile).toContain("包含来源");
+  const statusJson = JSON.parse(files.find((file) => file.path === "status.json")?.content ?? "{}");
+  expect(statusJson.latestVerification).toMatchObject({
+    version: 2,
+    status: "passed",
+    decision: { status: "passed" },
+    validators: [
+      expect.objectContaining({
+        id: "quality-review",
+        status: "passed",
+        score: 1,
+        maxScore: 1,
+        evidence: "包含来源"
+      })
+    ]
+  });
 
   await expect(readFile(join(loopDir, "memory.md"), "utf8")).resolves.toContain("保留昨天的来源筛选规则。");
   await expect(readFile(join(loopDir, "workflow.json"), "utf8")).resolves.toContain("AI 开发工具日报");
+  await expect(readFile(join(loopDir, "verification.md"), "utf8")).resolves.toContain("## Criteria");
   await expect(readFile(join(loopDir, "skill", "dittosloop-for-codex-loop.md"), "utf8")).resolves.toContain(
     "dittosloop-for-codex:loop"
   );
   await expect(readFile(join(loopDir, "flow.js"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(join(loopDir, "session.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(join(loopDir, "skill", "old.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("renders legacy workspace verification state without v2 fields", async () => {
+  const service = await createService();
+  const formal = await service.createLoopContract({
+    title: "Legacy verifier",
+    goal: "Keep old state readable",
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates." }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources.", severity: "must" }]
+    }
+  });
+  const { run } = await service.startCodexSessionRun(formal.id, { goal: "Legacy run" });
+  await service.recordVerification(run.id, {
+    status: "failed",
+    summary: "Missing source",
+    checks: [{ name: "Source", status: "failed", output: "No official source" }]
+  });
+
+  const files = await service.listLoopFiles(formal.id);
+
+  expect(files.find((file) => file.path === "rubrics.md")?.content).toContain("No official source");
+  expect(() => JSON.parse(files.find((file) => file.path === "status.json")?.content ?? "{}")).not.toThrow();
 });
 
 test("projects canonical status for failed loop history", async () => {
@@ -2153,6 +2342,331 @@ test("executes a visible session workflow attempt through the same attempt and s
   expect(replay.status).toBe("completed");
   expect(replayDetail.verificationResults).toHaveLength(1);
   expect(replayDetail.events.filter((event) => event.kind === "verification_recorded")).toHaveLength(1);
+});
+
+test("v2 worker session result cannot complete a run before validator results exist", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker says done",
+    result: "candidate"
+  });
+
+  expect(run.status).not.toBe("completed");
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.verificationResults).toHaveLength(0);
+  expect(detail.workflowContexts[0].verification).toMatchObject({
+    status: "waiting_for_validator",
+    pendingValidatorIds: ["quality-review"],
+    validatorResults: []
+  });
+});
+
+test("unmarked legacy-migrated contracts keep legacy completion behavior", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await createFormalLoop(service);
+  await removeVerificationInputKindMarker(service, formal.id);
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "run-worker",
+    status: "passed",
+    summary: "Worker says done",
+    result: "legacy candidate"
+  });
+
+  expect(run.status).toBe("completed");
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.verificationResults).toHaveLength(1);
+  expect(detail.verificationResults[0]).toMatchObject({
+    status: "passed",
+    summary: "Worker says done"
+  });
+  expect(detail.verificationResults[0]).not.toHaveProperty("version");
+  expect(detail.workflowContexts[0].verification).toMatchObject({
+    status: "not_started",
+    pendingValidatorIds: [],
+    validatorResults: []
+  });
+});
+
+test("recordValidatorResult finalizes v2 verification from a separate rubric agent", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  const verification = await service.recordValidatorResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-1",
+    result: {
+      type: "rubric_agent",
+      status: "passed",
+      evidence: "Candidate is complete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed", score: 1, maxScore: 1, evidence: "Complete answer." }
+      ]
+    }
+  });
+
+  expect(verification).toMatchObject({ version: 2, status: "passed" });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "completed" },
+    verificationResults: [{ version: 2, status: "passed" }],
+    workflowContexts: [
+      {
+        verification: {
+          status: "completed",
+          pendingValidatorIds: [],
+          resultId: verification.id
+        }
+      }
+    ]
+  });
+});
+
+test("recordValidatorResult rejects workflow task session identity", async () => {
+  const { bridge } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.executeWorkflowAttempt(launch.run.id, launch.attempt.id);
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "draft",
+    idempotencyKey: "session_1:draft:passed",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  const workerWriteback = {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-worker",
+    result: {
+      type: "rubric_agent" as const,
+      status: "passed" as const,
+      evidence: "Worker self-approval should not count.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed" as const, score: 1, maxScore: 1, evidence: "Self-approved." }
+      ]
+    }
+  };
+
+  await expect(service.recordValidatorResult(launch.run.id, workerWriteback)).rejects.toThrow(
+    "Validator result session cannot be a workflow task session"
+  );
+
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "running" },
+    verificationResults: []
+  });
+
+  const verification = await service.recordValidatorResult(launch.run.id, {
+    ...workerWriteback,
+    sessionId: "verifier-session",
+    idempotencyKey: "validator-quality-review-verifier",
+    result: {
+      ...workerWriteback.result,
+      evidence: "Independent verifier approved the candidate."
+    }
+  });
+
+  expect(verification).toMatchObject({ version: 2, status: "passed" });
+});
+
+test("recordValidatorResult rejects writeback before the worker enters verification", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  await expect(
+    service.recordValidatorResult(launch.run.id, {
+      workflowContextId: launch.launchRequest.workflowContextId,
+      attemptId: launch.attempt.id,
+      validatorId: "quality-review",
+      idempotencyKey: "validator-quality-review-early",
+      result: {
+        type: "rubric_agent",
+        status: "passed",
+        evidence: "Early validator result.",
+        criteriaResults: [
+          { criterionId: "quality", status: "passed", score: 1, maxScore: 1, evidence: "Complete answer." }
+        ]
+      }
+    })
+  ).rejects.toThrow("Workflow verification has not started");
+
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "running" },
+    verificationResults: []
+  });
+});
+
+test("explicit v2 legacy-like rubric agent policy still requires async validator writeback", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2LegacyLikeRubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker says done",
+    result: "candidate"
+  });
+
+  expect(run.status).not.toBe("completed");
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    verificationResults: [],
+    workflowContexts: [
+      {
+        verification: {
+          status: "waiting_for_validator",
+          pendingValidatorIds: ["rubric-agent"]
+        }
+      }
+    ]
+  });
+
+  const verification = await service.recordValidatorResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "rubric-agent",
+    idempotencyKey: "validator-rubric-agent-1",
+    result: {
+      type: "rubric_agent",
+      status: "passed",
+      evidence: "Candidate is complete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed", score: 1, maxScore: 1, evidence: "Complete answer." }
+      ]
+    }
+  });
+
+  expect(verification).toMatchObject({ version: 2, status: "passed" });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "completed" },
+    verificationResults: [{ version: 2, status: "passed" }]
+  });
+});
+
+test("recordValidatorResult is idempotent by idempotencyKey", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+  const input = {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-1",
+    result: {
+      type: "rubric_agent" as const,
+      status: "passed" as const,
+      evidence: "Candidate is complete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed" as const, score: 1, maxScore: 1, evidence: "Complete answer." }
+      ]
+    }
+  };
+
+  const first = await service.recordValidatorResult(launch.run.id, input);
+  const replay = await service.recordValidatorResult(launch.run.id, input);
+
+  expect(replay.id).toBe(first.id);
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    verificationResults: [{ id: first.id, version: 2, status: "passed" }]
+  });
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.verificationResults).toHaveLength(1);
+});
+
+test("failed v2 validator result repairs with validator and criterion ids in the reason", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    ...v2RubricAgentLoopInput(),
+    repairPolicy: { maxAttempts: 2, strategy: "repair_then_retry" as const }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  await service.recordValidatorResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-failed",
+    result: {
+      type: "rubric_agent",
+      status: "failed",
+      evidence: "Candidate is incomplete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "failed", score: 0, maxScore: 1, evidence: "Missing required content." }
+      ]
+    }
+  });
+
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.run.status).toBe("repairing");
+  expect(detail.verificationResults).toMatchObject([{ version: 2, status: "failed" }]);
+  expect(detail.workflowContexts[0]).toMatchObject({
+    status: "repairing",
+    cursor: { state: "repairing" },
+    vars: {
+      repairReason: expect.stringContaining("quality-review")
+    }
+  });
+  expect(detail.workflowContexts[0].vars.repairReason).toContain("quality");
 });
 
 test("records a targeted session result against the specified workflow context, attempt, and pending task", async () => {
