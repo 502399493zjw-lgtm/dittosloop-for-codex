@@ -6,7 +6,8 @@ DONE_WITH_CONCERNS pending the existing Task 6 workspaceFiles type cleanup.
 
 ## Commit
 
-- Commit message: `feat: persist verification v2 results`
+- `f9d0d68 feat: persist verification v2 results`
+- Follow-up: `fix: harden verification v2 service state`
 
 ## Files Changed
 
@@ -14,13 +15,20 @@ DONE_WITH_CONCERNS pending the existing Task 6 workspaceFiles type cleanup.
 - `plugins/dittosloop-for-codex/mcp/src/service.ts`
 - `plugins/dittosloop-for-codex/mcp/test/service.test.ts`
 
+## Review Fixes
+
+- `recordValidatorResult` now rejects new validator writeback unless the target workflow context is already in `running` or `waiting_for_validator` verification state and has completed worker output to verify.
+- The idempotency replay path remains allowed for already-recorded validator writebacks.
+- Legacy compatibility now uses a service compile-time verification input marker instead of shape matching. Contracts created from legacy input keep legacy behavior after compile-time migration, while explicit v2 policies keep async v2 behavior even if they have the default migrated legacy shape.
+- Added regression coverage for validator writeback before worker completion and explicit v2 legacy-like rubric-agent policies.
+
 ## State Machine Semantics
 
 - `LoopState.verificationResults` and `RunDetail.verificationResults` now accept legacy `VerificationResult` and persisted `VerificationResultV2`.
 - `WorkflowContext.verification` tracks `not_started`, `running`, `waiting_for_validator`, `completed`, and `failed`, plus validator results, pending validator ids, idempotency keys, aggregate decision, and persisted result id.
 - For explicit v2 workflow contracts, a worker `recordSessionResult(... status: "passed")` records the task output and starts verification, but does not append a verification result and does not complete the run.
 - External rubric-agent validators write back through `recordValidatorResult(runId, input)`.
-- `recordValidatorResult` validates the target workflow context, attempt, validator id, result type, and `idempotencyKey`; duplicate idempotency keys return the already persisted v2 result instead of appending another one.
+- `recordValidatorResult` validates the target workflow context, attempt, verification phase, completed worker output, validator id, result type, and `idempotencyKey`; duplicate idempotency keys return the already persisted v2 result instead of appending another one.
 - Once all pending external validators are recorded, service calls `runVerificationV2()` with `priorValidatorResults`, persists the v2 result, and finalizes the run/attempt/context.
 - Passed v2 decisions complete the workflow and run.
 - Needs-human v2 decisions use the existing waiting-for-human flow and create a human request.
@@ -32,7 +40,7 @@ DONE_WITH_CONCERNS pending the existing Task 6 workspaceFiles type cleanup.
 
 - PASS: `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts e2eWorkflow.test.ts`
   - 2 test files passed.
-  - 71 tests passed.
+  - 73 tests passed.
 - CONCERN: `npm --prefix plugins/dittosloop-for-codex/mcp run typecheck`
   - Fails only in `src/workspaceFiles.ts`.
   - Remaining errors are the known follow-up area from the brief:
@@ -42,5 +50,4 @@ DONE_WITH_CONCERNS pending the existing Task 6 workspaceFiles type cleanup.
 ## Risks
 
 - `workspaceFiles.ts` still needs Task 6 migration for v2 criteria/result rendering.
-- The service compatibility heuristic treats the default compile-time `rubric-agent` migration shape as legacy-compatible. Explicit v2 policies should use non-default validator configuration when they require async writeback semantics.
 - `recordValidatorResult` currently supports external `rubric_agent` writeback only; command and score validators remain runner-owned.

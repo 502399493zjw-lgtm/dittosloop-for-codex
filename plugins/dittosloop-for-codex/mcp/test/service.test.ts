@@ -310,6 +310,41 @@ function v2RubricAgentLoopInput() {
   };
 }
 
+function v2LegacyLikeRubricAgentLoopInput() {
+  return {
+    title: "Explicit V2 legacy-like loop",
+    goal: "Keep explicit v2 async even when it looks like migrated legacy",
+    body: {
+      steps: [{ id: "draft", kind: "task" as const, runtime: "codex" as const, label: "Draft", prompt: "Draft answer" }]
+    },
+    verification: {
+      version: 2 as const,
+      mode: "after_workflow" as const,
+      criteria: [
+        { id: "quality", label: "Quality", description: "Verifier accepts the result.", severity: "must" as const }
+      ],
+      validators: [
+        {
+          id: "rubric-agent",
+          type: "rubric_agent" as const,
+          label: "Rubric review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must" as const
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    }
+  };
+}
+
 async function createPendingServiceWithSequentialIds() {
   const { bridge, requests } = createPendingSessionBridge();
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
@@ -2255,6 +2290,83 @@ test("recordValidatorResult finalizes v2 verification from a separate rubric age
         }
       }
     ]
+  });
+});
+
+test("recordValidatorResult rejects writeback before the worker enters verification", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  await expect(
+    service.recordValidatorResult(launch.run.id, {
+      workflowContextId: launch.launchRequest.workflowContextId,
+      attemptId: launch.attempt.id,
+      validatorId: "quality-review",
+      idempotencyKey: "validator-quality-review-early",
+      result: {
+        type: "rubric_agent",
+        status: "passed",
+        evidence: "Early validator result.",
+        criteriaResults: [
+          { criterionId: "quality", status: "passed", score: 1, maxScore: 1, evidence: "Complete answer." }
+        ]
+      }
+    })
+  ).rejects.toThrow("Workflow verification has not started");
+
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "running" },
+    verificationResults: []
+  });
+});
+
+test("explicit v2 legacy-like rubric agent policy still requires async validator writeback", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2LegacyLikeRubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker says done",
+    result: "candidate"
+  });
+
+  expect(run.status).not.toBe("completed");
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    verificationResults: [],
+    workflowContexts: [
+      {
+        verification: {
+          status: "waiting_for_validator",
+          pendingValidatorIds: ["rubric-agent"]
+        }
+      }
+    ]
+  });
+
+  const verification = await service.recordValidatorResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "rubric-agent",
+    idempotencyKey: "validator-rubric-agent-1",
+    result: {
+      type: "rubric_agent",
+      status: "passed",
+      evidence: "Candidate is complete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed", score: 1, maxScore: 1, evidence: "Complete answer." }
+      ]
+    }
+  });
+
+  expect(verification).toMatchObject({ version: 2, status: "passed" });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "completed" },
+    verificationResults: [{ version: 2, status: "passed" }]
   });
 });
 

@@ -198,6 +198,12 @@ export interface RecordCodexThreadInput {
 }
 
 type ImmediatePausedReason = Extract<LoopPausedReason, "budget" | "escalation">;
+const VERIFICATION_INPUT_KIND_FIELD = "__dittosLoopVerificationInputKind";
+
+type VerificationInputKind = "legacy" | "v2";
+type VerificationPolicyWithInputKind = FormalLoopContract["verification"] & {
+  [VERIFICATION_INPUT_KIND_FIELD]?: VerificationInputKind;
+};
 
 export interface RecordSessionResultInput {
   workflowContextId?: string;
@@ -308,7 +314,10 @@ export class LoopService {
   async createLoopContract(input: CreateLoopContractInput): Promise<FormalLoopContract> {
     const timestamp = this.now();
     const resolvedInput = resolveScriptContractInput(input);
-    const contract = compileContract(normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")), timestamp);
+    const contract = compileContractWithVerificationInputKind(
+      normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")),
+      timestamp
+    );
 
     validateContract(contract);
 
@@ -1538,6 +1547,9 @@ export class LoopService {
         policy = contract.verification;
         return state;
       }
+      if (!workflowVerificationAcceptsValidatorWriteback(context, verification)) {
+        throw new Error("Workflow verification has not started");
+      }
       if (verification.validatorResults.some((result) => result.validatorId === input.validatorId)) {
         throw new Error(`Validator result already recorded: ${input.validatorId}`);
       }
@@ -1978,7 +1990,7 @@ export class LoopService {
       ? resolveScriptContractInput({ ...input.contract, id: loopId })
       : resolveScriptContractInput(applyContractPatch(baseContract, input.patch ?? {}));
     const normalized = normalizeFormalContractInput(revisionContractInput, loopId);
-    const contract = compileContract(
+    const contract = compileContractWithVerificationInputKind(
       {
         ...normalized,
         id: loopId,
@@ -2865,6 +2877,23 @@ function startWorkflowVerificationState(
   };
 }
 
+function workflowVerificationAcceptsValidatorWriteback(
+  context: WorkflowContext,
+  verification: WorkflowVerificationState
+): boolean {
+  return (
+    (verification.status === "running" || verification.status === "waiting_for_validator") &&
+    workflowContextHasCompletedVerifiableWork(context)
+  );
+}
+
+function workflowContextHasCompletedVerifiableWork(context: WorkflowContext): boolean {
+  return (
+    Object.values(context.steps).some((step) => step.status === "completed" && step.output !== undefined) ||
+    context.taskRuns.some((taskRun) => taskRun.status === "completed" && taskRun.result !== undefined)
+  );
+}
+
 function completedWorkflowStepOutputs(context: WorkflowContext): Record<string, string> {
   return Object.fromEntries(
     Object.entries(context.steps)
@@ -2887,34 +2916,19 @@ function pendingRubricAgentValidatorIds(
 }
 
 function usesVerificationV2Runtime(policy: FormalLoopContract["verification"]): boolean {
-  return policy.version === 2 && !isMigratedLegacyRubricPolicy(policy);
+  return policy.version === 2 && !isLegacyCompiledVerificationPolicy(policy);
 }
 
 function usesExternalV2ValidatorWriteback(policy: FormalLoopContract["verification"]): boolean {
   return usesVerificationV2Runtime(policy) && policy.validators.some((validator) => validator.type === "rubric_agent");
 }
 
-function isMigratedLegacyRubricPolicy(policy: FormalLoopContract["verification"]): boolean {
-  if (policy.version !== 2) return false;
-  if (policy.criteria.length === 0 && policy.validators.length === 0) return true;
-  if (policy.validators.length !== 1) return false;
-
-  const validator = policy.validators[0];
-  return (
-    validator.type === "rubric_agent" &&
-    validator.id === "rubric-agent" &&
-    validator.label === "Rubric review" &&
-    validator.scoreScale.min === 0 &&
-    validator.scoreScale.max === 1 &&
-    validator.passScore === 1 &&
-    validator.evidenceRequired === true &&
-    validator.severity === "must" &&
-    sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id))
-  );
+function isLegacyCompiledVerificationPolicy(policy: FormalLoopContract["verification"]): boolean {
+  return (policy as Partial<VerificationPolicyWithInputKind>)[VERIFICATION_INPUT_KIND_FIELD] === "legacy";
 }
 
 function legacyCompatibleRunnerContract(contract: FormalLoopContract): FormalLoopContract {
-  if (!isMigratedLegacyRubricPolicy(contract.verification)) return contract;
+  if (!isLegacyCompiledVerificationPolicy(contract.verification)) return contract;
 
   return {
     ...contract,
@@ -2939,12 +2953,6 @@ function legacyVerificationFromMigratedV2(policy: VerificationPolicyV2): LegacyV
       severity: criterion.severity
     }))
   };
-}
-
-function sameStringSet(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) return false;
-  const rightSet = new Set(right);
-  return left.every((item) => rightSet.has(item));
 }
 
 function hasOpenWorkflowSessions(context: WorkflowContext): boolean {
@@ -3103,6 +3111,35 @@ function normalizeFormalContractInput(input: CreateLoopContractInput, id: string
     body,
     id,
     ...(hasProjectBinding ? { projectBinding: normalizedProjectBinding } : {})
+  };
+}
+
+function compileContractWithVerificationInputKind(
+  input: FormalLoopContractInput,
+  timestamp: string
+): FormalLoopContract {
+  return withVerificationInputKind(compileContract(input, timestamp), verificationInputKind(input.verification));
+}
+
+function verificationInputKind(
+  verification: FormalLoopContractInput["verification"] | FormalLoopContract["verification"]
+): VerificationInputKind {
+  const existing = (verification as Partial<VerificationPolicyWithInputKind>)[VERIFICATION_INPUT_KIND_FIELD];
+  if (existing === "legacy" || existing === "v2") return existing;
+
+  return "version" in verification && verification.version === 2 ? "v2" : "legacy";
+}
+
+function withVerificationInputKind(
+  contract: FormalLoopContract,
+  inputKind: VerificationInputKind
+): FormalLoopContract {
+  return {
+    ...contract,
+    verification: {
+      ...contract.verification,
+      [VERIFICATION_INPUT_KIND_FIELD]: inputKind
+    } as FormalLoopContract["verification"]
   };
 }
 
@@ -4477,7 +4514,7 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
 function workflowLaunchVerification(
   verification: FormalLoopContract["verification"]
 ): FormalLoopContract["verification"] | LegacyVerificationPolicy {
-  return isMigratedLegacyRubricPolicy(verification) ? legacyVerificationFromMigratedV2(verification) : verification;
+  return isLegacyCompiledVerificationPolicy(verification) ? legacyVerificationFromMigratedV2(verification) : verification;
 }
 
 function flattenWorkflowLaunchSteps(
