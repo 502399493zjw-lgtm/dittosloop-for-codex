@@ -23,7 +23,9 @@
 
 ---
 
-- [ ] **Task 1: Add contract profile types, validation, and normalization**
+## Task 1: Add contract profile types, validation, and normalization
+
+- [ ] Task status
 
   Files:
 
@@ -119,7 +121,9 @@
     - If no declared profile is found but inline `subagent` exists, create a legacy inline effective profile.
   - Update `applyContractPatch` in `service.ts` to preserve `agentProfiles` across workflow revisions.
 
-- [ ] **Task 2: Expose profile fields through MCP schemas**
+## Task 2: Expose profile fields through MCP schemas
+
+- [ ] Task status
 
   Files:
 
@@ -176,7 +180,9 @@
   - Add `allowDegradedProfiles: z.boolean().optional()` to `startCodexSessionSchema`.
   - Pass `allowDegradedProfiles` into `service.startCodexSessionRun`.
 
-- [ ] **Task 3: Implement local conservative skill preflight**
+## Task 3: Implement local conservative skill preflight
+
+- [ ] Task status
 
   Files:
 
@@ -253,7 +259,9 @@
   - Throw before creating a run if `report.status === "blocked"` and `allowDegradedProfiles` is not true.
   - Store the report on `run.codexSession.profilePreflight`.
 
-- [ ] **Task 4: Carry effective profiles through workflow execution and sessions**
+## Task 4: Carry effective profiles through workflow execution and sessions
+
+- [ ] Task status
 
   Files:
 
@@ -311,7 +319,9 @@
     - preflight warnings/blockers,
     - explicit note that DittosLoop records expectations but the visible Codex session remains the orchestrator.
 
-- [ ] **Task 5: Update workspace files and preview display**
+## Task 5: Update workspace files and preview display
+
+- [ ] Task status
 
   Files:
 
@@ -365,7 +375,9 @@
     - `profileStatusMeta(profilePreflight)`
   - In task/session card rendering, prefer `taskRun.agentProfile` and `subagent.agentProfile`; fall back to `formatSubagentMeta` only for legacy records.
 
-- [ ] **Task 6: Update installed skill guidance for creating profile-based workflows**
+## Task 6: Update installed skill guidance for creating profile-based workflows
+
+- [ ] Task status
 
   Files:
 
@@ -425,7 +437,9 @@
   - Keep legacy `subagent` documented as compatibility hints, not the preferred structure.
   - Document `allowDegradedProfiles` as an explicit escape hatch for real-world testing.
 
-- [ ] **Task 7: Full verification and review handoff**
+## Task 7: Full verification and review handoff
+
+- [ ] Task status
 
   Files:
 
