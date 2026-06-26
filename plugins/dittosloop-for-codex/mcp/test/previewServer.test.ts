@@ -338,7 +338,8 @@ test("preview script includes templates gallery launch controls", async () => {
   expect(html).toContain("id=\"project-view\"");
   expect(html).toContain("id=\"template-view\"");
   expect(html).toContain("项目");
-  expect(html).toContain("模版");
+  expect(html).toContain("Loop示例");
+  expect(html).not.toContain("模版");
   expect(app).toContain("renderTemplates");
   expect(app).toContain("setListView");
   expect(app).toContain("activeListView");
@@ -357,7 +358,7 @@ test("preview script includes templates gallery launch controls", async () => {
   expect(app).toContain("data-template-cadence");
   expect(app).toContain("/api/templates");
   expect(app).toContain("useTemplate");
-  expect(app).toContain("用模版");
+  expect(app).toContain("用Loop示例");
   expect(app).toContain("templateToast");
   expect(app).toContain("renderTemplateNotice");
   expect(app).toContain("renderTemplateToast");
@@ -373,7 +374,7 @@ test("preview script includes templates gallery launch controls", async () => {
   expect(styles).toContain("translate(-50%, -50%)");
   expect(styles).toContain(".template-filter-count");
   expect(styles).not.toContain(".template-feedback");
-  expect(app).toContain("正在生成模版 prompt...");
+  expect(app).toContain("正在生成Loop示例 prompt...");
   expect(app).toContain("/api/templates/${encodeURIComponent(template.id)}/prompt");
   expect(app).toContain("copyTemplatePrompt");
   expect(app).toContain("copyTemplatePromptWithSelection");
@@ -383,7 +384,11 @@ test("preview script includes templates gallery launch controls", async () => {
   expect(app).not.toContain("templateToast.prompt");
   expect(app).not.toContain("launchMode: \"host\"");
   expect(app).not.toContain("__dittosloopTemplateLaunchRequest");
-  expect(app).toContain("各种模版");
+  expect(app).toContain("各类Loop示例");
+  expect(app).toContain("Loop示例库");
+  expect(app).toContain("正在读取Loop示例库...");
+  expect(app).toContain("没有符合当前筛选的Loop示例。");
+  expect(app).not.toContain("模版");
   expect(app).toContain("全部类型");
   expect(app).toContain("内容");
   expect(app).toContain("评估");
@@ -414,7 +419,7 @@ test("preview file fallback explains templates need the local preview server", a
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
   expect(app).toContain("window.location.protocol === \"file:\"");
-  expect(app).toContain("renderTemplates([], \"当前是离线文件预览，请从 DittosLoop 预览链接打开后读取模版库。\")");
+  expect(app).toContain("renderTemplates([], \"当前是离线文件预览，请从 DittosLoop 预览链接打开后读取Loop示例库。\")");
   expect(app).not.toContain("renderTemplates([]);");
 });
 

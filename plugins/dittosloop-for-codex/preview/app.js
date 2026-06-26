@@ -160,7 +160,7 @@ async function loadSnapshot() {
       selectedLoopId = null;
       selectedRunId = null;
       render(emptySnapshot);
-      renderTemplates([], "当前是离线文件预览，请从 DittosLoop 预览链接打开后读取模版库。");
+      renderTemplates([], "当前是离线文件预览，请从 DittosLoop 预览链接打开后读取Loop示例库。");
       renderLoopStage({ snapshot: emptySnapshot });
       return;
     }
@@ -191,7 +191,7 @@ async function loadTemplates() {
     renderTemplates(currentTemplates);
   } catch (error) {
     currentTemplates = [];
-    renderTemplates([], error instanceof Error ? error.message : "模版库暂不可用。");
+    renderTemplates([], error instanceof Error ? error.message : "Loop示例库暂不可用。");
   }
 }
 
@@ -208,8 +208,8 @@ function renderTemplates(templates = currentTemplates, errorMessage = "") {
   const visibleTemplates = filteredTemplates(templates);
   const header = el("header", "templates-header", [
     el("div", "templates-title-block", [
-      el("span", "templates-kicker", "模版库"),
-      el("strong", "", "各种模版")
+      el("span", "templates-kicker", "Loop示例库"),
+      el("strong", "", "各类Loop示例")
     ]),
     el("span", "templates-count", `${visibleTemplates.length}/${templates.length}`)
   ]);
@@ -226,7 +226,7 @@ function renderTemplates(templates = currentTemplates, errorMessage = "") {
   if (!templates.length) {
     elements.templates.replaceChildren(
       header,
-      el("div", "template-empty", "正在读取模版库...")
+      el("div", "template-empty", "正在读取Loop示例库...")
     );
     return;
   }
@@ -237,7 +237,7 @@ function renderTemplates(templates = currentTemplates, errorMessage = "") {
       filters,
       visibleTemplates.length
         ? el("div", "template-grid", visibleTemplates.map((template) => renderTemplateCard(template)))
-        : el("div", "template-empty", "没有符合当前筛选的模版。")
+        : el("div", "template-empty", "没有符合当前筛选的Loop示例。")
     ].filter(Boolean)
   );
 }
@@ -335,7 +335,7 @@ function renderTemplateFilterButton(kind, filter, counts = null) {
   filterButton.setAttribute("aria-pressed", String(active));
   if (kind === "category") {
     filterButton.setAttribute("data-template-category", filter.id);
-    filterButton.setAttribute("aria-label", `${filter.label}，${count ?? 0} 个模版`);
+    filterButton.setAttribute("aria-label", `${filter.label}，${count ?? 0} 个Loop示例`);
   } else {
     filterButton.setAttribute("data-template-cadence", filter.id);
   }
@@ -357,7 +357,7 @@ function renderTemplateCard(template) {
       renderTemplateSource(template),
       button("template-use-button", () => {
         void useTemplate(template);
-      }, "用模版")
+      }, "用Loop示例")
     ])
   ]);
   card.setAttribute("data-template-category", template.category);
@@ -397,19 +397,19 @@ function templateCategoryLabel(category) {
 }
 
 async function useTemplate(template) {
-  renderTemplateNotice("正在生成模版 prompt...", { kind: "info" });
+  renderTemplateNotice("正在生成Loop示例 prompt...", { kind: "info" });
 
   try {
     const response = await fetch(`/api/templates/${encodeURIComponent(template.id)}/prompt`, { cache: "no-store" });
     if (!response.ok) {
       console.error(`Template prompt request failed: ${response.status}`);
-      renderTemplateNotice("模版 prompt 生成失败，请刷新后再试。", { kind: "error" });
+      renderTemplateNotice("Loop示例 prompt 生成失败，请刷新后再试。", { kind: "error" });
       return;
     }
 
     const { prompt } = await response.json();
     if (typeof prompt !== "string" || !prompt.trim()) {
-      renderTemplateNotice("模版 prompt 生成失败，请刷新后再试。", { kind: "error" });
+      renderTemplateNotice("Loop示例 prompt 生成失败，请刷新后再试。", { kind: "error" });
       return;
     }
 
@@ -421,7 +421,7 @@ async function useTemplate(template) {
     renderTemplateNotice("复制失败，请允许浏览器剪贴板权限后再试。", { kind: "warning" });
   } catch (error) {
     console.error(error);
-    renderTemplateNotice("模版 prompt 生成失败，请确认预览服务仍在运行。", { kind: "error" });
+    renderTemplateNotice("Loop示例 prompt 生成失败，请确认预览服务仍在运行。", { kind: "error" });
   }
 }
 
