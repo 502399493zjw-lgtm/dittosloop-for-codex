@@ -55,6 +55,8 @@ const eventKindSchema = z.enum([
 ]);
 
 const verificationStatusSchema = z.enum(["passed", "failed", "skipped"]);
+const verificationDecisionStatusSchema = z.enum(["passed", "failed", "needs_human"]);
+const verificationSeveritySchema = z.enum(["must", "should"]);
 const pausedReasonSchema = z.enum(["failures", "budget", "escalation"]);
 const immediatePausedReasonSchema = z.enum(["budget", "escalation"]);
 
@@ -138,6 +140,83 @@ const scriptSchema = z.object({
   build: z.array(scriptCallSchema).min(1)
 });
 
+const verificationCriterionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().min(1),
+  severity: verificationSeveritySchema
+});
+
+const verificationDecisionPolicySchema = z.object({
+  requireAllMustCriteriaCovered: z.boolean(),
+  failOnMustValidatorFailure: z.boolean(),
+  failOnShouldValidatorFailure: z.boolean(),
+  requireEvidenceForAgentScores: z.boolean()
+});
+
+const commandValidatorSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("command"),
+  label: z.string().min(1),
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  cwd: z.union([
+    z.literal("project"),
+    z.literal("contract"),
+    z.object({ relativeToProject: z.string().min(1) })
+  ]).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  criteriaIds: z.array(z.string().min(1)).optional(),
+  severity: verificationSeveritySchema,
+  parse: z.object({ kind: z.literal("none") })
+});
+
+const scoreSourceSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("workflow_result"), path: z.string().min(1) }),
+  z.object({ type: z.literal("artifact"), artifactId: z.string().min(1), path: z.string().min(1) }),
+  z.object({ type: z.literal("validator_output"), validatorId: z.string().min(1), path: z.string().min(1) })
+]);
+
+const scoreValidatorSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("score"),
+  label: z.string().min(1),
+  metric: z.string().min(1),
+  source: scoreSourceSchema,
+  operator: z.enum([">=", ">", "<=", "<", "==", "!="]),
+  threshold: z.number().finite(),
+  criteriaIds: z.array(z.string().min(1)).optional(),
+  severity: verificationSeveritySchema
+});
+
+const rubricAgentValidatorSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("rubric_agent"),
+  label: z.string().min(1),
+  criteriaIds: z.array(z.string().min(1)).min(1),
+  scoreScale: z.object({
+    min: z.number().finite(),
+    max: z.number().finite()
+  }),
+  passScore: z.number().finite(),
+  evidenceRequired: z.boolean(),
+  severity: verificationSeveritySchema
+});
+
+const verificationValidatorSchema = z.discriminatedUnion("type", [
+  commandValidatorSchema,
+  scoreValidatorSchema,
+  rubricAgentValidatorSchema
+]);
+
+const verificationV2Schema = z.object({
+  version: z.literal(2),
+  mode: z.enum(["after_workflow", "after_each_step"]),
+  criteria: z.array(verificationCriterionSchema).min(1),
+  validators: z.array(verificationValidatorSchema).min(1),
+  decision: verificationDecisionPolicySchema
+});
+
 const createLoopContractObjectSchema = z.object({
   id: z.string().min(1).optional(),
   title: z.string().min(1),
@@ -145,15 +224,7 @@ const createLoopContractObjectSchema = z.object({
   intent: z.string().optional(),
   body: z.object({ steps: z.array(stepSchema).min(1) }).optional(),
   script: scriptSchema.optional(),
-  verification: z.object({
-    mode: z.enum(["after_workflow", "after_each_agent"]),
-    rubrics: z.array(z.object({
-      id: z.string().min(1),
-      label: z.string().min(1),
-      requirement: z.string().min(1),
-      severity: z.enum(["must", "should"])
-    }))
-  }),
+  verification: verificationV2Schema,
   repairPolicy: z.object({
     maxAttempts: z.number().int().nonnegative(),
     strategy: z.enum(["repair_then_retry", "ask_human", "fail_run"])
@@ -299,6 +370,33 @@ const recordVerificationSchema = z.object({
   repair: z.boolean().optional()
 });
 
+const validatorCriteriaResultSchema = z.object({
+  criterionId: z.string().min(1),
+  status: verificationDecisionStatusSchema,
+  score: z.number().finite().optional(),
+  maxScore: z.number().finite().optional(),
+  evidence: z.string().optional()
+});
+
+const validatorResultInputSchema = z.object({
+  type: z.literal("rubric_agent"),
+  status: verificationDecisionStatusSchema.optional(),
+  score: z.number().finite().optional(),
+  evidence: z.string().optional(),
+  summary: z.string().optional(),
+  output: z.unknown().optional(),
+  criteriaResults: z.array(validatorCriteriaResultSchema).optional()
+});
+
+const recordValidatorResultSchema = z.object({
+  runId: z.string().min(1),
+  workflowContextId: z.string().min(1),
+  attemptId: z.string().min(1),
+  validatorId: z.string().min(1),
+  idempotencyKey: z.string().min(1).optional(),
+  result: validatorResultInputSchema
+});
+
 const recordHumanRequestSchema = z.object({
   runId: z.string().min(1),
   question: z.string().min(1)
@@ -437,6 +535,16 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
         humanQuestion: args.humanQuestion
       });
       return toToolResult(await toWorkflowToolResponse(service, run));
+    },
+    record_validator_result: async (input) => {
+      const args = recordValidatorResultSchema.parse(input);
+      return toToolResult(await service.recordValidatorResult(args.runId, {
+        workflowContextId: args.workflowContextId,
+        attemptId: args.attemptId,
+        validatorId: args.validatorId,
+        idempotencyKey: args.idempotencyKey,
+        result: args.result
+      }));
     },
     open_codex_session: async (input) => {
       const args = openCodexSessionSchema.parse(input);
@@ -616,7 +724,7 @@ const toolDefinitions = [
   {
     name: "create_loop_contract",
     title: "Create formal loop contract",
-    description: "Create a structured Live Loop contract with workflow body and verification rubrics.",
+    description: "Create a structured Live Loop contract with workflow body and verification v2 criteria, validators, and decision policy.",
     schema: createLoopContractSchema
   },
   {
@@ -684,6 +792,12 @@ const toolDefinitions = [
     title: "Record session result",
     description: "Write a targeted Codex session result back to the workflow runner; complete, suspend, or resume the workflow as appropriate.",
     schema: recordSessionResultSchema
+  },
+  {
+    name: "record_validator_result",
+    title: "Record validator result",
+    description: "Record the result of an asynchronous verification v2 validator.",
+    schema: recordValidatorResultSchema
   },
   {
     name: "open_codex_session",

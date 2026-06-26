@@ -84,10 +84,7 @@ test("exposes loop operations as MCP content", async () => {
     body: {
       steps: [{ id: "check", kind: "agent", label: "Run checks", prompt: "Run npm test" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "tests", label: "Tests", requirement: "npm test passes", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "tests", label: "Tests", description: "npm test passes" })
   }));
   const run = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Check tests" })).run;
   await handlers.append_event({ runId: run.id, message: "Started checks" });
@@ -114,10 +111,7 @@ test("exposes formal contract and session-first workflow operations as MCP conte
     body: {
       steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    },
+    verification: v2RubricAgentVerification(),
     repairPolicy: { maxAttempts: 3, strategy: "ask_human" },
     stopPolicy: { rule: "Stop after a verified daily report", maxConsecutiveFailures: 2 }
   }));
@@ -184,6 +178,59 @@ test("exposes formal contract and session-first workflow operations as MCP conte
   ]));
 });
 
+test("create_loop_contract rejects legacy rubrics shape at the MCP boundary", async () => {
+  const handlers = await createHandlers();
+
+  await expect(handlers.create_loop_contract({
+    title: "Legacy shape",
+    goal: "Reject rubrics",
+    body: { steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan" }] },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
+    }
+  })).rejects.toThrow(/version/i);
+});
+
+test("record_validator_result is exposed through MCP", async () => {
+  const handlers = await createHandlers();
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "V2 verifier",
+    goal: "Use separate validator",
+    body: { steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft" }] },
+    verification: v2RubricAgentVerification()
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Run once" }));
+
+  await handlers.record_session_result({
+    runId: launch.run.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  const verification = readResult(await handlers.record_validator_result({
+    runId: launch.run.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "mcp-validator-1",
+    result: {
+      type: "rubric_agent",
+      status: "passed",
+      evidence: "Looks good.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed", score: 1, maxScore: 1, evidence: "Complete." }
+      ]
+    }
+  }));
+
+  expect(verification).toMatchObject({ version: 2, status: "passed" });
+});
+
 test("exposes loop-level pause and resume controls", async () => {
   const handlers = await createHandlers();
 
@@ -193,10 +240,7 @@ test("exposes loop-level pause and resume controls", async () => {
     body: {
       steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
 
   const paused = readResult(await handlers.pause_loop({ loopId: contract.id }));
@@ -238,10 +282,7 @@ test("preserves budget and escalation stop metadata through MCP session result w
     body: {
       steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
 
@@ -288,10 +329,7 @@ test("rejects failure pausedReason at the MCP session result boundary", async ()
     body: {
       steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
 
@@ -313,10 +351,7 @@ test("preserves budget stop metadata through the MCP complete_run writeback", as
     body: {
       steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
 
@@ -357,10 +392,7 @@ test("rejects failure pausedReason at the MCP complete_run boundary", async () =
     body: {
       steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
 
@@ -390,10 +422,7 @@ test("rejects unsupported session reuse policies at the MCP schema boundary", as
           }
         ]
       },
-      verification: {
-        mode: "after_workflow",
-        rubrics: [{ id: "done", label: "Done", requirement: "Task finishes", severity: "must" }]
-      }
+      verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Task finishes" })
     })
   ).rejects.toThrow();
 });
@@ -407,10 +436,7 @@ test("exposes workflow execution and precise session result writeback as MCP con
     body: {
       steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
   const run = readResult<{
@@ -435,7 +461,7 @@ test("exposes workflow execution and precise session result writeback as MCP con
   });
   expect(run.sessionResult).toBeUndefined();
 
-  const completed = readResult<{
+  const pendingVerification = readResult<{
     run: { id: string; status: string };
     sessionResult?: {
       status: string;
@@ -457,26 +483,41 @@ test("exposes workflow execution and precise session result writeback as MCP con
     result: "Daily report body"
   }));
 
-  expect(completed).toMatchObject({
+  expect(pendingVerification).toMatchObject({
     id: launch.run.id,
-    status: "completed",
+    status: "running",
     run: {
       id: launch.run.id,
-      status: "completed"
-    },
-    sessionResult: {
-      status: "completed",
-      finalAnswer: "Daily report body",
-      summary: "Worker result passed verification",
-      result: "Daily report body",
-      verification: {
-        status: "passed",
-        summary: "Worker result passed verification"
-      },
-      artifacts: []
+      status: "running"
     }
   });
+  expect(pendingVerification.sessionResult).toBeUndefined();
+
+  const verification = readResult(await handlers.record_validator_result({
+    runId: launch.run.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "quality-review:final",
+    result: {
+      type: "rubric_agent",
+      status: "passed",
+      score: 1,
+      evidence: "The report uses official sources."
+    }
+  }));
+
+  expect(verification).toMatchObject({
+    version: 2,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    status: "passed",
+    summary: "Verification passed."
+  });
   const snapshot = readResult(await handlers.get_snapshot({}));
+  expect(snapshot.runs).toMatchObject([
+    { id: launch.run.id, status: "completed" }
+  ]);
   expect(snapshot.workflowContexts).toMatchObject([
     {
       runId: launch.run.id,
@@ -495,10 +536,7 @@ test("does not relaunch existing pending workflow sessions through the MCP handl
     body: {
       steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
   await handlers.execute_workflow_attempt({
@@ -539,10 +577,7 @@ test("passes codex task subagent tools through the MCP workflow execution path",
         }
       ]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "done", label: "Done", requirement: "Task finishes", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Task finishes" })
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Run scan" }));
 
@@ -603,10 +638,7 @@ test("accepts taskRunId-only precise session result writeback through MCP", asyn
         { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write report" }
       ]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
   await handlers.execute_workflow_attempt({
@@ -655,10 +687,7 @@ test("exposes workflow revision proposal, promotion, listing, and rejection as M
     body: {
       steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
   const draft = readResult(await handlers.propose_workflow_revision({
@@ -675,10 +704,7 @@ test("exposes workflow revision proposal, promotion, listing, and rejection as M
           { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write a sourced report" }
         ]
       },
-      verification: {
-        mode: "after_workflow",
-        rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-      }
+      verification: v2RubricAgentVerification()
     }
   }));
 
@@ -737,10 +763,7 @@ test("exposes workflow revision proposal, promotion, listing, and rejection as M
           { id: "write", kind: "task", runtime: "codex", label: "Write", prompt: "Write a sourced report" }
         ]
       },
-      verification: {
-        mode: "after_workflow",
-        rubrics: [{ id: "source", label: "Source", requirement: "Use official sources", severity: "must" }]
-      }
+      verification: v2RubricAgentVerification()
     }
   }));
   const rejected = readResult(await handlers.reject_workflow_revision({
@@ -765,10 +788,7 @@ test("exposes attempt and run detail operations as MCP content", async () => {
     body: {
       steps: [{ id: "check", kind: "agent", label: "Run checks", prompt: "Run checks" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "checks", label: "Checks", requirement: "Checks pass", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "checks", label: "Checks", description: "Checks pass" })
   }));
   const run = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Run checks" })).run;
 
@@ -805,10 +825,7 @@ test("exposes codex session launch as MCP content", async () => {
     body: {
       steps: [{ id: "monitor", kind: "agent", label: "Monitor updates", prompt: "Watch updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "updates", label: "Updates", requirement: "Summarize updates", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "updates", label: "Updates", description: "Summarize updates" })
   }));
 
   const launch = readResult(await handlers.start_codex_session({
@@ -845,10 +862,7 @@ test("exposes codex thread writeback as MCP content", async () => {
     body: {
       steps: [{ id: "monitor", kind: "agent", label: "Monitor updates", prompt: "Watch updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "updates", label: "Updates", requirement: "Summarize updates", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "updates", label: "Updates", description: "Summarize updates" })
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Check today" }));
 
@@ -882,10 +896,7 @@ test("exposes codex session result writeback as MCP content", async () => {
     body: {
       steps: [{ id: "monitor", kind: "agent", label: "Monitor updates", prompt: "Watch updates" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "updates", label: "Updates", requirement: "Summarize updates", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "updates", label: "Updates", description: "Summarize updates" })
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Check today" }));
   await handlers.record_codex_thread({
@@ -918,10 +929,7 @@ test("exposes codex session open operation as MCP content", async () => {
     body: {
       steps: [{ id: "write", kind: "agent", label: "Write report", prompt: "Write a Chinese daily report" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "zh", label: "Chinese", requirement: "Use Chinese", severity: "must" }]
-    },
+    verification: v2RubricAgentVerification({ id: "zh", label: "Chinese", description: "Use Chinese" }),
     projectBinding: {
       codexProjectId: "project-1",
       projectLabel: "dittos loop"
@@ -953,10 +961,7 @@ test("reads loop memory through MCP with bounded newest-first windows", async ()
     body: {
       steps: [{ id: "check", kind: "agent", label: "Check", prompt: "Check memory" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "done", label: "Done", requirement: "Memory can be read", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Memory can be read" })
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Run memory update" }));
 
@@ -985,10 +990,7 @@ test("returns an exhausted memory window through MCP when offset is past the end
     body: {
       steps: [{ id: "check", kind: "agent", label: "Check", prompt: "Check memory" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "done", label: "Done", requirement: "Memory can be read", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Memory can be read" })
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: loop.id, goal: "Run memory update" }));
 
@@ -1015,10 +1017,7 @@ test("rejects invalid MCP memory read windows", async () => {
     body: {
       steps: [{ id: "check", kind: "agent", label: "Check", prompt: "Check memory" }]
     },
-    verification: {
-      mode: "after_workflow",
-      rubrics: [{ id: "done", label: "Done", requirement: "Memory can be read", severity: "must" }]
-    }
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Memory can be read" })
   }));
 
   await expect(handlers.read_loop_memory({ loopId: loop.id, limit: 0 })).rejects.toThrow();
@@ -1149,6 +1148,7 @@ test("registers the DittosLoop tool surface", () => {
     "reject_workflow_revision",
     "record_codex_thread",
     "record_session_result",
+    "record_validator_result",
     "open_codex_session",
     "start_attempt",
     "complete_attempt",
@@ -1167,8 +1167,41 @@ test("registers the DittosLoop tool surface", () => {
   ]);
   expect(toolMetadata.record_session_result.description).toContain("resume");
   expect(toolMetadata.record_session_result.description).not.toContain("close or pause");
+  expect(toolMetadata.record_validator_result.description).toContain("asynchronous verification v2 validator");
 });
 
 function readResult(result: { content: Array<{ type: "text"; text: string }> }) {
   return JSON.parse(result.content[0].text);
+}
+
+function v2RubricAgentVerification(
+  criterion: { id: string; label: string; description: string; severity?: "must" | "should" } = {
+    id: "quality",
+    label: "Quality",
+    description: "Use official sources"
+  }
+) {
+  return {
+    version: 2 as const,
+    mode: "after_workflow" as const,
+    criteria: [{ ...criterion, severity: criterion.severity ?? "must" }],
+    validators: [
+      {
+        id: "quality-review",
+        type: "rubric_agent" as const,
+        label: "Quality review",
+        criteriaIds: [criterion.id],
+        scoreScale: { min: 0, max: 1 },
+        passScore: 1,
+        evidenceRequired: true,
+        severity: "must" as const
+      }
+    ],
+    decision: {
+      requireAllMustCriteriaCovered: true,
+      failOnMustValidatorFailure: true,
+      failOnShouldValidatorFailure: false,
+      requireEvidenceForAgentScores: true
+    }
+  };
 }

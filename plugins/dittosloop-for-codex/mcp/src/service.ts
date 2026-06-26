@@ -224,7 +224,7 @@ export interface RecordValidatorResultInput {
   workflowContextId?: string;
   attemptId?: string;
   validatorId: string;
-  idempotencyKey: string;
+  idempotencyKey?: string;
   result: RecordedRubricAgentResultInput & {
     type: "rubric_agent";
     criteriaResults?: Array<{
@@ -1508,6 +1508,7 @@ export class LoopService {
     if (!input.idempotencyKey) {
       throw new Error("Validator results require an idempotencyKey");
     }
+    const idempotencyKey = input.idempotencyKey;
 
     let contextAfterWrite: WorkflowContext | undefined;
     let policy: FormalLoopContract["verification"] | undefined;
@@ -1541,7 +1542,7 @@ export class LoopService {
       }
 
       const verification = context.verification ?? createWorkflowVerificationState(timestamp);
-      if (verification.idempotencyKeys.includes(input.idempotencyKey)) {
+      if (verification.idempotencyKeys.includes(idempotencyKey)) {
         duplicateResultId = verification.resultId;
         contextAfterWrite = context;
         policy = contract.verification;
@@ -1571,7 +1572,7 @@ export class LoopService {
         status: pendingValidatorIds.length > 0 ? "waiting_for_validator" : "running",
         validatorResults,
         pendingValidatorIds,
-        idempotencyKeys: appendUnique(verification.idempotencyKeys, input.idempotencyKey),
+        idempotencyKeys: appendUnique(verification.idempotencyKeys, idempotencyKey),
         updatedAt: timestamp
       };
       contextAfterWrite = {
@@ -4428,7 +4429,9 @@ function buildNewLoopSessionPrompt(project: Pick<LoopRun, "codexProjectId" | "pr
     "- loop 目标和触发方式",
     "- 所属 Codex 项目",
     "- workflow steps，每个 Codex task 的 label、prompt、可选 subagent 配置",
-    "- verifier rubrics，包括 must/should 级别要求",
+    "- verification.version: 2，包含 criteria、validators、decision",
+    "- validator types: command / score / rubric_agent",
+    "- workflow task session 不能把自己的 status 当最终验证；最终状态由 verification validators 决定。",
     "- repair policy：不通过时如何修复和重试",
     "- stop policy：何时停止",
     "- 用户最终想看的输出形式",
@@ -4436,11 +4439,13 @@ function buildNewLoopSessionPrompt(project: Pick<LoopRun, "codexProjectId" | "pr
     "Contract 应至少表达这些结构：",
     "- title / goal / intent",
     "- body.steps：优先用 task(runtime: \"codex\") / phase / parallel 组织实际工作流；agent 仅作为旧 contract 兼容 spelling",
-    "- verification.rubrics：用于检查 candidate result",
+    "- verification.version: 2，包含 criteria、validators、decision",
+    "- validator types: command / score / rubric_agent",
+    "- workflow task session 不能把自己的 status 当最终验证；最终状态由 verification validators 决定。",
     "- repairPolicy、stopPolicy、budgetUsd、escalation",
     "- projectBinding：绑定所选 Codex 项目",
     "",
-    "完成后请用中文简短返回：loop id、项目名、workflow tasks、verifier rubrics、repair/stop 策略，以及下一步是否要立即启动一次 run。"
+    "完成后请用中文简短返回：loop id、项目名、workflow tasks、verification criteria and validators、repair/stop 策略，以及下一步是否要立即启动一次 run。"
   ].join("\n");
 }
 
@@ -4460,7 +4465,8 @@ function buildCodexSessionPrompt(
         "Workflow runtime / 工作流运行时：",
         `Contract id: ${contract.id}`,
         "- 使用本地 DittosLoop workflow runtime 执行这个 contract，不要手动重写或绕过工作流。",
-        "- 按已编译的 Workflow steps 执行，再用 contract rubrics 验证 candidate result。",
+        "- 按已编译的 Workflow steps 执行，再用 verification criteria and validators 验证 candidate result。",
+        "- workflow task session 不能把自己的 status 当最终验证；最终状态由 verification validators 决定。",
         "- 如果验证失败且允许修复，请生成 candidate workflow draft，并通过 runtime 重试。",
         "- 不要覆盖当前 active workflow contract；workflow 改动只能作为候选修订，等待明确采纳。",
         `- Repair policy: ${contract.repairPolicy.strategy}，最多尝试 ${contract.repairPolicy.maxAttempts} 次。`,
@@ -4471,7 +4477,7 @@ function buildCodexSessionPrompt(
         "Workflow steps / 工作流步骤：",
         formatWorkflowSteps(contract),
         "",
-        "Verifier rubrics / 验证规则：",
+        "Verification criteria and validators / 验证规则：",
         formatVerificationCriteria(contract.verification)
       ].join("\n")
     : "";
