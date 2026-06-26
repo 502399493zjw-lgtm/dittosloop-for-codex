@@ -2534,6 +2534,7 @@ function applyContractPatch(
     stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
     budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
     escalation: patch.escalation ?? baseContract.escalation,
+    agentProfiles: patch.agentProfiles ?? baseContract.agentProfiles,
     projectBinding: patch.projectBinding ?? baseContract.projectBinding,
     memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
     trigger: patch.trigger ?? baseContract.trigger,

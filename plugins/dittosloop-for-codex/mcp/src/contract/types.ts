@@ -15,6 +15,39 @@ export interface CodexSubagentSpec {
   context?: Record<string, unknown>;
 }
 
+export type SkillRequirementSource = "plugin" | "project" | "user" | "system";
+
+export interface SkillRequirement {
+  id: string;
+  source?: SkillRequirementSource;
+  pluginId?: string;
+  version?: string;
+}
+
+export interface AgentProfile {
+  id: string;
+  label: string;
+  role: string;
+  instructions?: string;
+  model?: string;
+  workdir?: string;
+  requiredSkills?: SkillRequirement[];
+  advisorySkills?: SkillRequirement[];
+  allowedTools?: string[];
+  permissions?: CodexSubagentSpec["permissions"];
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  context?: Record<string, unknown>;
+}
+
+export interface EffectiveAgentProfile extends Omit<AgentProfile, "requiredSkills" | "advisorySkills"> {
+  source: "declared" | "legacy-inline";
+  stepId: string;
+  requestedRef?: string;
+  requiredSkills: SkillRequirement[];
+  advisorySkills: SkillRequirement[];
+}
+
 export type Step =
   | AgentStep
   | TaskStep
@@ -28,6 +61,7 @@ export interface AgentStep {
   prompt: string;
   verifierRef?: string;
   sessionPolicy?: "new";
+  agentProfileRef?: string;
   subagent?: CodexSubagentSpec;
 }
 
@@ -40,6 +74,7 @@ export interface TaskStep {
   verifierRef?: string;
   sessionPolicy?: "new";
   outputSchema?: Record<string, unknown>;
+  agentProfileRef?: string;
   subagent?: CodexSubagentSpec;
 }
 
@@ -105,6 +140,7 @@ export interface FormalLoopContract {
   stopPolicy: StopPolicy;
   budgetUsd?: number;
   escalation?: string[];
+  agentProfiles?: Record<string, AgentProfile>;
   projectBinding?: CodexProjectBinding;
   memoryPolicy?: MemoryPolicy;
   status: LoopStatus;

@@ -1,4 +1,10 @@
-import type { CodexSubagentSpec, FormalLoopContract, Step } from "./types.js";
+import type {
+  AgentProfile,
+  CodexSubagentSpec,
+  FormalLoopContract,
+  SkillRequirement,
+  Step
+} from "./types.js";
 
 export function validateContract(contract: FormalLoopContract): void {
   const errors: string[] = [];
@@ -7,12 +13,13 @@ export function validateContract(contract: FormalLoopContract): void {
   required(contract.id, "id", errors);
   required(contract.title, "title", errors);
   required(contract.goal, "goal", errors);
+  validateAgentProfiles(contract, errors);
 
   if (!contract.body || !Array.isArray(contract.body.steps) || contract.body.steps.length === 0) {
     errors.push("body.steps must contain at least one step");
   } else {
     for (const step of contract.body.steps) {
-      validateStep(step, stepIds, errors);
+      validateStep(contract, step, stepIds, errors);
     }
   }
 
@@ -64,7 +71,7 @@ export function validateContract(contract: FormalLoopContract): void {
   }
 }
 
-function validateStep(step: Step, stepIds: Set<string>, errors: string[]): void {
+function validateStep(contract: FormalLoopContract, step: Step, stepIds: Set<string>, errors: string[]): void {
   required(step.id, "step id", errors);
   required(step.label, `step ${step.id || "<missing>"} label`, errors);
 
@@ -83,6 +90,9 @@ function validateStep(step: Step, stepIds: Set<string>, errors: string[]): void 
     if (step.sessionPolicy !== undefined && step.sessionPolicy !== "new") {
       errors.push(`${step.kind} step ${step.id || "<missing>"} sessionPolicy currently supports only new`);
     }
+    if (step.agentProfileRef && !contract.agentProfiles?.[step.agentProfileRef]) {
+      errors.push(`${step.kind} step ${step.id || "<missing>"} agentProfileRef ${step.agentProfileRef} was not found`);
+    }
     validateSubagent(step.subagent, step, errors);
     return;
   }
@@ -94,13 +104,28 @@ function validateStep(step: Step, stepIds: Set<string>, errors: string[]): void 
     }
 
     for (const child of step.children) {
-      validateStep(child, stepIds, errors);
+      validateStep(contract, child, stepIds, errors);
     }
     return;
   }
 
   const unknownStep = step as { id?: string };
   errors.push(`step ${unknownStep.id || "<missing>"} has invalid kind`);
+}
+
+function validateAgentProfiles(contract: FormalLoopContract, errors: string[]): void {
+  if (contract.agentProfiles === undefined) {
+    return;
+  }
+
+  if (!isRecord(contract.agentProfiles)) {
+    errors.push("agentProfiles must be an object keyed by profile id");
+    return;
+  }
+
+  for (const [profileId, profile] of Object.entries(contract.agentProfiles)) {
+    validateAgentProfile(profileId, profile, errors);
+  }
 }
 
 function required(value: string | undefined, label: string, errors: string[]): void {
@@ -136,4 +161,87 @@ function validateSubagent(subagent: CodexSubagentSpec | undefined, step: Step, e
   ) {
     errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.network is invalid`);
   }
+}
+
+function validateAgentProfile(profileId: string, profile: AgentProfile, errors: string[]): void {
+  required(profileId, "agentProfiles key", errors);
+  required(profile.id, `agentProfiles.${profileId}.id`, errors);
+  required(profile.label, `agentProfiles.${profileId}.label`, errors);
+  required(profile.role, `agentProfiles.${profileId}.role`, errors);
+
+  if (profile.id && profile.id !== profileId) {
+    errors.push(`agentProfiles.${profileId}.id must match its object key`);
+  }
+
+  validateSkillRequirements(profile.requiredSkills, `agentProfiles.${profileId}.requiredSkills`, errors);
+  validateSkillRequirements(profile.advisorySkills, `agentProfiles.${profileId}.advisorySkills`, errors);
+  validateAllowedTools(profile.allowedTools, `agentProfiles.${profileId}.allowedTools`, errors);
+  validatePermissions(profile.permissions, `agentProfiles.${profileId}.permissions`, errors);
+
+  if (profile.timeoutMs !== undefined && (!Number.isInteger(profile.timeoutMs) || profile.timeoutMs <= 0)) {
+    errors.push(`agentProfiles.${profileId}.timeoutMs must be a positive integer`);
+  }
+}
+
+function validateSkillRequirements(
+  requirements: SkillRequirement[] | undefined,
+  label: string,
+  errors: string[]
+): void {
+  if (requirements === undefined) {
+    return;
+  }
+
+  if (!Array.isArray(requirements)) {
+    errors.push(`${label} must be an array`);
+    return;
+  }
+
+  for (const [index, requirement] of requirements.entries()) {
+    required(requirement?.id, `${label}[${index}].id`, errors);
+    if (
+      requirement?.source !== undefined &&
+      requirement.source !== "plugin" &&
+      requirement.source !== "project" &&
+      requirement.source !== "user" &&
+      requirement.source !== "system"
+    ) {
+      errors.push(`${label}[${index}].source must be plugin, project, user, or system`);
+    }
+  }
+}
+
+function validateAllowedTools(allowedTools: string[] | undefined, label: string, errors: string[]): void {
+  if (allowedTools === undefined) {
+    return;
+  }
+
+  if (!Array.isArray(allowedTools) || allowedTools.some((tool) => !tool || tool.trim().length === 0)) {
+    errors.push(`${label} must contain non-empty strings`);
+  }
+}
+
+function validatePermissions(
+  permissions: CodexSubagentSpec["permissions"] | undefined,
+  label: string,
+  errors: string[]
+): void {
+  if (
+    permissions?.filesystem !== undefined &&
+    !["read-only", "workspace-write", "danger-full-access"].includes(permissions.filesystem)
+  ) {
+    errors.push(`${label}.filesystem is invalid`);
+  }
+
+  if (
+    permissions?.network !== undefined &&
+    permissions.network !== "enabled" &&
+    permissions.network !== "disabled"
+  ) {
+    errors.push(`${label}.network is invalid`);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, AgentProfile> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
