@@ -239,6 +239,21 @@ test("resumes a suspended task workflow with subagent metadata through session w
     timeoutMs: 120_000,
     context: { scope: "local e2e", expectedOutput: "facts" }
   };
+  const researcherProfile = {
+    id: "researcher",
+    label: "Release researcher",
+    role: "Release researcher",
+    model: "gpt-5.4-mini",
+    allowedTools: ["rg", "sed"],
+    permissions: { filesystem: "workspace-write", network: "disabled" },
+    timeoutMs: 120_000,
+    context: { scope: "local e2e", expectedOutput: "facts" },
+    source: "legacy-inline",
+    stepId: "collect",
+    requestedRef: "researcher",
+    requiredSkills: [],
+    advisorySkills: []
+  };
   const reviewerSubagent = {
     ref: "reviewer",
     role: "Quality reviewer",
@@ -247,6 +262,21 @@ test("resumes a suspended task workflow with subagent metadata through session w
     permissions: { filesystem: "read-only", network: "disabled" },
     timeoutMs: 60_000,
     context: { scope: "local e2e", expectedOutput: "approval" }
+  };
+  const reviewerProfile = {
+    id: "reviewer",
+    label: "Quality reviewer",
+    role: "Quality reviewer",
+    model: "gpt-5.4-mini",
+    allowedTools: ["rg"],
+    permissions: { filesystem: "read-only", network: "disabled" },
+    timeoutMs: 60_000,
+    context: { scope: "local e2e", expectedOutput: "approval" },
+    source: "legacy-inline",
+    stepId: "review",
+    requestedRef: "reviewer",
+    requiredSkills: [],
+    advisorySkills: []
   };
 
   const sessionBridge = createPendingSessionBridge();
@@ -310,7 +340,7 @@ test("resumes a suspended task workflow with subagent metadata through session w
     attempt: { id: string };
     launchRequest: {
       workflowContextId: string;
-      workflowPlan: { steps: Array<{ id: string; subagent?: unknown }> };
+      workflowPlan: { steps: Array<{ id: string; subagent?: unknown; agentProfile?: unknown }> };
     };
   }>(handlers.start_codex_session, {
     loopId: loop.id,
@@ -330,8 +360,14 @@ test("resumes a suspended task workflow with subagent metadata through session w
   expect(launch.launchRequest.workflowPlan.steps.find((step) => step.id === "collect")?.subagent).toEqual(
     researcherSubagent
   );
+  expect(launch.launchRequest.workflowPlan.steps.find((step) => step.id === "collect")?.agentProfile).toEqual(
+    researcherProfile
+  );
   expect(launch.launchRequest.workflowPlan.steps.find((step) => step.id === "review")?.subagent).toEqual(
     reviewerSubagent
+  );
+  expect(launch.launchRequest.workflowPlan.steps.find((step) => step.id === "review")?.agentProfile).toEqual(
+    reviewerProfile
   );
 
   const firstExecution = await callTool<{ status: string }>(handlers.execute_workflow_attempt, {
@@ -348,7 +384,8 @@ test("resumes a suspended task workflow with subagent metadata through session w
     stepId: "collect",
     workflowRuntime: "dittosloop-local-workflow",
     workflowContractId: loop.id,
-    subagent: researcherSubagent
+    subagent: researcherSubagent,
+    agentProfile: researcherProfile
   });
 
   let detail = await callTool<RunDetail>(handlers.get_run_detail, { runId: launch.run.id });
@@ -362,7 +399,8 @@ test("resumes a suspended task workflow with subagent metadata through session w
     stepId: "collect",
     sessionId: "session_1",
     status: "suspended",
-    subagent: researcherSubagent
+    subagent: researcherSubagent,
+    agentProfile: researcherProfile
   });
 
   const afterCollect = await callTool<{ status: string }>(handlers.record_session_result, {
@@ -386,7 +424,8 @@ test("resumes a suspended task workflow with subagent metadata through session w
     stepId: "review",
     workflowRuntime: "dittosloop-local-workflow",
     workflowContractId: loop.id,
-    subagent: reviewerSubagent
+    subagent: reviewerSubagent,
+    agentProfile: reviewerProfile
   });
 
   detail = await callTool<RunDetail>(handlers.get_run_detail, { runId: launch.run.id });
@@ -397,12 +436,14 @@ test("resumes a suspended task workflow with subagent metadata through session w
   expect(workflowContext?.taskRuns.find((taskRun) => taskRun.stepId === "collect")).toMatchObject({
     status: "completed",
     result: "Collected release facts from the local project.",
-    subagent: researcherSubagent
+    subagent: researcherSubagent,
+    agentProfile: researcherProfile
   });
   expect(workflowContext?.taskRuns.find((taskRun) => taskRun.stepId === "review")).toMatchObject({
     sessionId: "session_2",
     status: "suspended",
-    subagent: reviewerSubagent
+    subagent: reviewerSubagent,
+    agentProfile: reviewerProfile
   });
 
   const completed = await callTool<{ status: string }>(handlers.record_session_result, {
@@ -438,7 +479,11 @@ test("resumes a suspended task workflow with subagent metadata through session w
   expect(previewContext?.taskRuns.find((taskRun) => taskRun.stepId === "collect")?.subagent).toEqual(
     researcherSubagent
   );
+  expect(previewContext?.taskRuns.find((taskRun) => taskRun.stepId === "collect")?.agentProfile).toEqual(
+    researcherProfile
+  );
   expect(previewContext?.taskRuns.find((taskRun) => taskRun.stepId === "review")?.subagent).toEqual(reviewerSubagent);
+  expect(previewContext?.taskRuns.find((taskRun) => taskRun.stepId === "review")?.agentProfile).toEqual(reviewerProfile);
   expect(previewDetail.events.some((event) => event.message === "Codex task result recorded; continuing workflow")).toBe(
     true
   );

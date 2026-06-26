@@ -76,6 +76,7 @@ async function createServiceWithSkillAvailability(
 async function createServiceWithStore(
   store: LoopStore,
   options: {
+    sessionBridge?: CodexSessionBridge;
     skillAvailabilityProvider?: {
       check: (requirement: { id: string }, profile: { id: string; label: string; stepId: string }) => Promise<{
         status: "passed" | "missing" | "unknown";
@@ -90,8 +91,15 @@ async function createServiceWithStore(
     now: () => fixedTime,
     createId: (prefix) => `${prefix}_1`,
     previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: options.sessionBridge,
     skillAvailabilityProvider: options.skillAvailabilityProvider
   });
+}
+
+async function makeTempStore() {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  return new LoopStore(dir);
 }
 
 async function createFormalLoop(
@@ -3659,7 +3667,7 @@ test("records a default subagent when older session runs have none", async () =>
   ]);
 });
 
-test("profile preflight allows starting when required skills are available", async () => {
+test("agent profile preflight allows starting when required skills are available", async () => {
   const service = await createServiceWithSkillAvailability(async (requirement) => ({
     status: "passed",
     message: `${requirement.id} is installed`,
@@ -3694,6 +3702,16 @@ test("profile preflight allows starting when required skills are available", asy
   });
 
   const launch = await service.startCodexSessionRun(loop.id, { goal: "Run research" });
+  const effectiveProfile = {
+    id: "researcher",
+    label: "Researcher",
+    role: "Research specialist",
+    source: "declared",
+    stepId: "research",
+    requestedRef: "researcher",
+    requiredSkills: [{ id: "research-pack", source: "user" }],
+    advisorySkills: []
+  };
 
   expect(launch.run.codexSession?.profilePreflight).toEqual({
     status: "passed",
@@ -3712,6 +3730,216 @@ test("profile preflight allows starting when required skills are available", asy
     warnings: [],
     blockers: [],
     allowDegradedProfiles: undefined
+  });
+  expect(launch.launchRequest.workflowPlan?.steps.find((step) => step.id === "research")).toMatchObject({
+    agentProfile: effectiveProfile,
+    subagent: {
+      ref: "researcher",
+      role: "Research specialist"
+    }
+  });
+  expect(launch.run.codexSession?.subagents?.[0]).toMatchObject({
+    stepId: "research",
+    agentProfile: effectiveProfile,
+    subagent: {
+      ref: "researcher",
+      role: "Research specialist"
+    }
+  });
+  expect(launch.prompt).toContain("DittosLoop records these profile expectations and performs best-effort checks");
+  expect(launch.prompt).toContain("does not provide native Codex skill enforcement");
+});
+
+test("agent profile snapshots flow through workflow sessions and task runs", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const service = await createServiceWithStore(await makeTempStore(), {
+    sessionBridge: bridge,
+    skillAvailabilityProvider: {
+      check: async (requirement) => ({
+        status: "passed",
+        message: `${requirement.id} is installed`,
+        locations: [`/mock/.codex/skills/${requirement.id}/SKILL.md`]
+      })
+    }
+  });
+  const loop = await service.createLoopContract({
+    title: "Profile workflow execution",
+    goal: "Run a profile-backed workflow",
+    agentProfiles: {
+      researcher: {
+        id: "researcher",
+        label: "Researcher",
+        role: "Research specialist",
+        model: "gpt-5.4-mini",
+        allowedTools: ["rg", "sed"],
+        permissions: { filesystem: "workspace-write", network: "disabled" },
+        requiredSkills: [{ id: "research-pack", source: "user" }],
+        advisorySkills: [{ id: "browser-pack", source: "plugin", pluginId: "browser" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "research",
+          kind: "task",
+          runtime: "codex",
+          label: "Research",
+          prompt: "Gather the relevant updates.",
+          agentProfileRef: "researcher"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Research completes", severity: "must" }]
+    }
+  });
+  const expectedProfile = {
+    id: "researcher",
+    label: "Researcher",
+    role: "Research specialist",
+    source: "declared",
+    stepId: "research",
+    requestedRef: "researcher",
+    model: "gpt-5.4-mini",
+    allowedTools: ["rg", "sed"],
+    permissions: { filesystem: "workspace-write", network: "disabled" },
+    requiredSkills: [{ id: "research-pack", source: "user" }],
+    advisorySkills: [{ id: "browser-pack", source: "plugin", pluginId: "browser" }]
+  };
+
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run research" });
+  const run = await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  const detail = await service.getRunDetail(launch.run.id);
+  const taskRun = detail.workflowContexts[0]?.taskRuns[0];
+
+  expect(run.status).toBe("running");
+  expect(requests[0]).toMatchObject({
+    stepId: "research",
+    subagent: {
+      ref: "researcher",
+      role: "Research specialist",
+      model: "gpt-5.4-mini",
+      tools: ["rg", "sed"],
+      permissions: { filesystem: "workspace-write", network: "disabled" }
+    },
+    agentProfile: expectedProfile
+  });
+  expect(taskRun).toMatchObject({
+    stepId: "research",
+    sessionId: "session_1",
+    status: "suspended",
+    subagent: {
+      ref: "researcher",
+      role: "Research specialist",
+      model: "gpt-5.4-mini",
+      tools: ["rg", "sed"],
+      permissions: { filesystem: "workspace-write", network: "disabled" }
+    },
+    agentProfile: expectedProfile,
+    profilePreflight: {
+      checks: [
+        expect.objectContaining({
+          profileId: "researcher",
+          stepId: "research",
+          skill: { id: "research-pack", source: "user" }
+        }),
+        expect.objectContaining({
+          profileId: "researcher",
+          stepId: "research",
+          skill: { id: "browser-pack", source: "plugin", pluginId: "browser" }
+        })
+      ]
+    }
+  });
+  expect(detail.run.codexSession?.subagents?.[0]).toMatchObject({
+    stepId: "research",
+    sessionId: "session_1",
+    agentProfile: expectedProfile
+  });
+});
+
+test("agent profile snapshots remain stable when resuming after a workflow revision", async () => {
+  const initialBridge = createPendingSessionBridge();
+  const store = await makeTempStore();
+  const service = await createServiceWithStore(store, {
+    sessionBridge: initialBridge.bridge,
+    skillAvailabilityProvider: {
+      check: async (requirement) => ({
+        status: "passed",
+        message: `${requirement.id} is installed`
+      })
+    }
+  });
+  const loop = await service.createLoopContract({
+    title: "Profile resume snapshot",
+    goal: "Resume with the originally launched profile",
+    agentProfiles: {
+      researcher: {
+        id: "researcher",
+        label: "Researcher",
+        role: "Original researcher",
+        requiredSkills: [{ id: "research-pack", source: "user" }]
+      }
+    },
+    body: {
+      steps: [
+        {
+          id: "research",
+          kind: "task",
+          runtime: "codex",
+          label: "Research",
+          prompt: "Gather the original evidence.",
+          agentProfileRef: "researcher"
+        }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Research completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run research" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  await service.proposeWorkflowRevision(loop.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    reason: "Switch to a writer for later runs.",
+    patch: {
+      agentProfiles: {
+        researcher: {
+          id: "researcher",
+          label: "Researcher",
+          role: "Revised researcher",
+          requiredSkills: [{ id: "revised-pack", source: "user" }]
+        }
+      }
+    }
+  });
+
+  const resumedBridge = createPendingSessionBridge(1);
+  (service as any).options.sessionBridge = resumedBridge.bridge;
+  await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_1",
+    stepId: "research",
+    idempotencyKey: "session_1:research:passed",
+    status: "passed",
+    summary: "Research finished.",
+    result: "Original research output."
+  });
+
+  const detail = await service.getRunDetail(launch.run.id);
+  const taskRun = detail.workflowContexts[0]?.taskRuns.find((candidate) => candidate.stepId === "research");
+  expect(taskRun?.agentProfile).toMatchObject({
+    id: "researcher",
+    role: "Original researcher",
+    requiredSkills: [{ id: "research-pack", source: "user" }]
+  });
+  expect(taskRun?.agentProfile).not.toMatchObject({
+    role: "Revised researcher"
   });
 });
 

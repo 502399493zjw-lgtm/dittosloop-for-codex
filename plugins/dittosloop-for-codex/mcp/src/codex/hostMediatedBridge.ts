@@ -35,6 +35,7 @@ export class HostMediatedSessionBridge implements CodexSessionBridge {
       createdAt: this.now(),
       prompt: request.prompt,
       subagent: request.subagent,
+      agentProfile: request.agentProfile,
       workflowRuntime: request.workflowRuntime,
       workflowContractId: request.workflowContractId,
       workflowPlan: request.workflowPlan,

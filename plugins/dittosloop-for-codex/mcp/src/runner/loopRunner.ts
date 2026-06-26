@@ -1,4 +1,5 @@
 import type { FormalLoopContract, Step } from "../contract/types.js";
+import { effectiveProfileToSubagent, resolveEffectiveProfilesByStep } from "../contract/agentProfiles.js";
 import { runBody } from "../engine/runBody.js";
 import { runFlow } from "../engine/runFlow.js";
 import type { EngineEvent, EngineEventInput, Executor, WorkflowExecutionPlan, WorkflowExecutionPlanStep } from "../engine/types.js";
@@ -52,7 +53,7 @@ export class LoopRunner {
     };
 
     const flowResult = await runFlow(
-      (api) => runBody(request.contract.body, api),
+      (api) => runBody(request.contract.body, api, resolveEffectiveProfilesByStep(request.contract)),
       {
         runId: request.runId,
         executor: this.options.executor,
@@ -110,11 +111,13 @@ export class LoopRunner {
 }
 
 function buildWorkflowExecutionPlan(contract: FormalLoopContract): WorkflowExecutionPlan {
+  const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+
   return {
     runtime: "dittosloop-local-workflow",
     contractId: contract.id,
     goal: contract.goal,
-    steps: flattenWorkflowSteps(contract.body.steps),
+    steps: flattenWorkflowSteps(contract.body.steps, effectiveProfilesByStep),
     verification: contract.verification,
     repairPolicy: contract.repairPolicy,
     stopPolicy: contract.stopPolicy,
@@ -123,8 +126,16 @@ function buildWorkflowExecutionPlan(contract: FormalLoopContract): WorkflowExecu
   };
 }
 
-function flattenWorkflowSteps(steps: Step[], phaseId?: string, depth = 0): WorkflowExecutionPlanStep[] {
+function flattenWorkflowSteps(
+  steps: Step[],
+  effectiveProfilesByStep: ReturnType<typeof resolveEffectiveProfilesByStep>,
+  phaseId?: string,
+  depth = 0
+): WorkflowExecutionPlanStep[] {
   return steps.flatMap((step) => {
+    const agentProfile = step.kind === "agent" || step.kind === "task"
+      ? effectiveProfilesByStep.get(step.id)
+      : undefined;
     const current: WorkflowExecutionPlanStep = {
       id: step.id,
       kind: step.kind,
@@ -134,13 +145,14 @@ function flattenWorkflowSteps(steps: Step[], phaseId?: string, depth = 0): Workf
       phaseId,
       prompt: step.kind === "agent" || step.kind === "task" ? step.prompt : undefined,
       sessionPolicy: step.kind === "agent" || step.kind === "task" ? step.sessionPolicy : undefined,
-      subagent: step.kind === "agent" || step.kind === "task" ? step.subagent : undefined
+      subagent: step.kind === "agent" || step.kind === "task" ? effectiveProfileToSubagent(agentProfile, step.subagent) : undefined,
+      agentProfile
     };
     if (step.kind === "agent" || step.kind === "task") {
       return [current];
     }
 
     const childPhaseId = step.kind === "phase" ? step.id : phaseId;
-    return [current, ...flattenWorkflowSteps(step.children, childPhaseId, depth + 1)];
+    return [current, ...flattenWorkflowSteps(step.children, effectiveProfilesByStep, childPhaseId, depth + 1)];
   });
 }

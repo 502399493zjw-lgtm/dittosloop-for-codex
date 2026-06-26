@@ -1,4 +1,4 @@
-import type { CodexSubagentSpec, FormalLoopContract, SkillRequirement } from "./contract/types.js";
+import type { CodexSubagentSpec, EffectiveAgentProfile, FormalLoopContract, SkillRequirement } from "./contract/types.js";
 
 export type LoopStatus = "active" | "paused" | "archived";
 export type TriggerMode = "manual";
@@ -73,6 +73,8 @@ export interface LoopRun {
       threadUrl?: string;
       prompt?: string;
       subagent?: CodexSubagentSpec;
+      agentProfile?: EffectiveAgentProfile;
+      profilePreflight?: SkillPreflightReport;
     }>;
     profilePreflight?: SkillPreflightReport;
     prompt: string;
@@ -256,6 +258,8 @@ export interface WorkflowTaskRun {
   label?: string;
   prompt?: string;
   subagent?: CodexSubagentSpec;
+  agentProfile?: EffectiveAgentProfile;
+  profilePreflight?: SkillPreflightReport;
   sessionId?: string;
   status: WorkflowTaskRunStatus;
   result?: string;

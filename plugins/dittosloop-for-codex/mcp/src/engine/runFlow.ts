@@ -52,6 +52,7 @@ export async function runFlow<T>(
           stepId: opts?.stepId,
           phaseId: opts?.phaseId,
           subagent: opts?.subagent,
+          agentProfile: opts?.agentProfile,
           workflowRuntime: deps.workflow?.runtime,
           workflowContractId: deps.workflow?.contractId,
           workflowPlan: deps.workflow

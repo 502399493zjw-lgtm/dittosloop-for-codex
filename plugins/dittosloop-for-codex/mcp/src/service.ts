@@ -1,8 +1,9 @@
 import { createId, type IdPrefix } from "./id.js";
 import { compileContract } from "./contract/compileContract.js";
+import { effectiveProfileToSubagent, resolveEffectiveProfilesByStep } from "./contract/agentProfiles.js";
 import { runSkillProfilePreflight, type SkillAvailabilityProvider } from "./codex/skillPreflight.js";
 import type { CodexSessionBridge, CodexSessionRef } from "./codex/sessionBridge.js";
-import type { FormalLoopContract, FormalLoopContractInput } from "./contract/types.js";
+import type { EffectiveAgentProfile, FormalLoopContract, FormalLoopContractInput } from "./contract/types.js";
 import { validateContract } from "./contract/validateContract.js";
 import type { AgentRequest, AgentResult, EngineEvent, Executor } from "./engine/types.js";
 import { LoopRunner, type LoopRunResult, type LoopVerifier } from "./runner/loopRunner.js";
@@ -29,7 +30,8 @@ import type {
   VerificationStatus,
   WorkflowContext,
   WorkflowTaskRun,
-  WorkflowRevision
+  WorkflowRevision,
+  SkillPreflightReport
 } from "./types.js";
 import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
@@ -144,6 +146,7 @@ export interface WorkflowLaunchPlanStep {
   phaseId?: string;
   prompt?: string;
   sessionPolicy?: "new";
+  agentProfile?: EffectiveAgentProfile;
   subagent?: FormalLoopContract["body"]["steps"][number] extends infer TStep
     ? TStep extends { subagent?: infer TSubagent }
       ? TSubagent
@@ -552,10 +555,12 @@ export class LoopService {
           phaseId: request.phaseId,
           label: request.label,
           prompt: request.prompt,
-          subagent: request.subagent
+          subagent: request.subagent,
+          agentProfile: request.agentProfile,
+          profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, request.stepId, request.agentProfile)
         })
       : undefined;
-    const session = await bridge.createSession({
+    const createdSession = await bridge.createSession({
       runId: run.id,
       attemptId: request.attemptId,
       workflowContextId: request.workflowContextId,
@@ -564,6 +569,7 @@ export class LoopService {
       title: request.label ?? request.stepId ?? "Codex workflow step",
       prompt: request.prompt,
       subagent: request.subagent,
+      agentProfile: request.agentProfile,
       workflowRuntime: request.workflowRuntime,
       workflowContractId: request.workflowContractId,
       workflowPlan: request.workflowPlan,
@@ -571,6 +577,11 @@ export class LoopService {
       projectLabel: run.projectLabel,
       projectPath: run.projectPath
     });
+    const session: CodexSessionRef = {
+      ...createdSession,
+      subagent: createdSession.subagent ?? request.subagent,
+      agentProfile: createdSession.agentProfile ?? request.agentProfile
+    };
     if (workflowContext && taskRunId) {
       await this.attachWorkflowTaskSession(workflowContext.workflowContextId, taskRunId, session);
     }
@@ -624,7 +635,9 @@ export class LoopService {
         threadTitle: undefined,
         threadUrl: undefined,
         prompt: session.prompt,
-        subagent: session.subagent
+        subagent: session.subagent,
+        agentProfile: session.agentProfile,
+        profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, session.stepId, session.agentProfile)
       };
       const existingSubagents = run.codexSession?.subagents ?? [];
       let matchedSubagent = false;
@@ -725,7 +738,7 @@ export class LoopService {
         runId,
         attemptId,
         workflowContextId
-      }, memoryWindow);
+      }, memoryWindow, profilePreflight);
       const workflowLaunch = launchContract ? buildWorkflowLaunch(launchContract) : {};
       const attemptSummary = `Request a new Codex session for ${loop.title}`;
       const project = runProjectBinding(input, loop);
@@ -740,7 +753,7 @@ export class LoopService {
           mode: "new_session",
           status: "requested",
           ...project,
-          subagents: codexSessionSubagentsForContract(launchContract, prompt),
+          subagents: codexSessionSubagentsForContract(launchContract, prompt, "requested", profilePreflight),
           ...(profilePreflight ? { profilePreflight } : {}),
           prompt
         },
@@ -1853,7 +1866,9 @@ export class LoopService {
         threadTitle: session.threadTitle,
         threadUrl: session.threadUrl,
         prompt: session.prompt,
-        subagent: session.subagent
+        subagent: session.subagent,
+        agentProfile: session.agentProfile,
+        profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, session.stepId, session.agentProfile)
       }));
 
       updatedRun = {
@@ -1868,6 +1883,7 @@ export class LoopService {
           projectLabel: latestSession.projectLabel ?? run.codexSession?.projectLabel ?? run.projectLabel,
           projectPath: latestSession.projectPath ?? run.codexSession?.projectPath ?? run.projectPath,
           subagents: mergeCodexSessionSubagents(existingSubagents, completedSubagents),
+          profilePreflight: run.codexSession?.profilePreflight,
           prompt: latestSession.prompt ?? run.codexSession?.prompt ?? run.goal
         },
         updatedAt: timestamp
@@ -2019,6 +2035,8 @@ export class LoopService {
       label?: string;
       prompt?: string;
       subagent?: AgentRequest["subagent"];
+      agentProfile?: AgentRequest["agentProfile"];
+      profilePreflight?: SkillPreflightReport;
     }
   ): Promise<string> {
     const timestamp = this.now();
@@ -2036,6 +2054,8 @@ export class LoopService {
         label: input.label,
         prompt: input.prompt,
         subagent: input.subagent,
+        agentProfile: input.agentProfile,
+        profilePreflight: input.profilePreflight,
         status: "running",
         createdAt: timestamp,
         updatedAt: timestamp
@@ -2105,6 +2125,7 @@ export class LoopService {
                   stepId,
                   phaseId: session.phaseId ?? candidate.phaseId,
                   sessionId: session.sessionId,
+                  agentProfile: candidate.agentProfile ?? session.agentProfile,
                   updatedAt: timestamp
                 }
               : candidate
@@ -2629,16 +2650,43 @@ function codexSubagentStatus(status: CodexSessionRef["status"]): CodexSubagentSt
   return status;
 }
 
+function profilePreflightForStep(
+  report: SkillPreflightReport | undefined,
+  stepId: string | undefined,
+  agentProfile: EffectiveAgentProfile | undefined
+): SkillPreflightReport | undefined {
+  if (!report || !stepId) return undefined;
+  const checks = report.checks.filter((check) => check.stepId === stepId);
+  if (!checks.length && !agentProfile) return undefined;
+
+  const checkMessages = new Set(checks.map((check) => check.message));
+  const warnings = report.warnings.filter((warning) =>
+    checks.some((check) => warning.includes(check.profileLabel) || warning.includes(check.profileId) || warning.includes(check.skill.id))
+  );
+  const blockers = report.blockers.filter((blocker) =>
+    checks.some((check) => blocker.includes(check.profileLabel) || blocker.includes(check.profileId) || blocker.includes(check.skill.id))
+  );
+
+  return {
+    status: report.status,
+    checks,
+    warnings: warnings.length ? warnings : report.warnings.filter((warning) => checkMessages.has(warning)),
+    blockers: blockers.length ? blockers : report.blockers.filter((blocker) => checkMessages.has(blocker)),
+    allowDegradedProfiles: report.allowDegradedProfiles
+  };
+}
+
 function codexSessionSubagentsForContract(
   contract: FormalLoopContract | undefined,
   prompt: string,
-  status: CodexSubagentStatus = "requested"
+  status: CodexSubagentStatus = "requested",
+  preflight?: SkillPreflightReport
 ): CodexSessionSubagent[] {
   if (!contract) {
     return [{ role: "loop-runner", status, prompt }];
   }
 
-  const agents = flattenWorkflowLaunchSteps(contract.body.steps)
+  const agents = flattenWorkflowLaunchSteps(contract.body.steps, resolveEffectiveProfilesByStep(contract))
     .filter((step) => step.kind === "agent" || step.kind === "task")
     .map((step) => ({
       stepId: step.id,
@@ -2646,7 +2694,9 @@ function codexSessionSubagentsForContract(
       role: step.label,
       status,
       prompt: step.prompt ?? prompt,
-      subagent: step.subagent
+      subagent: step.subagent,
+      agentProfile: step.agentProfile,
+      profilePreflight: profilePreflightForStep(preflight, step.id, step.agentProfile)
     }));
 
   return agents.length ? agents : [{ role: "loop-runner", status, prompt }];
@@ -3623,7 +3673,8 @@ function buildCodexSessionPrompt(
   goal: string,
   contract?: FormalLoopContract,
   callbacks?: { runId: string; attemptId: string; workflowContextId: string },
-  memoryWindow?: LoopMemoryWindow
+  memoryWindow?: LoopMemoryWindow,
+  profilePreflight?: SkillPreflightReport
 ): string {
   const checks = loop.verification.checks.length
     ? loop.verification.checks.map((check) => `- ${check}`).join("\n")
@@ -3644,6 +3695,9 @@ function buildCodexSessionPrompt(
         "",
         "Workflow steps / 工作流步骤：",
         formatWorkflowSteps(contract),
+        "",
+        "Agent profiles / 代理画像：",
+        formatAgentProfiles(contract, profilePreflight),
         "",
         "Verifier rubrics / 验证规则：",
         contract.verification.rubrics
@@ -3705,6 +3759,8 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
   workflowContractId: string;
   workflowPlan: WorkflowLaunchPlan;
 } {
+  const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+
   return {
     workflowRuntime: "dittosloop-local-workflow",
     workflowContractId: contract.id,
@@ -3712,7 +3768,7 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
       runtime: "dittosloop-local-workflow",
       contractId: contract.id,
       goal: contract.goal,
-      steps: flattenWorkflowLaunchSteps(contract.body.steps),
+      steps: flattenWorkflowLaunchSteps(contract.body.steps, effectiveProfilesByStep),
       verification: contract.verification,
       repairPolicy: contract.repairPolicy,
       stopPolicy: contract.stopPolicy,
@@ -3724,6 +3780,7 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
 
 function flattenWorkflowLaunchSteps(
   steps: FormalLoopContract["body"]["steps"],
+  effectiveProfilesByStep: ReturnType<typeof resolveEffectiveProfilesByStep>,
   phaseId?: string,
   depth = 0
 ): WorkflowLaunchPlanStep[] {
@@ -3731,6 +3788,7 @@ function flattenWorkflowLaunchSteps(
 
   for (const step of steps) {
     if (step.kind === "agent" || step.kind === "task") {
+      const agentProfile = effectiveProfilesByStep.get(step.id);
       items.push({
         id: step.id,
         kind: step.kind,
@@ -3738,7 +3796,8 @@ function flattenWorkflowLaunchSteps(
         label: step.label,
         prompt: step.prompt,
         sessionPolicy: step.sessionPolicy,
-        subagent: step.subagent,
+        subagent: effectiveProfileToSubagent(agentProfile, step.subagent),
+        agentProfile,
         phaseId,
         depth
       });
@@ -3752,7 +3811,14 @@ function flattenWorkflowLaunchSteps(
       phaseId,
       depth
     });
-    items.push(...flattenWorkflowLaunchSteps(step.children, step.kind === "phase" ? step.id : phaseId, depth + 1));
+    items.push(
+      ...flattenWorkflowLaunchSteps(
+        step.children,
+        effectiveProfilesByStep,
+        step.kind === "phase" ? step.id : phaseId,
+        depth + 1
+      )
+    );
   }
 
   return items;
@@ -3760,12 +3826,17 @@ function flattenWorkflowLaunchSteps(
 
 function formatWorkflowSteps(contract: FormalLoopContract): string {
   const lines: string[] = [];
+  const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
   const visit = (steps: FormalLoopContract["body"]["steps"], depth: number): void => {
     for (const step of steps) {
       const indent = "  ".repeat(depth);
       if (step.kind === "agent" || step.kind === "task") {
+        const agentProfile = effectiveProfilesByStep.get(step.id);
         lines.push(`${indent}- ${step.kind} ${step.id}: ${step.label}`);
         lines.push(`${indent}  prompt: ${step.prompt}`);
+        if (agentProfile) {
+          lines.push(`${indent}  effectiveProfile: ${agentProfile.label} (${agentProfile.id}, ${agentProfile.source})`);
+        }
       } else {
         lines.push(`${indent}- ${step.kind} ${step.id}: ${step.label}`);
         visit(step.children, depth + 1);
@@ -3775,4 +3846,57 @@ function formatWorkflowSteps(contract: FormalLoopContract): string {
 
   visit(contract.body.steps, 0);
   return lines.join("\n");
+}
+
+function formatAgentProfiles(contract: FormalLoopContract, profilePreflight?: SkillPreflightReport): string {
+  const effectiveProfiles = Array.from(resolveEffectiveProfilesByStep(contract).values());
+  if (!effectiveProfiles.length) {
+    return [
+      "- No explicit agent profiles are declared for executable steps.",
+      "- DittosLoop records these profile expectations and performs best-effort checks; the visible Codex session remains the orchestrator and does not provide native Codex skill enforcement."
+    ].join("\n");
+  }
+
+  const lines = [
+    "- DittosLoop records these profile expectations and performs best-effort checks; the visible Codex session remains the orchestrator and does not provide native Codex skill enforcement."
+  ];
+  const declaredProfiles = Object.values(contract.agentProfiles ?? {});
+  if (declaredProfiles.length) {
+    lines.push("- Declared profile catalog:");
+    for (const profile of declaredProfiles) {
+      lines.push(`  - ${profile.id}: ${profile.label} / ${profile.role}`);
+    }
+  }
+  lines.push("- Effective profiles by executable step:");
+  for (const profile of effectiveProfiles) {
+    lines.push(`  - ${profile.stepId}: ${profile.label} (${profile.id}, ${profile.source})`);
+    lines.push(`    role: ${profile.role}`);
+    if (profile.requiredSkills.length) {
+      lines.push(`    requiredSkills: ${profile.requiredSkills.map(formatSkillRequirement).join(", ")}`);
+    }
+    if (profile.advisorySkills.length) {
+      lines.push(`    advisorySkills: ${profile.advisorySkills.map(formatSkillRequirement).join(", ")}`);
+    }
+    const checks = profilePreflight?.checks.filter((check) => check.stepId === profile.stepId) ?? [];
+    if (checks.length) {
+      lines.push(`    preflight: ${checks.map((check) => `${check.skill.id}=${check.status}`).join(", ")}`);
+    }
+  }
+  if (profilePreflight?.warnings.length) {
+    lines.push("- Preflight warnings:");
+    lines.push(...profilePreflight.warnings.map((warning) => `  - ${warning}`));
+  }
+  if (profilePreflight?.blockers.length) {
+    lines.push("- Preflight blockers:");
+    lines.push(...profilePreflight.blockers.map((blocker) => `  - ${blocker}`));
+  }
+
+  return lines.join("\n");
+}
+
+function formatSkillRequirement(requirement: { id: string; source?: string; pluginId?: string }): string {
+  const source = requirement.pluginId
+    ? `${requirement.source ?? "plugin"}:${requirement.pluginId}`
+    : requirement.source;
+  return source ? `${requirement.id} (${source})` : requirement.id;
 }

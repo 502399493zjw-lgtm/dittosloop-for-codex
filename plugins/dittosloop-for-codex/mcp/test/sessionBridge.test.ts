@@ -33,6 +33,19 @@ test("host-mediated bridge preserves workflow launch context for the Codex host"
     now: () => "2026-06-24T00:00:00.000Z",
     makeId: () => "session_1"
   });
+  const agentProfile = {
+    id: "researcher",
+    label: "Researcher",
+    role: "Researcher",
+    source: "declared" as const,
+    stepId: "collect",
+    requestedRef: "researcher",
+    model: "gpt-5.4-mini",
+    allowedTools: ["rg", "sed"],
+    permissions: { filesystem: "workspace-write" as const, network: "disabled" as const },
+    requiredSkills: [{ id: "research-pack", source: "user" as const }],
+    advisorySkills: []
+  };
   const workflowPlan = {
     runtime: "dittosloop-local-workflow" as const,
     contractId: "loop_1",
@@ -46,7 +59,8 @@ test("host-mediated bridge preserves workflow launch context for the Codex host"
         depth: 1,
         phaseId: "research",
         prompt: "Collect official sources.",
-        sessionPolicy: "new" as const
+        sessionPolicy: "new" as const,
+        agentProfile
       }
     ],
     verification: {
@@ -66,6 +80,7 @@ test("host-mediated bridge preserves workflow launch context for the Codex host"
     workflowRuntime: "dittosloop-local-workflow",
     workflowContractId: "loop_1",
     workflowPlan,
+    agentProfile,
     subagent: {
       ref: "researcher",
       role: "Researcher",
@@ -96,8 +111,12 @@ test("host-mediated bridge preserves workflow launch context for the Codex host"
       workflowContractId: "loop_1",
       workflowPlan: {
         contractId: "loop_1",
-        steps: [expect.objectContaining({ id: "research" }), expect.objectContaining({ id: "collect", phaseId: "research" })]
+        steps: [
+          expect.objectContaining({ id: "research" }),
+          expect.objectContaining({ id: "collect", phaseId: "research", agentProfile })
+        ]
       },
+      agentProfile,
       subagent: {
         ref: "researcher",
         role: "Researcher",

@@ -1,4 +1,4 @@
-import type { CodexSubagentSpec } from "../contract/types.js";
+import type { CodexSubagentSpec, EffectiveAgentProfile } from "../contract/types.js";
 
 export interface CodexWorkflowLaunchPlanStep {
   id: string;
@@ -10,6 +10,7 @@ export interface CodexWorkflowLaunchPlanStep {
   prompt?: string;
   sessionPolicy?: "new";
   subagent?: CodexSubagentSpec;
+  agentProfile?: EffectiveAgentProfile;
 }
 
 export interface CodexWorkflowLaunchPlan {
@@ -33,6 +34,7 @@ export interface CodexSessionRequest {
   title: string;
   prompt?: string;
   subagent?: CodexSubagentSpec;
+  agentProfile?: EffectiveAgentProfile;
   workflowRuntime?: "dittosloop-local-workflow";
   workflowContractId?: string;
   workflowPlan?: CodexWorkflowLaunchPlan;
@@ -53,6 +55,7 @@ export interface CodexSessionRef {
   createdAt: string;
   prompt?: string;
   subagent?: CodexSubagentSpec;
+  agentProfile?: EffectiveAgentProfile;
   workflowRuntime?: "dittosloop-local-workflow";
   workflowContractId?: string;
   workflowPlan?: CodexWorkflowLaunchPlan;
