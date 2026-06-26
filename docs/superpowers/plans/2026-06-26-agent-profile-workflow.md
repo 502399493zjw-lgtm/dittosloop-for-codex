@@ -377,7 +377,7 @@
 
 ## Task 6: Update installed skill guidance for creating profile-based workflows
 
-- [ ] Task status
+- [x] Task status
 
   Files:
 
