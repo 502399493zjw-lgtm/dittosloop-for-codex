@@ -456,6 +456,57 @@ describe("formal loop contracts", () => {
     expect(() => validateContract(contract)).toThrow(/agentProfileRef/i);
   });
 
+  test("does not synthesize a declared effective profile when agentProfileRef is missing but inline subagent exists", () => {
+    const contract = compileContract(
+      {
+        id: "loop_missing_profile_inline",
+        title: "Missing declared profile with inline subagent",
+        goal: "Prefer missing declared refs over inline fallback",
+        body: {
+          steps: [
+            {
+              id: "research",
+              kind: "task",
+              runtime: "codex",
+              label: "Research",
+              prompt: "Use a missing profile with inline values.",
+              agentProfileRef: "missing-profile",
+              subagent: {
+                ref: "inline-only",
+                role: "inline-researcher",
+                tools: ["rg"]
+              }
+            }
+          ]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(resolveEffectiveAgentProfile(contract, contract.body.steps[0])).toBeUndefined();
+  });
+
+  test("reports malformed agentProfiles entries as actionable validation errors", () => {
+    const contract = compileContract(
+      {
+        id: "loop_malformed_profile",
+        title: "Malformed profile entry",
+        goal: "Reject non-object profile entries cleanly",
+        agentProfiles: {
+          broken: null as any
+        },
+        body: {
+          steps: [{ id: "research", kind: "agent", label: "Research", prompt: "Scan." }]
+        },
+        verification: { mode: "after_workflow", rubrics: [] }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).toThrow(/agentProfiles\.broken must be an object/i);
+  });
+
   test("rejects invalid profile skill requirements, skill sources, allowedTools, and permissions", () => {
     const invalidSkills = compileContract(
       {

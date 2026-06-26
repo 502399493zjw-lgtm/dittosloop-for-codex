@@ -124,6 +124,11 @@ function validateAgentProfiles(contract: FormalLoopContract, errors: string[]): 
   }
 
   for (const [profileId, profile] of Object.entries(contract.agentProfiles)) {
+    if (!isRecord(profile)) {
+      errors.push(`agentProfiles.${profileId} must be an object`);
+      continue;
+    }
+
     validateAgentProfile(profileId, profile, errors);
   }
 }
@@ -163,13 +168,13 @@ function validateSubagent(subagent: CodexSubagentSpec | undefined, step: Step, e
   }
 }
 
-function validateAgentProfile(profileId: string, profile: AgentProfile, errors: string[]): void {
+function validateAgentProfile(profileId: string, profile: Record<string, unknown>, errors: string[]): void {
   required(profileId, "agentProfiles key", errors);
-  required(profile.id, `agentProfiles.${profileId}.id`, errors);
-  required(profile.label, `agentProfiles.${profileId}.label`, errors);
-  required(profile.role, `agentProfiles.${profileId}.role`, errors);
+  required(asOptionalString(profile.id), `agentProfiles.${profileId}.id`, errors);
+  required(asOptionalString(profile.label), `agentProfiles.${profileId}.label`, errors);
+  required(asOptionalString(profile.role), `agentProfiles.${profileId}.role`, errors);
 
-  if (profile.id && profile.id !== profileId) {
+  if (asOptionalString(profile.id) && profile.id !== profileId) {
     errors.push(`agentProfiles.${profileId}.id must match its object key`);
   }
 
@@ -178,16 +183,15 @@ function validateAgentProfile(profileId: string, profile: AgentProfile, errors: 
   validateAllowedTools(profile.allowedTools, `agentProfiles.${profileId}.allowedTools`, errors);
   validatePermissions(profile.permissions, `agentProfiles.${profileId}.permissions`, errors);
 
-  if (profile.timeoutMs !== undefined && (!Number.isInteger(profile.timeoutMs) || profile.timeoutMs <= 0)) {
+  if (
+    profile.timeoutMs !== undefined &&
+    (typeof profile.timeoutMs !== "number" || !Number.isInteger(profile.timeoutMs) || profile.timeoutMs <= 0)
+  ) {
     errors.push(`agentProfiles.${profileId}.timeoutMs must be a positive integer`);
   }
 }
 
-function validateSkillRequirements(
-  requirements: SkillRequirement[] | undefined,
-  label: string,
-  errors: string[]
-): void {
+function validateSkillRequirements(requirements: unknown, label: string, errors: string[]): void {
   if (requirements === undefined) {
     return;
   }
@@ -211,7 +215,7 @@ function validateSkillRequirements(
   }
 }
 
-function validateAllowedTools(allowedTools: string[] | undefined, label: string, errors: string[]): void {
+function validateAllowedTools(allowedTools: unknown, label: string, errors: string[]): void {
   if (allowedTools === undefined) {
     return;
   }
@@ -221,20 +225,25 @@ function validateAllowedTools(allowedTools: string[] | undefined, label: string,
   }
 }
 
-function validatePermissions(
-  permissions: CodexSubagentSpec["permissions"] | undefined,
-  label: string,
-  errors: string[]
-): void {
+function validatePermissions(permissions: unknown, label: string, errors: string[]): void {
+  if (permissions === undefined) {
+    return;
+  }
+
+  if (!isRecord(permissions)) {
+    errors.push(`${label} must be an object`);
+    return;
+  }
+
   if (
-    permissions?.filesystem !== undefined &&
-    !["read-only", "workspace-write", "danger-full-access"].includes(permissions.filesystem)
+    permissions.filesystem !== undefined &&
+    !["read-only", "workspace-write", "danger-full-access"].includes(String(permissions.filesystem))
   ) {
     errors.push(`${label}.filesystem is invalid`);
   }
 
   if (
-    permissions?.network !== undefined &&
+    permissions.network !== undefined &&
     permissions.network !== "enabled" &&
     permissions.network !== "disabled"
   ) {
@@ -242,6 +251,10 @@ function validatePermissions(
   }
 }
 
-function isRecord(value: unknown): value is Record<string, AgentProfile> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }

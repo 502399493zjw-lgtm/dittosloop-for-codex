@@ -16,6 +16,10 @@ export function resolveEffectiveAgentProfile(
   const declaredProfile = requestedRef ? contract.agentProfiles?.[requestedRef] : undefined;
 
   if (step.agentProfileRef) {
+    if (!declaredProfile) {
+      return undefined;
+    }
+
     return toEffectiveAgentProfile(step, declaredProfile, step.subagent, "declared", step.agentProfileRef);
   }
 
