@@ -63,17 +63,73 @@ export interface ExecutionBody {
   steps: Step[];
 }
 
-export interface VerificationRubric {
+export interface VerificationCriterion {
+  id: string;
+  label: string;
+  description: string;
+  severity: "must" | "should";
+}
+
+export interface VerificationCommandValidator {
+  id: string;
+  type: "command";
+  label: string;
+  command: string;
+  args?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+  criteriaIds?: string[];
+  severity: "must" | "should";
+  parse: {
+    kind: "none";
+  };
+}
+
+export interface VerificationRubricAgentValidator {
+  id: string;
+  type: "rubric_agent";
+  label: string;
+  criteriaIds: string[];
+  scoreScale: {
+    min: number;
+    max: number;
+  };
+  passScore: number;
+  evidenceRequired: boolean;
+  severity: "must" | "should";
+}
+
+export type VerificationValidator =
+  | VerificationCommandValidator
+  | VerificationRubricAgentValidator;
+
+export interface VerificationPolicyV2 {
+  version: 2;
+  mode: "after_workflow" | "after_each_step";
+  criteria: VerificationCriterion[];
+  validators: VerificationValidator[];
+  decision: {
+    requireAllMustCriteriaCovered: boolean;
+    failOnMustValidatorFailure: boolean;
+    failOnShouldValidatorFailure: boolean;
+    requireEvidenceForAgentScores: boolean;
+  };
+}
+
+export interface LegacyVerificationRubric {
   id: string;
   label: string;
   requirement: string;
   severity: "must" | "should";
 }
 
-export interface VerificationPolicy {
+export interface LegacyVerificationPolicy {
   mode: "after_workflow" | "after_each_agent";
-  rubrics: VerificationRubric[];
+  rubrics: LegacyVerificationRubric[];
 }
+
+export type VerificationPolicyInput = VerificationPolicyV2 | LegacyVerificationPolicy;
+export type VerificationPolicy = VerificationPolicyV2;
 
 export interface RepairPolicy {
   maxAttempts: number;
@@ -115,5 +171,6 @@ export interface FormalLoopContract {
 }
 
 export type FormalLoopContractInput =
-  & Pick<FormalLoopContract, "id" | "title" | "goal" | "body" | "verification">
+  & Pick<FormalLoopContract, "id" | "title" | "goal" | "body">
+  & { verification: VerificationPolicyInput }
   & Partial<Omit<FormalLoopContract, "id" | "title" | "goal" | "body" | "verification">>;

@@ -1,4 +1,6 @@
-import type { CodexSubagentSpec, FormalLoopContract, Step } from "./types.js";
+import path from "node:path";
+
+import type { CodexProjectBinding, CodexSubagentSpec, FormalLoopContract, Step, VerificationPolicyV2 } from "./types.js";
 
 export function validateContract(contract: FormalLoopContract): void {
   const errors: string[] = [];
@@ -16,22 +18,7 @@ export function validateContract(contract: FormalLoopContract): void {
     }
   }
 
-  if (contract.verification.mode !== "after_workflow" && contract.verification.mode !== "after_each_agent") {
-    errors.push("verification.mode must be after_workflow or after_each_agent");
-  }
-
-  if (!Array.isArray(contract.verification.rubrics)) {
-    errors.push("verification.rubrics must be an array");
-  } else {
-    for (const rubric of contract.verification.rubrics) {
-      required(rubric.id, "verification rubric id", errors);
-      required(rubric.label, "verification rubric label", errors);
-      required(rubric.requirement, "verification rubric requirement", errors);
-      if (rubric.severity !== "must" && rubric.severity !== "should") {
-        errors.push(`verification rubric ${rubric.id || "<missing>"} severity must be must or should`);
-      }
-    }
-  }
+  validateVerificationV2(contract.verification, contract.projectBinding, errors);
 
   if (!Number.isInteger(contract.repairPolicy.maxAttempts) || contract.repairPolicy.maxAttempts < 0) {
     errors.push("repairPolicy.maxAttempts must be a non-negative integer");
@@ -146,5 +133,100 @@ function validateSubagent(subagent: CodexSubagentSpec | undefined, step: Step, e
     subagent.permissions.network !== "disabled"
   ) {
     errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.network is invalid`);
+  }
+}
+
+function validateVerificationV2(
+  verification: VerificationPolicyV2,
+  _projectBinding: CodexProjectBinding | undefined,
+  errors: string[]
+): void {
+  if (verification.version !== 2) {
+    errors.push("verification.version must be 2");
+  }
+
+  if (verification.mode !== "after_workflow" && verification.mode !== "after_each_step") {
+    errors.push("verification.mode must be after_workflow or after_each_step");
+  }
+
+  if (!Array.isArray(verification.criteria)) {
+    errors.push("verification.criteria must be an array");
+  }
+
+  const criterionIds = new Set<string>();
+  const coveredCriteria = new Set<string>();
+
+  for (const criterion of verification.criteria ?? []) {
+    required(criterion.id, "verification criterion id", errors);
+    required(criterion.label, "verification criterion label", errors);
+    required(criterion.description, "verification criterion description", errors);
+    if (criterion.severity !== "must" && criterion.severity !== "should") {
+      errors.push(`verification criterion ${criterion.id || "<missing>"} severity must be must or should`);
+    }
+    if (criterion.id) {
+      if (criterionIds.has(criterion.id)) {
+        errors.push(`criterion id must be unique: ${criterion.id}`);
+      }
+      criterionIds.add(criterion.id);
+    }
+  }
+
+  if (!Array.isArray(verification.validators) || verification.validators.length === 0) {
+    errors.push("verification.validators must contain at least one validator");
+    return;
+  }
+
+  const validatorIds = new Set<string>();
+
+  for (const validator of verification.validators) {
+    required(validator.id, "verification validator id", errors);
+    required(validator.label, "verification validator label", errors);
+
+    if (validator.id) {
+      if (validatorIds.has(validator.id)) {
+        errors.push(`validator id must be unique: ${validator.id}`);
+      }
+      validatorIds.add(validator.id);
+    }
+
+    if (validator.severity !== "must" && validator.severity !== "should") {
+      errors.push(`verification validator ${validator.id || "<missing>"} severity must be must or should`);
+    }
+
+    for (const criterionId of validator.criteriaIds ?? []) {
+      if (!criterionIds.has(criterionId)) {
+        errors.push(`validator references missing criterion: ${criterionId}`);
+      } else {
+        coveredCriteria.add(criterionId);
+      }
+    }
+
+    if (validator.type === "command") {
+      if (!validator.command || validator.command.trim().length === 0) {
+        errors.push("command validator command is required");
+      }
+      if (validator.cwd !== undefined && path.isAbsolute(validator.cwd)) {
+        errors.push("command validator cwd must not be absolute");
+      }
+      continue;
+    }
+
+    const scoreValues = [validator.scoreScale.min, validator.scoreScale.max, validator.passScore];
+    if (scoreValues.some((value) => !Number.isFinite(value))) {
+      errors.push("score validator threshold must be finite");
+      continue;
+    }
+
+    if (validator.passScore < validator.scoreScale.min || validator.passScore > validator.scoreScale.max) {
+      errors.push("rubric_agent validator passScore must be inside scoreScale");
+    }
+  }
+
+  if (verification.decision.requireAllMustCriteriaCovered) {
+    for (const criterion of verification.criteria ?? []) {
+      if (criterion.severity === "must" && !coveredCriteria.has(criterion.id)) {
+        errors.push(`must criterion is not covered by any validator: ${criterion.id}`);
+      }
+    }
   }
 }
