@@ -771,8 +771,8 @@ async function copyLoopLaunchPrompt(loop) {
     selectedLoopId = existingLaunch.run.loopId;
     activeLoopTab = "history";
     writeRouteState("run", selectedRunId);
-    showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
     await loadRunDetail(existingLaunch.run.id);
+    showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
     return;
   }
 
@@ -796,8 +796,8 @@ async function copyLoopLaunchPrompt(loop) {
   selectedLoopId = launch.run.loopId;
   activeLoopTab = "history";
   writeRouteState("run", selectedRunId);
-  showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
   await loadSnapshot();
+  showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
 }
 
 function existingLoopLaunch(loop) {
