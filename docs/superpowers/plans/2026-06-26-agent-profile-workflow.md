@@ -439,7 +439,7 @@
 
 ## Task 7: Full verification and review handoff
 
-- [ ] Task status
+- [x] Task status
 
   Files:
 
@@ -471,10 +471,10 @@
 
 ## Self-Review Checklist
 
-- [ ] Spec goals are covered: profiles, required/advisory skills, preflight, persistence, prompt, preview, workspace guide rename.
-- [ ] Non-goals are preserved: no direct skill invocation, no per-loop installed skill, no hidden background work, no native enforcement claim.
-- [ ] Legacy `subagent` contracts still validate and run.
-- [ ] Required missing/unknown skill behavior is test-covered for both blocking and degraded launch.
-- [ ] Effective profile snapshots are stored where pending workflow sessions can rely on them.
-- [ ] MCP schemas, TypeScript contract types, runtime service types, and preview assumptions agree on field names.
-- [ ] Generated docs and plugin validation are updated together.
+- [x] Spec goals are covered: profiles, required/advisory skills, preflight, persistence, prompt, preview, workspace guide rename.
+- [x] Non-goals are preserved: no direct skill invocation, no per-loop installed skill, no hidden background work, no native enforcement claim.
+- [x] Legacy `subagent` contracts still validate and run.
+- [x] Required missing/unknown skill behavior is test-covered for both blocking and degraded launch.
+- [x] Effective profile snapshots are stored where pending workflow sessions can rely on them.
+- [x] MCP schemas, TypeScript contract types, runtime service types, and preview assumptions agree on field names.
+- [x] Generated docs and plugin validation are updated together.
