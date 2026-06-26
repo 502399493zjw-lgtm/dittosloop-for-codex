@@ -253,7 +253,7 @@ function validateVerificationValidator(
       validateRubricAgentValidator(validator, errors);
       return;
     default:
-      errors.push(`verification validator ${validator.id || "<missing>"} has invalid type`);
+      errors.push("verification validator has invalid type");
   }
 }
 
