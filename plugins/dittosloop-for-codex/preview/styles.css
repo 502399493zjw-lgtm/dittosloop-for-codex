@@ -1732,6 +1732,20 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.workflow-task-details,
+.agent-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.workflow-task-details .detail-meta,
+.agent-detail-line {
+  white-space: normal;
+  word-break: break-word;
+}
+
 .phase-agent-group {
   display: flex;
   min-width: 0;
@@ -1810,6 +1824,12 @@ a:focus-visible {
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-detail-line {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .agent-actions {

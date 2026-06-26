@@ -46,10 +46,6 @@ function sortLoopWorkspaceFiles(files: LoopWorkspaceFile[]): LoopWorkspaceFile[]
   ]);
 
   return [...files].sort((left, right) => {
-    const leftIsSkill = left.path.startsWith("skill/");
-    const rightIsSkill = right.path.startsWith("skill/");
-    if (leftIsSkill !== rightIsSkill) return leftIsSkill ? 1 : -1;
-
     const leftRank = rootOrder.get(left.path) ?? 100;
     const rightRank = rootOrder.get(right.path) ?? 100;
     if (leftRank !== rightRank) return leftRank - rightRank;
@@ -102,6 +98,7 @@ function formalLoopDirectoryFiles(input: {
           latestAttemptStatus: latestAttempt?.status ?? null,
           latestVerificationStatus: latestVerification?.status ?? null,
           body: input.contract.body,
+          agentProfiles: input.contract.agentProfiles ?? {},
           repairPolicy: input.contract.repairPolicy,
           stopPolicy: input.contract.stopPolicy,
           projectBinding: input.contract.projectBinding
@@ -111,10 +108,10 @@ function formalLoopDirectoryFiles(input: {
       )}\n`
     }),
     withSize({
-      path: "skill/dittosloop-for-codex-loop.md",
-      kind: "skill",
+      path: "runtime/dittosloop-for-codex-loop.md",
+      kind: "runtime",
       language: "markdown",
-      content: loopSkillFile(input.contract)
+      content: loopRuntimeGuideFile(input.contract)
     }),
     withSize({
       path: "rubrics.md",
@@ -206,13 +203,14 @@ function formalLoopDirectoryFiles(input: {
   ];
 }
 
-function loopSkillFile(contract: FormalLoopContract): string {
+function loopRuntimeGuideFile(contract: FormalLoopContract): string {
   return [
-    "# dittosloop-for-codex:loop",
+    "# DittosLoop For Codex runtime guide",
     "",
     `Loop: ${contract.title}`,
     "",
-    "这个 loop 使用 DittosLoop For Codex 的 loop skill 来创建正式 contract、启动可见 Codex worker session、执行 workflow、写回结果，并按 rubrics 做最终验证。",
+    "这个文件描述 DittosLoop For Codex runtime 如何为这个 loop 管理正式 contract、启动可见 Codex worker session、执行 workflow、写回结果，并按 rubrics 做最终验证。",
+    "它不是安装到 Codex 里的原生 skill，只是本地 runtime 快照，帮助你检查当前 loop 会如何运行。",
     "",
     "## Runtime role",
     "",

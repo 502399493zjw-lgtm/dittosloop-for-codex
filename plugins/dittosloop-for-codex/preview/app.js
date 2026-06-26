@@ -1145,14 +1145,20 @@ function renderWorkflowTaskRun(taskRun) {
   const meta = [taskRun.id, taskRun.stepId, taskRun.phaseId, sessionLabel].filter(Boolean).join(" · ");
   const result = taskRun.result || taskRun.error;
   const subagent = taskRun.subagent;
-  const subagentMeta = formatSubagentMeta(subagent);
+  const profileMeta = formatAgentProfileMeta(taskRun.agentProfile);
+  const preflightMeta = profileStatusMeta(taskRun.profilePreflight);
+  const profileSkills = formatProfileSkills(taskRun.agentProfile, taskRun.profilePreflight);
+  const subagentMeta = profileMeta ? "" : formatSubagentMeta(subagent);
+  const detailLines = [profileMeta, preflightMeta, ...profileSkills, subagentMeta].filter(Boolean);
 
   return el("div", "workflow-task-row", [
     statusChip(taskRun.status),
     el("div", "workflow-runtime-copy", [
       el("p", "", title),
       el("span", "detail-meta", meta),
-      subagentMeta ? el("span", "detail-meta", subagentMeta) : null,
+      detailLines.length
+        ? el("div", "workflow-task-details", detailLines.map((line) => el("span", "detail-meta", line)))
+        : null,
       result ? el("span", "workflow-task-result", result) : null
     ])
   ]);
@@ -1277,12 +1283,63 @@ function codexWorkflowPlanAgents(run) {
       : "已纳入本次 Codex worker 的 workflow 计划，等待会话接管执行。",
     meta: subagent.phaseId
       ? `phase ${subagent.phaseId}`
-      : (subagent.threadTitle || formatSubagentMeta(subagent.subagent) || "workflow agent"),
+      : (subagent.threadTitle || formatAgentProfileMeta(subagent.agentProfile) || formatSubagentMeta(subagent.subagent) || "workflow agent"),
+    detailList: [
+      formatAgentProfileMeta(subagent.agentProfile),
+      profileStatusMeta(subagent.profilePreflight),
+      ...formatProfileSkills(subagent.agentProfile, subagent.profilePreflight),
+      subagent.agentProfile ? "" : formatSubagentMeta(subagent.subagent)
+    ].filter(Boolean),
     threadId: subagent.threadId ?? run.codexSession.threadId,
     threadTitle: subagent.threadTitle ?? run.codexSession.threadTitle,
     threadUrl: subagent.threadUrl ?? run.codexSession.threadUrl,
     showSessionLink: subagent.threadUrl || run.codexSession.threadUrl ? undefined : false
   }));
+}
+
+function formatAgentProfileMeta(profile) {
+  if (!profile) return "";
+  const requestedRef = profile.requestedRef ? `ref ${profile.requestedRef}` : null;
+  return [
+    profile.label,
+    profile.id,
+    profile.role,
+    profile.source === "legacy-inline" ? "legacy profile" : "agent profile",
+    requestedRef
+  ].filter(Boolean).join(" · ");
+}
+
+function formatProfileSkills(profile, preflight) {
+  if (!profile) return [];
+  const checks = checksForProfile(profile, preflight);
+  if (checks.length) {
+    return checks.map((check) => {
+      const prefix = check.required ? "required" : "advisory";
+      return `${prefix} ${check.skill.id} · ${check.status}`;
+    });
+  }
+
+  return [
+    ...profile.requiredSkills.map((skill) => `required ${skill.id}`),
+    ...profile.advisorySkills.map((skill) => `advisory ${skill.id}`)
+  ];
+}
+
+function profileStatusMeta(profilePreflight) {
+  if (!profilePreflight) return "";
+  const warnings = profilePreflight.warnings?.length ? ` · ${profilePreflight.warnings.join(" · ")}` : "";
+  const blockers = profilePreflight.blockers?.length ? ` · ${profilePreflight.blockers.join(" · ")}` : "";
+  const degraded = profilePreflight.allowDegradedProfiles ? " · allowDegradedProfiles" : "";
+  return `skill preflight · ${profilePreflight.status}${degraded}${warnings}${blockers}`;
+}
+
+function checksForProfile(profile, preflight) {
+  if (!profile || !preflight?.checks?.length) return [];
+  return preflight.checks.filter((check) => {
+    if (check.profileId !== profile.id) return false;
+    if (check.stepId && profile.stepId && check.stepId !== profile.stepId) return false;
+    return true;
+  });
 }
 
 function formatSubagentMeta(subagent) {
@@ -1655,7 +1712,10 @@ function renderAgentCard(agent) {
       el("div", "agent-main", [
         el("span", "agent-name", agent.name),
         agent.description ? el("p", "agent-description", agent.description) : null,
-        agent.meta ? el("span", "agent-meta", agent.meta) : null
+        agent.meta ? el("span", "agent-meta", agent.meta) : null,
+        agent.detailList?.length
+          ? el("div", "agent-detail-list", agent.detailList.map((line) => el("span", "agent-detail-line", line)))
+          : null
       ]),
       el("div", "agent-actions", [
         statusChip(agent.status),

@@ -202,6 +202,21 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).not.toContain("阶段暂无 agent 明细");
 });
 
+test("preview script references agent profile and preflight workflow metadata", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("formatAgentProfileMeta");
+  expect(app).toContain("formatProfileSkills");
+  expect(app).toContain("profileStatusMeta");
+  expect(app).toContain("taskRun.agentProfile");
+  expect(app).toContain("taskRun.profilePreflight");
+  expect(app).toContain("subagent.agentProfile");
+  expect(app).toContain("subagent.profilePreflight");
+  expect(app).toContain("requiredSkills");
+  expect(app).toContain("advisorySkills");
+  expect(app).toContain("allowDegradedProfiles");
+});
+
 test("preview renders agent cards with minimal avatars and no diamond marker", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
   const styles = await readFile(join(previewDir, "styles.css"), "utf8");
@@ -472,15 +487,31 @@ test("serves backend-rendered loop directory files api", async () => {
   const contract = await service.createLoopContract({
     title: "AI 开发工具日报",
     goal: "生成 AI 开发工具中文日报",
+    agentProfiles: {
+      reporter: {
+        id: "reporter",
+        label: "Reporter",
+        role: "report-writer",
+        requiredSkills: [
+          { id: "web.run" }
+        ],
+        advisorySkills: [
+          { id: "rg" }
+        ]
+      }
+    },
     body: {
-      steps: [{ id: "write-report", kind: "agent", label: "日报 worker", prompt: "生成中文日报。" }]
+      steps: [{ id: "write-report", kind: "task", runtime: "codex", label: "日报 worker", prompt: "生成中文日报。", agentProfileRef: "reporter" }]
     },
     verification: {
       mode: "after_workflow",
       rubrics: [{ id: "daily-report", label: "中文日报", requirement: "输出中文日报。", severity: "must" }]
     }
   });
-  const { run } = await service.startCodexSessionRun(contract.id, { goal: "生成今天的中文日报" });
+  const { run } = await service.startCodexSessionRun(contract.id, {
+    goal: "生成今天的中文日报",
+    allowDegradedProfiles: true
+  });
   await service.commitMemory(contract.id, { runId: run.id, summary: "保留昨天的来源筛选规则。" });
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
   servers.push(server);
@@ -493,11 +524,24 @@ test("serves backend-rendered loop directory files api", async () => {
     expect.arrayContaining([
       expect.objectContaining({ path: "memory.md", kind: "memory", language: "markdown" }),
       expect.objectContaining({ path: "workflow.json", kind: "workflow", language: "json" }),
-      expect.objectContaining({ path: "skill/dittosloop-for-codex-loop.md", kind: "skill", language: "markdown" }),
+      expect.objectContaining({ path: "runtime/dittosloop-for-codex-loop.md", kind: "runtime", language: "markdown" }),
       expect.objectContaining({ path: "contract.json", kind: "contract", language: "json" })
     ])
   );
+  const workflowFile = files.find((file: { path: string }) => file.path === "workflow.json");
+  expect(workflowFile).toBeDefined();
+  expect(JSON.parse(workflowFile.content)).toMatchObject({
+    id: contract.id,
+    agentProfiles: {
+      reporter: {
+        id: "reporter",
+        label: "Reporter",
+        role: "report-writer"
+      }
+    }
+  });
   expect(files.find((file: { path: string }) => file.path === "memory.md").content).toContain("保留昨天的来源筛选规则。");
+  expect(files.find((file: { path: string }) => file.path === "skill/dittosloop-for-codex-loop.md")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "flow.js")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "agents.md")).toBeUndefined();
   expect(files.find((file: { path: string }) => file.path === "tool-list.md")).toBeUndefined();

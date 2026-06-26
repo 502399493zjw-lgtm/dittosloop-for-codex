@@ -200,7 +200,7 @@ export interface ArtifactRef {
 
 export interface LoopWorkspaceFile {
   path: string;
-  kind: "memory" | "contract" | "workflow" | "skill" | "rubrics" | "status" | "runs";
+  kind: "memory" | "contract" | "workflow" | "runtime" | "skill" | "rubrics" | "status" | "runs";
   language: "javascript" | "markdown" | "json";
   content: string;
   size: number;
