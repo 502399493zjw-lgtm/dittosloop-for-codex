@@ -106,6 +106,29 @@ describe("engine runtime", () => {
     });
   });
 
+  test("runFlow cache hits return output without emitting agent completion events", async () => {
+    const events: EngineEvent[] = [];
+    const executor: Executor = {
+      async run() {
+        throw new Error("executor must not run for cached steps");
+      }
+    };
+
+    const out = await runFlow(
+      (api) => api.agent("cached work", { stepId: "scan", label: "Scan" }),
+      {
+        runId: "run_cache",
+        executor,
+        completedStepOutputs: { scan: "CACHED" },
+        emit: (event) => events.push(event),
+        now: () => "2026-06-24T00:00:00.000Z"
+      }
+    );
+
+    expect(out).toEqual({ status: "completed", result: "CACHED" });
+    expect(events.map((event) => event.type)).toEqual(["run_started", "run_completed"]);
+  });
+
   test("pipeline phase runs children in order and flags pipeline on events", async () => {
     const events: EngineEvent[] = [];
     const seenPrompts: string[] = [];

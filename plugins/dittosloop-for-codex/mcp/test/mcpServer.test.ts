@@ -169,8 +169,9 @@ test("exposes formal contract and session-first workflow operations as MCP conte
     expect.objectContaining({
       data: expect.objectContaining({
         engineEvent: expect.objectContaining({
-          type: "run_started",
-          runId: "run_1"
+          type: "agent_started",
+          runId: "run_1",
+          stepId: "scan"
         })
       })
     }),

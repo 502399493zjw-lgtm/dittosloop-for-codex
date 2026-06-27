@@ -300,6 +300,7 @@ export interface WorkflowContext {
   contractSnapshot?: FormalLoopContract;
   executionGraphSnapshot?: ExecutionGraphSnapshot;
   nodeRuns?: WorkflowNodeRun[];
+  schedulerMode?: "dual_write" | "scheduler";
   status: WorkflowContextStatus;
   cursor: WorkflowCursor;
   vars: Record<string, unknown>;

@@ -22089,16 +22089,6 @@ async function runFlow(flow, deps) {
       const human2 = opts?.human === true ? true : void 0;
       const cachedOutput = opts?.stepId ? deps.completedStepOutputs?.[opts.stepId] : void 0;
       if (cachedOutput !== void 0) {
-        emit({
-          type: "agent_done",
-          label: opts?.label,
-          stepId: opts?.stepId,
-          phaseId: opts?.phaseId,
-          result: cachedOutput,
-          status: "ok",
-          pipeline: pipeline2,
-          human: human2
-        });
         return cachedOutput;
       }
       emit({ type: "agent_started", label: opts?.label, stepId: opts?.stepId, phaseId: opts?.phaseId, prompt, pipeline: pipeline2, human: human2 });
@@ -23839,7 +23829,7 @@ var LoopService = class {
       sequence: ++sequence
     });
     let currentRun = run;
-    let currentContext = workflowContext;
+    let currentContext = await this.markWorkflowContextSchedulerMode(workflowContext.id);
     while (true) {
       currentContext = await this.advanceGraphWorkflowContainers(currentContext.id, nextEngineEvent);
       const state = await this.options.store.readState();
@@ -23951,6 +23941,27 @@ var LoopService = class {
       }
       return currentRun;
     }
+  }
+  async markWorkflowContextSchedulerMode(workflowContextId) {
+    const timestamp2 = this.now();
+    let nextContext;
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      if (context.schedulerMode === "scheduler") {
+        nextContext = context;
+        return state;
+      }
+      nextContext = {
+        ...context,
+        schedulerMode: "scheduler",
+        updatedAt: timestamp2
+      };
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
+      };
+    });
+    return nextContext;
   }
   async advanceGraphWorkflowContainers(workflowContextId, nextEngineEvent) {
     const timestamp2 = this.now();
@@ -24638,12 +24649,39 @@ ${priorOutput}`;
         }
       }
       const workflowContextAfterTaskResult = targetContext ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp2, { finalize: false }) : void 0;
+      const graphTaskNodeTransition = workflowTaskNodeTransition({
+        before: targetContext,
+        after: workflowContextAfterTaskResult,
+        input: resultInput,
+        targetTaskRun
+      });
+      const graphTaskNodeTransitionEvents = graphTaskNodeTransition ? [
+        lifecycleEvent(
+          this.nextId("event"),
+          runId,
+          "note",
+          workflowNodeTransitionMessage(graphTaskNodeTransition),
+          timestamp2,
+          {
+            attemptId,
+            workflowContextId: workflowContextAfterTaskResult?.id,
+            nodeTransition: graphTaskNodeTransition
+          }
+        )
+      ] : [];
+      const shouldSynthesizeWorkflowEngineEvents = !targetContext?.executionGraphSnapshot;
       const hasRemainingWorkflowSteps = Boolean(
         targetContract && workflowContextAfterTaskResult && hasRemainingExecutableSteps(targetContract, workflowContextAfterTaskResult)
       );
       const hasPendingWorkflowSessions = Boolean(workflowContextAfterTaskResult?.pendingSessionIds.length);
+      const shouldPreserveLegacyMigratedCompletion = Boolean(
+        targetContract && targetContext?.executionGraphSnapshot && verificationInputKindMarker(targetContract.verification) === void 0 && hasDefaultLegacyMigrationShape(targetContract.verification)
+      );
+      const shouldContinueGraphWorkflow = Boolean(
+        targetContext?.executionGraphSnapshot && !shouldPreserveLegacyMigratedCompletion && resultInput.status === "passed" && isWorkflowTaskResult && workflowContextAfterTaskResult && !hasPendingWorkflowSessions
+      );
       const shouldContinueThisWorkflow = Boolean(
-        resultInput.status === "passed" && isWorkflowTaskResult && hasRemainingWorkflowSteps && !hasPendingWorkflowSessions
+        resultInput.status === "passed" && isWorkflowTaskResult && !hasPendingWorkflowSessions && (hasRemainingWorkflowSteps || shouldContinueGraphWorkflow)
       );
       const shouldWaitForPendingWorkflowSessions = Boolean(
         resultInput.status === "passed" && isWorkflowTaskResult && hasRemainingWorkflowSteps && hasPendingWorkflowSessions
@@ -24659,7 +24697,7 @@ ${priorOutput}`;
         )
       };
       if ((shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions) && workflowContextAfterTaskResult) {
-        const workflowProgressEvents = shouldWaitForPendingWorkflowSessions ? workflowTaskResultEngineEvents({
+        const workflowProgressEvents = shouldWaitForPendingWorkflowSessions && shouldSynthesizeWorkflowEngineEvents ? workflowTaskResultEngineEvents({
           events: state.events,
           run,
           runId,
@@ -24690,6 +24728,7 @@ ${priorOutput}`;
           ),
           events: [
             ...state.events,
+            ...graphTaskNodeTransitionEvents,
             ...workflowProgressEvents.map(
               (engineEvent) => lifecycleEvent(
                 this.nextId("event"),
@@ -24754,6 +24793,7 @@ ${priorOutput}`;
           ),
           events: [
             ...state.events,
+            ...graphTaskNodeTransitionEvents,
             lifecycleEvent(
               this.nextId("event"),
               runId,
@@ -24822,7 +24862,7 @@ ${priorOutput}`;
         status: "open",
         createdAt: timestamp2
       } : void 0;
-      const workflowCompletionEvents = workflowCompletionEngineEvents({
+      const workflowCompletionEvents = shouldSynthesizeWorkflowEngineEvents ? workflowCompletionEngineEvents({
         events: state.events,
         run,
         runId,
@@ -24830,7 +24870,7 @@ ${priorOutput}`;
         timestamp: timestamp2,
         input: resultInput,
         verification
-      });
+      }) : [];
       const workflowContexts = targetContext ? state.workflowContexts.map(
         (context) => context.id === targetContext.id ? completeWorkflowContextFromSessionResult(context, resultInput, timestamp2, { finalize: true }) : context
       ) : state.workflowContexts;
@@ -24843,6 +24883,7 @@ ${priorOutput}`;
         humanRequests: humanRequest ? [...state.humanRequests, humanRequest] : state.humanRequests,
         events: [
           ...state.events,
+          ...graphTaskNodeTransitionEvents,
           ...workflowCompletionEvents.map(
             (engineEvent) => lifecycleEvent(
               this.nextId("event"),
@@ -26737,6 +26778,36 @@ function normalizeWorkflowSessionResultInput(input, taskRun) {
 function hasWorkflowTaskLocator(input) {
   return Boolean(input.taskRunId || input.sessionId || input.stepId);
 }
+function workflowTaskNodeTransition(input) {
+  if (!input.before?.executionGraphSnapshot || !input.before.nodeRuns || !input.after?.nodeRuns) {
+    return void 0;
+  }
+  const stepId = input.input.stepId ?? input.targetTaskRun?.stepId;
+  if (!stepId) {
+    return void 0;
+  }
+  const nodeId = findNodeIdForStep(input.before.executionGraphSnapshot, stepId);
+  if (!nodeId) {
+    return void 0;
+  }
+  const previousNodeRun = input.before.nodeRuns.find((nodeRun) => nodeRun.nodeId === nodeId);
+  const nextNodeRun = input.after.nodeRuns.find((nodeRun) => nodeRun.nodeId === nodeId);
+  if (!previousNodeRun || !nextNodeRun || previousNodeRun.status === nextNodeRun.status) {
+    return void 0;
+  }
+  return {
+    nodeId,
+    nodeRunId: nextNodeRun.nodeRunId,
+    fromStatus: previousNodeRun.status,
+    toStatus: nextNodeRun.status,
+    stepId,
+    ...nextNodeRun.taskRunId ?? input.targetTaskRun?.id ?? input.input.taskRunId ? { taskRunId: nextNodeRun.taskRunId ?? input.targetTaskRun?.id ?? input.input.taskRunId } : {},
+    ...nextNodeRun.sessionId ?? input.input.sessionId ?? input.targetTaskRun?.sessionId ? { sessionId: nextNodeRun.sessionId ?? input.input.sessionId ?? input.targetTaskRun?.sessionId } : {}
+  };
+}
+function workflowNodeTransitionMessage(transition) {
+  return `Workflow node ${transition.nodeId} transitioned from ${transition.fromStatus} to ${transition.toStatus}`;
+}
 function matchesWorkflowTaskRun(taskRun, input) {
   if (!hasWorkflowTaskLocator(input)) return false;
   if (input.taskRunId && taskRun.id !== input.taskRunId) return false;
@@ -28465,7 +28536,7 @@ function buildGraphWorkflowView(detail, context, graph, nodeRuns) {
     nodes,
     edges: graph.edges,
     scheduler: {
-      mode: "dual_write",
+      mode: context.schedulerMode ?? "dual_write",
       runnableNodeIds: []
     },
     humanRequests: humanRequestsForContext(detail, context),

@@ -36,16 +36,6 @@ export async function runFlow<T>(
       const human = opts?.human === true ? true : undefined;
       const cachedOutput = opts?.stepId ? deps.completedStepOutputs?.[opts.stepId] : undefined;
       if (cachedOutput !== undefined) {
-        emit({
-          type: "agent_done",
-          label: opts?.label,
-          stepId: opts?.stepId,
-          phaseId: opts?.phaseId,
-          result: cachedOutput,
-          status: "ok",
-          pipeline,
-          human
-        });
         return cachedOutput;
       }
 

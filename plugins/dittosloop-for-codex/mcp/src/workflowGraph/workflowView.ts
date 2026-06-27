@@ -61,7 +61,7 @@ function buildGraphWorkflowView(
     nodes,
     edges: graph.edges,
     scheduler: {
-      mode: "dual_write",
+      mode: context.schedulerMode ?? "dual_write",
       runnableNodeIds: []
     },
     humanRequests: humanRequestsForContext(detail, context),

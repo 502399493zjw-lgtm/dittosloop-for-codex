@@ -58,6 +58,7 @@ import { deleteLoopWorkspaceDirectory, syncLoopWorkspaceDirectory } from "./work
 import { compileExecutionGraph } from "./workflowGraph/compileGraph.js";
 import {
   createInitialNodeRuns,
+  findNodeIdForStep,
   updateNodeRunForTaskResult,
   updateNodeRunForTaskRunning,
   updateNodeRunForTaskSession,
@@ -627,7 +628,7 @@ export class LoopService {
     } as TEvent);
 
     let currentRun = run;
-    let currentContext = workflowContext;
+    let currentContext = await this.markWorkflowContextSchedulerMode(workflowContext.id);
 
     while (true) {
       currentContext = await this.advanceGraphWorkflowContainers(currentContext.id, nextEngineEvent);
@@ -752,6 +753,32 @@ export class LoopService {
 
       return currentRun;
     }
+  }
+
+  private async markWorkflowContextSchedulerMode(workflowContextId: string): Promise<WorkflowContext> {
+    const timestamp = this.now();
+    let nextContext: WorkflowContext | undefined;
+
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      if (context.schedulerMode === "scheduler") {
+        nextContext = context;
+        return state;
+      }
+
+      nextContext = {
+        ...context,
+        schedulerMode: "scheduler",
+        updatedAt: timestamp
+      };
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
+      };
+    });
+
+    return nextContext!;
   }
 
   private async advanceGraphWorkflowContainers(
@@ -1573,17 +1600,54 @@ export class LoopService {
       const workflowContextAfterTaskResult = targetContext
         ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp, { finalize: false })
         : undefined;
+      const graphTaskNodeTransition = workflowTaskNodeTransition({
+        before: targetContext,
+        after: workflowContextAfterTaskResult,
+        input: resultInput,
+        targetTaskRun
+      });
+      const graphTaskNodeTransitionEvents = graphTaskNodeTransition
+        ? [
+            lifecycleEvent(
+              this.nextId("event"),
+              runId,
+              "note",
+              workflowNodeTransitionMessage(graphTaskNodeTransition),
+              timestamp,
+              {
+                attemptId,
+                workflowContextId: workflowContextAfterTaskResult?.id,
+                nodeTransition: graphTaskNodeTransition
+              }
+            )
+          ]
+        : [];
+      const shouldSynthesizeWorkflowEngineEvents = !targetContext?.executionGraphSnapshot;
       const hasRemainingWorkflowSteps = Boolean(
         targetContract &&
         workflowContextAfterTaskResult &&
         hasRemainingExecutableSteps(targetContract, workflowContextAfterTaskResult)
       );
       const hasPendingWorkflowSessions = Boolean(workflowContextAfterTaskResult?.pendingSessionIds.length);
+      const shouldPreserveLegacyMigratedCompletion = Boolean(
+        targetContract &&
+        targetContext?.executionGraphSnapshot &&
+        verificationInputKindMarker(targetContract.verification) === undefined &&
+        hasDefaultLegacyMigrationShape(targetContract.verification)
+      );
+      const shouldContinueGraphWorkflow = Boolean(
+        targetContext?.executionGraphSnapshot &&
+        !shouldPreserveLegacyMigratedCompletion &&
+        resultInput.status === "passed" &&
+        isWorkflowTaskResult &&
+        workflowContextAfterTaskResult &&
+        !hasPendingWorkflowSessions
+      );
       const shouldContinueThisWorkflow = Boolean(
         resultInput.status === "passed" &&
         isWorkflowTaskResult &&
-        hasRemainingWorkflowSteps &&
-        !hasPendingWorkflowSessions
+        !hasPendingWorkflowSessions &&
+        (hasRemainingWorkflowSteps || shouldContinueGraphWorkflow)
       );
       const shouldWaitForPendingWorkflowSessions = Boolean(
         resultInput.status === "passed" &&
@@ -1614,7 +1678,7 @@ export class LoopService {
       };
 
       if ((shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions) && workflowContextAfterTaskResult) {
-        const workflowProgressEvents = shouldWaitForPendingWorkflowSessions
+        const workflowProgressEvents = shouldWaitForPendingWorkflowSessions && shouldSynthesizeWorkflowEngineEvents
           ? workflowTaskResultEngineEvents({
               events: state.events,
               run,
@@ -1652,6 +1716,7 @@ export class LoopService {
           ),
           events: [
             ...state.events,
+            ...graphTaskNodeTransitionEvents,
             ...workflowProgressEvents.map((engineEvent) =>
               lifecycleEvent(
                 this.nextId("event"),
@@ -1737,6 +1802,7 @@ export class LoopService {
           ),
           events: [
             ...state.events,
+            ...graphTaskNodeTransitionEvents,
             lifecycleEvent(
               this.nextId("event"),
               runId,
@@ -1815,15 +1881,17 @@ export class LoopService {
             createdAt: timestamp
           }
         : undefined;
-      const workflowCompletionEvents = workflowCompletionEngineEvents({
-        events: state.events,
-        run,
-        runId,
-        attemptId,
-        timestamp,
-        input: resultInput,
-        verification
-      });
+      const workflowCompletionEvents = shouldSynthesizeWorkflowEngineEvents
+        ? workflowCompletionEngineEvents({
+            events: state.events,
+            run,
+            runId,
+            attemptId,
+            timestamp,
+            input: resultInput,
+            verification
+          })
+        : [];
       const workflowContexts = targetContext
         ? state.workflowContexts.map((context) =>
             context.id === targetContext.id
@@ -1841,6 +1909,7 @@ export class LoopService {
         humanRequests: humanRequest ? [...state.humanRequests, humanRequest] : state.humanRequests,
         events: [
           ...state.events,
+          ...graphTaskNodeTransitionEvents,
           ...workflowCompletionEvents.map((engineEvent) =>
             lifecycleEvent(
               this.nextId("event"),
@@ -4292,6 +4361,61 @@ function normalizeWorkflowSessionResultInput(
 
 function hasWorkflowTaskLocator(input: RecordSessionResultInput): boolean {
   return Boolean(input.taskRunId || input.sessionId || input.stepId);
+}
+
+interface WorkflowNodeTransitionAudit {
+  nodeId: string;
+  nodeRunId: string;
+  fromStatus: string;
+  toStatus: string;
+  stepId?: string;
+  taskRunId?: string;
+  sessionId?: string;
+}
+
+function workflowTaskNodeTransition(input: {
+  before?: WorkflowContext;
+  after?: WorkflowContext;
+  input: RecordSessionResultInput;
+  targetTaskRun?: WorkflowTaskRun;
+}): WorkflowNodeTransitionAudit | undefined {
+  if (!input.before?.executionGraphSnapshot || !input.before.nodeRuns || !input.after?.nodeRuns) {
+    return undefined;
+  }
+
+  const stepId = input.input.stepId ?? input.targetTaskRun?.stepId;
+  if (!stepId) {
+    return undefined;
+  }
+
+  const nodeId = findNodeIdForStep(input.before.executionGraphSnapshot, stepId);
+  if (!nodeId) {
+    return undefined;
+  }
+
+  const previousNodeRun = input.before.nodeRuns.find((nodeRun) => nodeRun.nodeId === nodeId);
+  const nextNodeRun = input.after.nodeRuns.find((nodeRun) => nodeRun.nodeId === nodeId);
+  if (!previousNodeRun || !nextNodeRun || previousNodeRun.status === nextNodeRun.status) {
+    return undefined;
+  }
+
+  return {
+    nodeId,
+    nodeRunId: nextNodeRun.nodeRunId,
+    fromStatus: previousNodeRun.status,
+    toStatus: nextNodeRun.status,
+    stepId,
+    ...(nextNodeRun.taskRunId ?? input.targetTaskRun?.id ?? input.input.taskRunId
+      ? { taskRunId: nextNodeRun.taskRunId ?? input.targetTaskRun?.id ?? input.input.taskRunId }
+      : {}),
+    ...(nextNodeRun.sessionId ?? input.input.sessionId ?? input.targetTaskRun?.sessionId
+      ? { sessionId: nextNodeRun.sessionId ?? input.input.sessionId ?? input.targetTaskRun?.sessionId }
+      : {})
+  };
+}
+
+function workflowNodeTransitionMessage(transition: WorkflowNodeTransitionAudit): string {
+  return `Workflow node ${transition.nodeId} transitioned from ${transition.fromStatus} to ${transition.toStatus}`;
 }
 
 function matchesWorkflowTaskRun(taskRun: WorkflowTaskRun, input: RecordSessionResultInput): boolean {

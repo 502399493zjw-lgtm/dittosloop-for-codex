@@ -2444,9 +2444,28 @@ test("executes a visible session workflow attempt through the same attempt and s
     result: "Daily report body"
   });
   const replayDetail = await service.getRunDetail(launch.run.id);
+  const runWorkerTransitions = replayDetail.events
+    .map((event) => event.data?.nodeTransition)
+    .filter((transition): transition is { nodeId: string; fromStatus: string; toStatus: string } =>
+      Boolean(transition) && typeof transition === "object" && "nodeId" in transition
+    )
+    .filter((transition) => transition.nodeId === "root/task:run-worker" && transition.toStatus === "completed");
   expect(replay.status).toBe("completed");
   expect(replayDetail.verificationResults).toHaveLength(1);
-  expect(replayDetail.events.filter((event) => event.kind === "verification_recorded")).toHaveLength(1);
+  expect(replayDetail.events.filter((event) => event.kind === "verification_recorded")).toHaveLength(0);
+  expect(runWorkerTransitions).toEqual([
+    expect.objectContaining({
+      nodeId: "root/task:run-worker",
+      fromStatus: "waiting_for_session",
+      toStatus: "completed"
+    })
+  ]);
+  expect(replayDetail.workflowContexts[0]).toMatchObject({
+    schedulerMode: "scheduler",
+    nodeRuns: expect.arrayContaining([
+      expect.objectContaining({ nodeId: "root/task:run-worker", status: "completed" })
+    ])
+  });
 });
 
 test("v2 worker session result cannot complete a run before validator results exist", async () => {
@@ -2809,7 +2828,7 @@ test("records a targeted session result against the specified workflow context, 
   expect(run.status).toBe("completed");
   await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
     attempts: [
-      { id: launch.attempt.id, status: "completed", summary: "Worker result passed verification" },
+      { id: launch.attempt.id, status: "completed", summary: "No verifier configured; workflow completed." },
       { id: unrelatedAttempt.id, status: "running", summary: "Manual follow-up" }
     ],
     verificationResults: [{ attemptId: launch.attempt.id, status: "passed" }]
@@ -2869,7 +2888,7 @@ test("uses the workflow context attempt when precise writeback omits attemptId",
   expect(run.status).toBe("completed");
   await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
     attempts: [
-      { id: launch.attempt.id, status: "completed", summary: "Worker result passed verification" },
+      { id: launch.attempt.id, status: "completed", summary: "No verifier configured; workflow completed." },
       { id: laterAttempt.id, status: "running", summary: "Later manual attempt" }
     ],
     verificationResults: [{ attemptId: launch.attempt.id, status: "passed" }]
@@ -2941,9 +2960,22 @@ test("duplicate workflow task writeback does not duplicate node-run completion",
   const afterSecond = await service.getRunDetail(launch.run.id);
   const secondContext = afterSecond.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
   const secondCollectRun = secondContext?.nodeRuns?.find((nodeRun) => nodeRun.nodeId === "root/task:collect");
+  const collectCompletionAudits = afterSecond.events
+    .map((event) => event.data?.nodeTransition)
+    .filter((transition): transition is { nodeId: string; fromStatus: string; toStatus: string } =>
+      Boolean(transition) && typeof transition === "object" && "nodeId" in transition
+    )
+    .filter((transition) => transition.nodeId === "root/task:collect" && transition.toStatus === "completed");
 
   expect(secondCollectRun?.idempotencyKeys.filter((key) => key === "collect:done")).toHaveLength(1);
   expect(secondCollectRun?.completedAt).toBe(firstCollectRun?.completedAt);
+  expect(collectCompletionAudits).toEqual([
+    expect.objectContaining({
+      nodeId: "root/task:collect",
+      fromStatus: "waiting_for_session",
+      toStatus: "completed"
+    })
+  ]);
 });
 
 test("scheduler resumes a sequential workflow without replaying completed nodes", async () => {
@@ -3169,7 +3201,7 @@ test("resumes the workflow after a targeted Codex task result without relaunchin
       }
     ],
     runs: [{ id: launch.run.id, status: "completed" }],
-    attempts: [{ id: launch.attempt.id, status: "completed", summary: "Report passed." }]
+    attempts: [{ id: launch.attempt.id, status: "completed", summary: "No verifier configured; workflow completed." }]
   });
 });
 
@@ -3539,15 +3571,35 @@ test("waits for existing parallel Codex task sessions before resuming fan-in", a
       }
     ],
     runs: [{ id: launch.run.id, status: "completed" }],
-    attempts: [{ id: launch.attempt.id, status: "completed", summary: "Both branches complete." }]
+    attempts: [{ id: launch.attempt.id, status: "completed", summary: "No verifier configured; workflow completed." }]
   });
   const detail = await service.getRunDetail(launch.run.id);
   const engineEventTypes = detail.events
     .map((event) => event.data?.engineEvent)
     .filter((event): event is { type: string } => Boolean(event) && typeof event === "object" && "type" in event)
     .map((event) => event.type);
-  expect(engineEventTypes.filter((type) => type === "agent_done")).toHaveLength(2);
+  const taskCompletionAudits = detail.events
+    .map((event) => event.data?.nodeTransition)
+    .filter((transition): transition is { nodeId: string; fromStatus: string; toStatus: string } =>
+      Boolean(transition) && typeof transition === "object" && "nodeId" in transition
+    )
+    .filter((transition) => transition.toStatus === "completed");
+  expect(engineEventTypes.filter((type) => type === "agent_done")).toHaveLength(0);
   expect(engineEventTypes).toContain("parallel_completed");
+  expect(taskCompletionAudits).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: "root/parallel:parallel-collect/task:left",
+        fromStatus: "waiting_for_session",
+        toStatus: "completed"
+      }),
+      expect.objectContaining({
+        nodeId: "root/parallel:parallel-collect/task:right",
+        fromStatus: "waiting_for_session",
+        toStatus: "completed"
+      })
+    ])
+  );
 });
 
 test("rejects conflicting workflow task result locators without mutating context", async () => {

@@ -1165,6 +1165,37 @@ test("serves workflow view from durable graph state in run detail api", async ()
   });
 });
 
+test("serves scheduler mode after durable graph execution in run detail api", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const counters = new Map<string, number>();
+  const service = await createService({
+    sessionBridge: bridge,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    }
+  });
+  const loop = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/${launch.run.id}`);
+  const detail = await response.json();
+
+  expect(requests.map((request) => request.stepId)).toEqual(["run-worker"]);
+  expect(response.status).toBe(200);
+  expect(detail.workflowView).toMatchObject({
+    runId: launch.run.id,
+    scheduler: { mode: "scheduler", runnableNodeIds: [] },
+    nodes: expect.arrayContaining([
+      expect.objectContaining({ sourceStepId: "run-worker", kind: "task", status: "waiting_for_session" })
+    ])
+  });
+});
+
 test("serves workflow runtime detail for suspended tasks and promoted revisions", async () => {
   const { bridge, requests } = createPendingSessionBridge();
   const counters = new Map<string, number>();
@@ -1258,8 +1289,13 @@ test("serves workflow runtime detail for suspended tasks and promoted revisions"
         reason: "Add review step."
       }
     ],
+    workflowView: {
+      scheduler: { mode: "scheduler" },
+      nodes: expect.arrayContaining([
+        expect.objectContaining({ sourceStepId: "collect", status: "waiting_for_session" })
+      ])
+    },
     engineEvents: [
-      expect.objectContaining({ type: "run_started" }),
       expect.objectContaining({ type: "agent_started", stepId: "collect" })
     ],
     timeline: [
