@@ -3,7 +3,11 @@ import { describe, expect, test } from "vitest";
 import { compileContract } from "../src/contract/compileContract.js";
 import { compileExecutionGraph } from "../src/workflowGraph/compileGraph.js";
 import { createInitialNodeRuns } from "../src/workflowGraph/nodeRuns.js";
-import { buildPipelineInputSnapshot, deriveRunnableNodeIds } from "../src/workflowGraph/scheduler.js";
+import {
+  advanceContainerNodeRuns,
+  buildPipelineInputSnapshot,
+  deriveRunnableNodeIds
+} from "../src/workflowGraph/scheduler.js";
 import { buildWorkflowView } from "../src/workflowGraph/workflowView.js";
 import type { RunDetail } from "../src/types.js";
 
@@ -247,6 +251,28 @@ describe("workflow graph scheduler", () => {
       upstream: [{ nodeId: "root/phase:produce/task:draft", sourceStepId: "draft", output: "DRAFT-OUTPUT" }]
     });
   });
+
+  test("parallel children fan out before the fan-in task becomes runnable", () => {
+    const { graph, nodeRuns } = makeParallelFanInGraphState();
+
+    expect(deriveRunnableNodeIds(graph, nodeRuns)).toEqual([
+      "root/parallel:parallel-collect/task:left",
+      "root/parallel:parallel-collect/task:right"
+    ]);
+
+    const afterChildren = advanceContainerNodeRuns(
+      graph,
+      nodeRuns.map((nodeRun) =>
+        nodeRun.nodeId === "root/parallel:parallel-collect/task:left" ||
+        nodeRun.nodeId === "root/parallel:parallel-collect/task:right"
+          ? { ...nodeRun, status: "completed" as const }
+          : nodeRun
+      ),
+      fixedTime
+    );
+
+    expect(deriveRunnableNodeIds(graph, afterChildren)).toEqual(["root/task:join"]);
+  });
 });
 
 function makeSequentialGraphState(stepIds: string[]) {
@@ -317,4 +343,39 @@ function makePipelineGraphState(input: { draftOutput: string }) {
       : nodeRun
   );
   return { graph, nodeRuns };
+}
+
+function makeParallelFanInGraphState() {
+  const contract = compileContract(
+    {
+      id: "loop_scheduler_parallel",
+      title: "Scheduler parallel",
+      goal: "Fan out and fan in parallel branches",
+      body: {
+        steps: [
+          {
+            id: "parallel-collect",
+            kind: "parallel",
+            label: "Parallel collect",
+            children: [
+              { id: "left", kind: "task", runtime: "codex", label: "Left", prompt: "Left" },
+              { id: "right", kind: "task", runtime: "codex", label: "Right", prompt: "Right" }
+            ]
+          },
+          { id: "join", kind: "task", runtime: "codex", label: "Join", prompt: "Join" }
+        ]
+      },
+      verification: { mode: "after_workflow", rubrics: [] }
+    },
+    fixedTime
+  );
+  const graph = compileExecutionGraph({
+    contract,
+    runId: "run_1",
+    attemptId: "attempt_1",
+    workflowContextId: "workflow_1",
+    compiledAt: fixedTime,
+    snapshotId: "graph_1"
+  });
+  return { graph, nodeRuns: createInitialNodeRuns(graph, fixedTime) };
 }

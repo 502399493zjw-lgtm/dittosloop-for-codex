@@ -649,84 +649,100 @@ export class LoopService {
 
       const snapshot = currentContext.executionGraphSnapshot;
       const runnableNodeIds = deriveRunnableNodeIds(snapshot, currentContext.nodeRuns);
-      const runnableTaskNode = runnableNodeIds
+      const runnableTaskNodes = runnableNodeIds
         .map((nodeId) => snapshot.nodes.find((node) => node.nodeId === nodeId))
-        .find((node): node is ExecutionGraphNode => {
+        .filter((node): node is ExecutionGraphNode => {
           return node !== undefined && (node.kind === "task" || node.kind === "human");
         });
-      if (runnableTaskNode) {
+      if (runnableTaskNodes.length > 0) {
         const bridge = this.options.sessionBridge;
         if (!bridge) {
           throw new Error("No workflow executor or Codex session bridge is configured.");
         }
 
-        currentContext = await this.startGraphWorkflowContainersForNode(
-          currentContext.id,
-          runnableTaskNode.nodeId,
-          nextEngineEvent
-        );
-        if (!currentContext.nodeRuns) {
-          return currentRun;
-        }
-        const inputSnapshot = buildPipelineInputSnapshot(snapshot, currentContext.nodeRuns, runnableTaskNode.nodeId);
-        if (inputSnapshot) {
-          currentContext = await this.recordWorkflowNodeInputSnapshot(currentContext.id, runnableTaskNode.nodeId, inputSnapshot);
-        }
-
-        const request = await this.buildGraphAgentRequest(currentRun, attempt, currentContext, contract, runnableTaskNode);
-        await this.recordEngineEvents(run.id, [
-          nextEngineEvent<Extract<EngineEvent, { type: "agent_started" }>>({
-            type: "agent_started",
-            label: request.label,
-            prompt: request.prompt,
-            stepId: request.stepId,
-            nodeId: runnableTaskNode.nodeId,
-            phaseId: request.phaseId,
-            pipeline: request.pipeline,
-            human: request.human
-          })
-        ]);
-
-        try {
-          const result = await this.runCodexSessionStep(bridge, currentRun, request, {
-            attemptId: attempt.id,
-            workflowContextId: currentContext.id
-          });
-          const session = result.data?.session;
-          const agentDoneEvent = nextEngineEvent<Extract<EngineEvent, { type: "agent_done" }>>({
-            type: "agent_done",
-            label: request.label,
-            result: result.text,
-            stepId: request.stepId,
-            nodeId: runnableTaskNode.nodeId,
-            phaseId: request.phaseId,
-            pipeline: request.pipeline,
-            human: request.human,
-            session
-          });
-          await this.recordEngineEvents(run.id, [agentDoneEvent]);
-          await this.recordCompletedCodexSessions(run.id, [agentDoneEvent]);
-          continue;
-        } catch (error) {
-          if (isCodexSessionPendingError(error)) {
-            return this.markRunWaitingForCodexSession(run.id, error.session);
+        let sawPendingSession = false;
+        for (const runnableTaskNode of runnableTaskNodes) {
+          currentContext = await this.startGraphWorkflowContainersForNode(
+            currentContext.id,
+            runnableTaskNode.nodeId,
+            nextEngineEvent
+          );
+          if (!currentContext.nodeRuns) {
+            return currentRun;
+          }
+          const inputSnapshot = buildPipelineInputSnapshot(snapshot, currentContext.nodeRuns, runnableTaskNode.nodeId);
+          if (inputSnapshot) {
+            currentContext = await this.recordWorkflowNodeInputSnapshot(currentContext.id, runnableTaskNode.nodeId, inputSnapshot);
           }
 
-          const message = error instanceof Error ? error.message : String(error);
+          const request = await this.buildGraphAgentRequest(currentRun, attempt, currentContext, contract, runnableTaskNode);
           await this.recordEngineEvents(run.id, [
-            nextEngineEvent<Extract<EngineEvent, { type: "agent_failed" }>>({
-              type: "agent_failed",
+            nextEngineEvent<Extract<EngineEvent, { type: "agent_started" }>>({
+              type: "agent_started",
               label: request.label,
+              prompt: request.prompt,
               stepId: request.stepId,
+              nodeId: runnableTaskNode.nodeId,
               phaseId: request.phaseId,
-              error: message
+              pipeline: request.pipeline,
+              human: request.human
             })
           ]);
-          await this.failWorkflowContext(currentContext.id, message);
-          await this.completeAttempt(attempt.id, { status: "failed", summary: message });
-          await this.completeRun(run.id, { status: "failed" });
-          throw error;
+
+          try {
+            const result = await this.runCodexSessionStep(bridge, currentRun, request, {
+              attemptId: attempt.id,
+              workflowContextId: currentContext.id
+            });
+            const session = result.data?.session;
+            const agentDoneEvent = nextEngineEvent<Extract<EngineEvent, { type: "agent_done" }>>({
+              type: "agent_done",
+              label: request.label,
+              result: result.text,
+              stepId: request.stepId,
+              nodeId: runnableTaskNode.nodeId,
+              phaseId: request.phaseId,
+              pipeline: request.pipeline,
+              human: request.human,
+              session
+            });
+            await this.recordEngineEvents(run.id, [agentDoneEvent]);
+            await this.recordCompletedCodexSessions(run.id, [agentDoneEvent]);
+          } catch (error) {
+            if (isCodexSessionPendingError(error)) {
+              currentRun = await this.markRunWaitingForCodexSession(run.id, error.session);
+              sawPendingSession = true;
+              const pendingState = await this.options.store.readState();
+              currentContext = requireWorkflowContext(pendingState, currentContext.id);
+              continue;
+            }
+
+            const message = error instanceof Error ? error.message : String(error);
+            await this.recordEngineEvents(run.id, [
+              nextEngineEvent<Extract<EngineEvent, { type: "agent_failed" }>>({
+                type: "agent_failed",
+                label: request.label,
+                stepId: request.stepId,
+                phaseId: request.phaseId,
+                error: message
+              })
+            ]);
+            await this.failWorkflowContext(currentContext.id, message);
+            await this.completeAttempt(attempt.id, { status: "failed", summary: message });
+            await this.completeRun(run.id, { status: "failed" });
+            throw error;
+          }
+
+          const taskState = await this.options.store.readState();
+          currentRun = requireRun(taskState, run.id);
+          currentContext = requireWorkflowContext(taskState, currentContext.id);
         }
+
+        if (sawPendingSession || hasOpenWorkflowSessions(currentContext)) {
+          return currentRun;
+        }
+
+        continue;
       }
 
       const runsByNodeId = new Map(currentContext.nodeRuns.map((nodeRun) => [nodeRun.nodeId, nodeRun]));
@@ -3562,7 +3578,7 @@ function hasOpenWorkflowSessions(context: WorkflowContext): boolean {
 }
 
 function canUseGraphScheduler(snapshot: ExecutionGraphSnapshot): boolean {
-  return !snapshot.nodes.some((node) => node.kind === "parallel");
+  return snapshot.compilerVersion === 1;
 }
 
 function containerTransitionEngineEvents(
