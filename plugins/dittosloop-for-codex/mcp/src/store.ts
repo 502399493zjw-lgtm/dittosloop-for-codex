@@ -85,7 +85,11 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
     loopStates: value?.loopStates ?? [],
     formalContracts: value?.formalContracts ?? [],
     workflowRevisions: value?.workflowRevisions ?? [],
-    workflowContexts: value?.workflowContexts ?? [],
+    workflowContexts: (value?.workflowContexts ?? []).map((context) => ({
+      ...context,
+      executionGraphSnapshot: context.executionGraphSnapshot,
+      nodeRuns: context.nodeRuns
+    })),
     runs: value?.runs ?? [],
     attempts: value?.attempts ?? [],
     events: value?.events ?? [],

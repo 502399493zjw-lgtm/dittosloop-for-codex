@@ -9,6 +9,7 @@ export type IdPrefix =
   | "artifact"
   | "revision"
   | "workflow"
+  | "graph"
   | "task";
 
 export function createId(prefix: IdPrefix): string {

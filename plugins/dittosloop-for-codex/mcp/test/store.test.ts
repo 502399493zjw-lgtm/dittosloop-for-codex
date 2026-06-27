@@ -145,6 +145,47 @@ test("preserves workflow contexts when normalizing v2 state", async () => {
   });
 });
 
+test("normalizes workflow contexts without durable graph fields", async () => {
+  const dir = await createTempDir();
+  await writeFile(
+    join(dir, "state.json"),
+    `${JSON.stringify({
+      version: 2,
+      workflowContexts: [
+        {
+          id: "workflow_1",
+          runId: "run_1",
+          loopId: "loop_1",
+          attemptId: "attempt_1",
+          status: "ready",
+          cursor: { state: "created" },
+          vars: {},
+          steps: {},
+          taskRuns: [],
+          pendingSessionIds: [],
+          idempotencyKeys: [],
+          createdAt: "2026-06-27T00:00:00.000Z",
+          updatedAt: "2026-06-27T00:00:00.000Z"
+        }
+      ]
+    })}\n`,
+    "utf8"
+  );
+
+  const store = new LoopStore(dir);
+
+  await expect(store.readState()).resolves.toMatchObject({
+    version: 2,
+    workflowContexts: [
+      {
+        id: "workflow_1",
+        executionGraphSnapshot: undefined,
+        nodeRuns: undefined
+      }
+    ]
+  });
+});
+
 test("derives canonical loop operational state while normalizing existing state", async () => {
   const dir = await createTempDir();
   await writeFile(

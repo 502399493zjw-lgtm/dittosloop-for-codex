@@ -54,6 +54,8 @@ import type {
 import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
 import { deleteLoopWorkspaceDirectory, syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
+import { compileExecutionGraph } from "./workflowGraph/compileGraph.js";
+import { createInitialNodeRuns } from "./workflowGraph/nodeRuns.js";
 
 export interface LoopServiceOptions {
   store: LoopStore;
@@ -834,6 +836,7 @@ export class LoopService {
       const runId = this.nextId("run");
       const attemptId = this.nextId("attempt");
       const workflowContextId = this.nextId("workflow");
+      const graphSnapshotId = launchContract ? this.nextId("graph") : undefined;
       const memoryWindow = loopMemoryWindow(state, loopId);
       const prompt = buildCodexSessionPrompt(loop, goal, launchContract, {
         runId,
@@ -873,6 +876,7 @@ export class LoopService {
         run,
         attempt,
         contract: launchContract,
+        graphSnapshotId,
         timestamp
       });
 
@@ -2474,9 +2478,15 @@ export class LoopService {
       const existingContext = state.workflowContexts.find(
         (context) => context.runId === runId && context.attemptId === attemptId
       );
+      const existingContextWithGraph = existingContext
+        ? ensureWorkflowContextGraphState(existingContext, contract, {
+            graphSnapshotId: existingContext.executionGraphSnapshot ? existingContext.executionGraphSnapshot.snapshotId : this.nextId("graph"),
+            timestamp
+          })
+        : undefined;
       preparedContext = existingContext
         ? {
-            ...existingContext,
+            ...existingContextWithGraph!,
             status: "running",
             cursor: {
               ...existingContext.cursor,
@@ -2491,6 +2501,7 @@ export class LoopService {
               run,
               attempt,
               contract,
+              graphSnapshotId: this.nextId("graph"),
               timestamp
             }),
             status: "running",
@@ -2883,9 +2894,10 @@ function createWorkflowContext(input: {
   run: LoopRun;
   attempt: RunAttempt;
   contract?: FormalLoopContract;
+  graphSnapshotId?: string;
   timestamp: string;
 }): WorkflowContext {
-  return {
+  const baseContext: WorkflowContext = {
     id: input.id,
     runId: input.run.id,
     loopId: input.run.loopId,
@@ -2902,6 +2914,44 @@ function createWorkflowContext(input: {
     idempotencyKeys: [],
     createdAt: input.timestamp,
     updatedAt: input.timestamp
+  };
+
+  return input.contract && input.graphSnapshotId
+    ? ensureWorkflowContextGraphState(baseContext, input.contract, {
+        graphSnapshotId: input.graphSnapshotId,
+        timestamp: input.timestamp
+      })
+    : baseContext;
+}
+
+function ensureWorkflowContextGraphState(
+  context: WorkflowContext,
+  contract: FormalLoopContract,
+  input: {
+    graphSnapshotId: string;
+    timestamp: string;
+  }
+): WorkflowContext {
+  if (context.executionGraphSnapshot && context.nodeRuns) {
+    return context;
+  }
+
+  const snapshot = compileExecutionGraph({
+    contract,
+    runId: context.runId,
+    attemptId: context.attemptId,
+    workflowContextId: context.id,
+    compiledAt: input.timestamp,
+    snapshotId: input.graphSnapshotId,
+    ...(context.contractRevisionId ? { contractRevisionId: context.contractRevisionId } : {})
+  });
+
+  return {
+    ...context,
+    contractId: context.contractId ?? contract.id,
+    contractSnapshot: context.contractSnapshot ?? contract,
+    executionGraphSnapshot: snapshot,
+    nodeRuns: createInitialNodeRuns(snapshot, input.timestamp)
   };
 }
 

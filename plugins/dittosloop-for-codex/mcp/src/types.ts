@@ -4,6 +4,7 @@ import type {
   ValidatorResult,
   VerificationResultV2
 } from "./runner/verificationV2.js";
+import type { ExecutionGraphSnapshot, WorkflowNodeRun, WorkflowView } from "./workflowGraph/types.js";
 
 export type LoopStatus = "active" | "paused" | "archived";
 export type TriggerMode = "manual";
@@ -297,6 +298,8 @@ export interface WorkflowContext {
   contractId?: string;
   contractRevisionId?: string;
   contractSnapshot?: FormalLoopContract;
+  executionGraphSnapshot?: ExecutionGraphSnapshot;
+  nodeRuns?: WorkflowNodeRun[];
   status: WorkflowContextStatus;
   cursor: WorkflowCursor;
   vars: Record<string, unknown>;
@@ -338,6 +341,7 @@ export interface RunDetail {
   artifacts: ArtifactRef[];
   workflowRevisions: WorkflowRevision[];
   workflowContexts: WorkflowContext[];
+  workflowView?: WorkflowView;
 }
 
 export interface CodexProjectRef {

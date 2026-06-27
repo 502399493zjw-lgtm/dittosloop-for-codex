@@ -514,6 +514,38 @@ test("creates a formal loop contract and starts a visible Codex session run", as
   });
 });
 
+test("prepares workflow context with immutable graph snapshot and node runs", async () => {
+  const service = await createService();
+  const loop = await service.createLoopContract({
+    title: "Graph launch",
+    goal: "Create graph state",
+    body: {
+      steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Graph state exists", severity: "must" }]
+    }
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run graph launch" });
+  const detail = await service.getRunDetail(launch.run.id);
+  const context = detail.workflowContexts[0];
+
+  expect(context.executionGraphSnapshot).toMatchObject({
+    snapshotId: "graph_1",
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    contractId: loop.id
+  });
+  expect(context.nodeRuns?.map((nodeRun) => [nodeRun.nodeId, nodeRun.status])).toEqual([
+    ["root", "pending"],
+    ["root/task:scan", "pending"],
+    ["root/verification", "pending"]
+  ]);
+});
+
 test("normalizes project fields on formal loop creation into the contract binding and preview loop", async () => {
   const service = await createService();
 

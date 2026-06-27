@@ -23183,6 +23183,182 @@ function isNodeError(error2) {
   return error2 instanceof Error && "code" in error2;
 }
 
+// src/workflowGraph/compileGraph.ts
+import { createHash } from "node:crypto";
+var compilerVersion = 1;
+function compileExecutionGraph(input) {
+  const effectiveProfilesByStep = resolveEffectiveProfilesByStep(input.contract);
+  const nodes = [
+    {
+      nodeId: "root",
+      kind: "root",
+      label: input.contract.title,
+      order: 0,
+      runtime: "internal"
+    }
+  ];
+  const edges = [];
+  const topLevelNodeIds = [];
+  input.contract.body.steps.forEach((step, index) => {
+    const node = appendStepNode({
+      step,
+      parentNodeId: "root",
+      pathPrefix: "root",
+      order: index + 1,
+      phaseNodeId: void 0,
+      nodes,
+      edges,
+      effectiveProfilesByStep
+    });
+    topLevelNodeIds.push(node.nodeId);
+    edges.push({ fromNodeId: "root", toNodeId: node.nodeId, kind: "contains" });
+  });
+  addSequenceEdges(edges, topLevelNodeIds);
+  const verificationNode = {
+    nodeId: "root/verification",
+    kind: "verification",
+    parentNodeId: "root",
+    label: "Verification",
+    order: nodes.length,
+    runtime: "internal"
+  };
+  nodes.push(verificationNode);
+  edges.push({ fromNodeId: "root", toNodeId: verificationNode.nodeId, kind: "contains" });
+  const verificationPredecessor = topLevelNodeIds.at(-1) ?? "root";
+  edges.push({ fromNodeId: verificationPredecessor, toNodeId: verificationNode.nodeId, kind: "verification_after" });
+  const graphHash = hashGraph({ compilerVersion, nodes, edges });
+  return {
+    snapshotId: input.snapshotId,
+    runId: input.runId,
+    attemptId: input.attemptId,
+    workflowContextId: input.workflowContextId,
+    contractId: input.contract.id,
+    ...input.contractRevisionId ? { contractRevisionId: input.contractRevisionId } : {},
+    compilerVersion,
+    graphHash,
+    compiledAt: input.compiledAt,
+    nodes,
+    edges
+  };
+}
+function appendStepNode(input) {
+  const nodeKind = graphNodeKindForStep(input.step);
+  const nodeId = `${input.pathPrefix}/${nodeKind}:${input.step.id}`;
+  const phaseNodeId = input.step.kind === "phase" ? nodeId : input.phaseNodeId;
+  const baseNode = {
+    nodeId,
+    kind: nodeKind,
+    sourceStepId: input.step.id,
+    parentNodeId: input.parentNodeId,
+    ...phaseNodeId ? { phaseNodeId } : {},
+    label: input.step.label,
+    order: input.order,
+    ...stepRuntimeFields(input.step, input.effectiveProfilesByStep)
+  };
+  input.nodes.push(baseNode);
+  if (input.step.kind === "parallel") {
+    input.step.children.forEach((child, index) => {
+      const childNode = appendStepNode({
+        step: child,
+        parentNodeId: nodeId,
+        pathPrefix: nodeId,
+        order: index + 1,
+        phaseNodeId,
+        nodes: input.nodes,
+        edges: input.edges,
+        effectiveProfilesByStep: input.effectiveProfilesByStep
+      });
+      input.edges.push({ fromNodeId: nodeId, toNodeId: childNode.nodeId, kind: "contains" });
+      input.edges.push({ fromNodeId: nodeId, toNodeId: childNode.nodeId, kind: "parallel_child" });
+    });
+  }
+  if (input.step.kind === "phase") {
+    const childNodeIds = input.step.children.map((child, index) => {
+      const childNode = appendStepNode({
+        step: child,
+        parentNodeId: nodeId,
+        pathPrefix: nodeId,
+        order: index + 1,
+        phaseNodeId,
+        nodes: input.nodes,
+        edges: input.edges,
+        effectiveProfilesByStep: input.effectiveProfilesByStep
+      });
+      input.edges.push({ fromNodeId: nodeId, toNodeId: childNode.nodeId, kind: "contains" });
+      return childNode.nodeId;
+    });
+    addSequenceEdges(input.edges, childNodeIds);
+    addPipelineEdges(input.edges, input.step, childNodeIds);
+  }
+  return baseNode;
+}
+function graphNodeKindForStep(step) {
+  if (step.kind === "phase" || step.kind === "parallel") {
+    return step.kind;
+  }
+  return step.kind === "task" && step.human ? "human" : "task";
+}
+function stepRuntimeFields(step, effectiveProfilesByStep) {
+  if (step.kind !== "agent" && step.kind !== "task") {
+    return {
+      runtime: "internal",
+      ...step.kind === "phase" && step.pipeline ? { pipeline: true } : {}
+    };
+  }
+  const agentProfile = effectiveProfilesByStep.get(step.id);
+  const subagent = effectiveProfileToSubagent(agentProfile, step.subagent);
+  return {
+    runtime: "codex",
+    prompt: step.prompt,
+    ...step.kind === "task" && step.human ? { human: true } : {},
+    ...step.agentProfileRef ? { agentProfileRef: step.agentProfileRef } : {},
+    ...subagent ? { subagent } : {},
+    ...step.kind === "task" && step.outputSchema ? { outputSchema: step.outputSchema } : {}
+  };
+}
+function addSequenceEdges(edges, nodeIds) {
+  for (let index = 1; index < nodeIds.length; index += 1) {
+    edges.push({ fromNodeId: nodeIds[index - 1], toNodeId: nodeIds[index], kind: "sequence" });
+  }
+}
+function addPipelineEdges(edges, step, nodeIds) {
+  if (!step.pipeline) {
+    return;
+  }
+  for (let index = 1; index < nodeIds.length; index += 1) {
+    edges.push({ fromNodeId: nodeIds[index - 1], toNodeId: nodeIds[index], kind: "pipeline_data" });
+  }
+}
+function hashGraph(input) {
+  return createHash("sha256").update(stableStringify(input)).digest("hex");
+}
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record2 = value;
+    return `{${Object.keys(record2).filter((key) => record2[key] !== void 0).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record2[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// src/workflowGraph/nodeRuns.ts
+function createInitialNodeRuns(snapshot, now) {
+  return snapshot.nodes.map((node, index) => ({
+    nodeRunId: `${snapshot.snapshotId}:node:${index + 1}`,
+    nodeId: node.nodeId,
+    runId: snapshot.runId,
+    attemptId: snapshot.attemptId,
+    workflowContextId: snapshot.workflowContextId,
+    epoch: 1,
+    status: "pending",
+    idempotencyKeys: [],
+    createdAt: now,
+    updatedAt: now
+  }));
+}
+
 // src/service.ts
 var DEFAULT_LOOP_MEMORY_READ_LIMIT = 80;
 var MAX_LOOP_MEMORY_READ_LIMIT = 200;
@@ -23648,6 +23824,7 @@ ${priorOutput}`;
       const runId = this.nextId("run");
       const attemptId = this.nextId("attempt");
       const workflowContextId = this.nextId("workflow");
+      const graphSnapshotId = launchContract ? this.nextId("graph") : void 0;
       const memoryWindow = loopMemoryWindow(state, loopId);
       const prompt = buildCodexSessionPrompt(loop, goal, launchContract, {
         runId,
@@ -23687,6 +23864,7 @@ ${priorOutput}`;
         run,
         attempt,
         contract: launchContract,
+        graphSnapshotId,
         timestamp
       });
       launch = {
@@ -24990,8 +25168,12 @@ ${priorOutput}`;
       const existingContext = state.workflowContexts.find(
         (context) => context.runId === runId && context.attemptId === attemptId
       );
+      const existingContextWithGraph = existingContext ? ensureWorkflowContextGraphState(existingContext, contract, {
+        graphSnapshotId: existingContext.executionGraphSnapshot ? existingContext.executionGraphSnapshot.snapshotId : this.nextId("graph"),
+        timestamp
+      }) : void 0;
       preparedContext = existingContext ? {
-        ...existingContext,
+        ...existingContextWithGraph,
         status: "running",
         cursor: {
           ...existingContext.cursor,
@@ -25005,6 +25187,7 @@ ${priorOutput}`;
           run,
           attempt,
           contract,
+          graphSnapshotId: this.nextId("graph"),
           timestamp
         }),
         status: "running",
@@ -25319,7 +25502,7 @@ ${priorOutput}`;
   }
 };
 function createWorkflowContext(input) {
-  return {
+  const baseContext = {
     id: input.id,
     runId: input.run.id,
     loopId: input.run.loopId,
@@ -25336,6 +25519,31 @@ function createWorkflowContext(input) {
     idempotencyKeys: [],
     createdAt: input.timestamp,
     updatedAt: input.timestamp
+  };
+  return input.contract && input.graphSnapshotId ? ensureWorkflowContextGraphState(baseContext, input.contract, {
+    graphSnapshotId: input.graphSnapshotId,
+    timestamp: input.timestamp
+  }) : baseContext;
+}
+function ensureWorkflowContextGraphState(context, contract, input) {
+  if (context.executionGraphSnapshot && context.nodeRuns) {
+    return context;
+  }
+  const snapshot = compileExecutionGraph({
+    contract,
+    runId: context.runId,
+    attemptId: context.attemptId,
+    workflowContextId: context.id,
+    compiledAt: input.timestamp,
+    snapshotId: input.graphSnapshotId,
+    ...context.contractRevisionId ? { contractRevisionId: context.contractRevisionId } : {}
+  });
+  return {
+    ...context,
+    contractId: context.contractId ?? contract.id,
+    contractSnapshot: context.contractSnapshot ?? contract,
+    executionGraphSnapshot: snapshot,
+    nodeRuns: createInitialNodeRuns(snapshot, input.timestamp)
   };
 }
 function createWorkflowVerificationState(timestamp) {
@@ -28268,7 +28476,11 @@ function normalizeState(value) {
     loopStates: value?.loopStates ?? [],
     formalContracts: value?.formalContracts ?? [],
     workflowRevisions: value?.workflowRevisions ?? [],
-    workflowContexts: value?.workflowContexts ?? [],
+    workflowContexts: (value?.workflowContexts ?? []).map((context) => ({
+      ...context,
+      executionGraphSnapshot: context.executionGraphSnapshot,
+      nodeRuns: context.nodeRuns
+    })),
     runs: value?.runs ?? [],
     attempts: value?.attempts ?? [],
     events: value?.events ?? [],
