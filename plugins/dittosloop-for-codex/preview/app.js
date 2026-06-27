@@ -1229,10 +1229,13 @@ function renderWorkflowRevisionRow(revision) {
 
 function buildRunPhases(detail) {
   const run = detail.run;
+  const workflowViewNodes = detail.workflowView?.nodes ?? [];
+  const workflowViewPhasesList = workflowViewPhases(detail.workflowView, run.status, workflowViewNodes);
+  const hasWorkflowView = workflowViewPhasesList.length > 0;
   const hasWorkflowTimeline = (detail.timeline ?? []).some((section) => section.id === "workflow");
-  const workflowOnlyMode = hasWorkflowTimeline;
+  const workflowOnlyMode = hasWorkflowView || hasWorkflowTimeline;
   const sessionAgents = !workflowOnlyMode && run.codexSession ? codexSessionRequestAgents(run) : [];
-  const workflowPlanAgents = run.codexSession && !hasWorkflowTimeline ? codexWorkflowPlanAgents(run) : [];
+  const workflowPlanAgents = run.codexSession && !workflowOnlyMode ? codexWorkflowPlanAgents(run) : [];
   const attemptAgents = detail.attempts
     .filter(() => !workflowOnlyMode && !run.codexSession)
     .map((attempt) => ({
@@ -1273,7 +1276,12 @@ function buildRunPhases(detail) {
     });
   }
 
+  if (workflowViewPhasesList.length) {
+    phases.push(...workflowViewPhasesList);
+  }
+
   for (const section of detail.timeline ?? []) {
+    if (hasWorkflowView && isWorkflowRuntimeSection(section)) continue;
     const sectionPhases = isWorkflowRuntimeSection(section)
       ? workflowDisplayPhases(section, run.status)
       : shouldShowTimelineSectionAsPhase(section, workflowOnlyMode)
@@ -1435,6 +1443,77 @@ function timelineSectionPhase(section, fallbackStatus) {
     status: timelineSectionStatus(section, fallbackStatus),
     agents
   };
+}
+
+function workflowViewPhases(workflowView, fallbackStatus, sourceNodes = workflowView?.nodes ?? []) {
+  if (!workflowView || !sourceNodes.length) return [];
+  const nodes = sourceNodes;
+  const visibleNodes = nodes.filter((node) => node.kind !== "root");
+  const phaseNodes = visibleNodes.filter((node) => node.kind === "phase" || node.kind === "parallel");
+  const executableNodes = visibleNodes.filter((node) => ["task", "human", "verification"].includes(node.kind));
+
+  if (!phaseNodes.length) {
+    return [{
+      id: "workflow-view",
+      name: "工作流执行",
+      status: workflowViewStatus(workflowView.status || fallbackStatus),
+      agents: executableNodes.map(workflowViewNodeAgent)
+    }];
+  }
+
+  const groupedNodeIds = new Set();
+  const phases = phaseNodes.map((phase) => {
+    const agents = executableNodes
+      .filter((node) => node.parentNodeId === phase.nodeId || node.phaseNodeId === phase.nodeId)
+      .map((node) => {
+        groupedNodeIds.add(node.nodeId);
+        return workflowViewNodeAgent(node);
+      });
+    return {
+      id: phase.nodeId,
+      name: phase.label,
+      status: agentsStatus(agents, workflowViewStatus(phase.status)),
+      agents
+    };
+  }).filter((phase) => phase.agents.length);
+
+  const rootAgents = executableNodes
+    .filter((node) => !groupedNodeIds.has(node.nodeId))
+    .map(workflowViewNodeAgent);
+  if (rootAgents.length) {
+    phases.push({
+      id: "workflow-view-root",
+      name: "工作流收尾",
+      status: agentsStatus(rootAgents, workflowViewStatus(workflowView.status || fallbackStatus)),
+      agents: rootAgents
+    });
+  }
+
+  return phases;
+}
+
+function workflowViewNodeAgent(node) {
+  return {
+    id: node.nodeId,
+    avatar: node.kind === "verification" ? "验" : node.kind === "human" ? "人" : agentInitial({ name: node.label }),
+    name: node.label,
+    status: workflowViewStatus(node.status),
+    description: node.resultSummary || node.errorSummary,
+    meta: [node.taskRunId, node.sessionId, node.sourceStepId].filter(Boolean).join(" · "),
+    pipeline: node.pipeline === true,
+    human: node.human === true || node.kind === "human",
+    threadId: undefined,
+    threadTitle: undefined,
+    threadUrl: undefined,
+    showSessionLink: false
+  };
+}
+
+function workflowViewStatus(status) {
+  if (status === "waiting_for_session" || status === "waiting_for_human" || status === "waiting_for_validator") return "requested";
+  if (status === "ready" || status === "dispatching") return "running";
+  if (status === "not_started" || status === "pending") return "requested";
+  return timelineStatus(status);
 }
 
 function workflowDisplayPhases(section, fallbackStatus) {

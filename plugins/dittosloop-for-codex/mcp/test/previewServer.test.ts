@@ -208,6 +208,15 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).not.toContain("阶段暂无 agent 明细");
 });
 
+test("preview prefers workflowView for workflow phase display", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("workflowViewPhases(detail.workflowView");
+  expect(app).toContain("workflowViewNodeAgent");
+  expect(app).toContain("detail.workflowView?.nodes");
+  expect(app).toContain("workflowViewStatus");
+});
+
 test("preview script references agent profile and preflight workflow metadata", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 
