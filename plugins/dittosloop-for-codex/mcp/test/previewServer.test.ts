@@ -1130,6 +1130,32 @@ test("serves composed run detail api", async () => {
   });
 });
 
+test("serves workflow view from durable graph state in run detail api", async () => {
+  const service = await createService();
+  const loop = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+  const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/api/runs/${launch.run.id}`);
+  const detail = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(detail.workflowView).toMatchObject({
+    version: 1,
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    scheduler: { mode: "dual_write", runnableNodeIds: [] },
+    progress: { total: 3, completed: 0, running: 0, waiting: 0, failed: 0 },
+    nodes: [
+      expect.objectContaining({ nodeId: "root", kind: "root", status: "pending" }),
+      expect.objectContaining({ sourceStepId: "run-worker", kind: "task", status: "pending" }),
+      expect.objectContaining({ nodeId: "root/verification", kind: "verification", status: "pending" })
+    ]
+  });
+});
+
 test("serves workflow runtime detail for suspended tasks and promoted revisions", async () => {
   const { bridge, requests } = createPendingSessionBridge();
   const counters = new Map<string, number>();

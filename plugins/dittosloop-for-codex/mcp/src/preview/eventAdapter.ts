@@ -1,6 +1,7 @@
 import type { EngineEvent } from "../engine/types.js";
 import type { RunDetail, RunStatus, VerificationResultRecord } from "../types.js";
 import type { ValidatorResult, VerificationResultV2 } from "../runner/verificationV2.js";
+import { buildWorkflowView } from "../workflowGraph/workflowView.js";
 
 export interface PreviewRunDetail extends RunDetail {
   engineEvents: EngineEvent[];
@@ -29,9 +30,11 @@ export interface PreviewTimelineItem {
 
 export function enrichRunDetail(detail: RunDetail): PreviewRunDetail {
   const engineEvents = extractEngineEvents(detail);
+  const workflowView = detail.workflowView ?? buildWorkflowView(detail);
 
   return {
     ...detail,
+    workflowView,
     engineEvents,
     timeline: buildTimeline(detail, engineEvents)
   };

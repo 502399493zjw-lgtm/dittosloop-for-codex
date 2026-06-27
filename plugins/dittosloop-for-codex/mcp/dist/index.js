@@ -21107,9 +21107,9 @@ var EMPTY_COMPLETION_RESULT = {
 
 // src/id.ts
 function createId(prefix) {
-  const timestamp = Date.now().toString(36);
+  const timestamp2 = Date.now().toString(36);
   const random = Math.random().toString(36).slice(2, 10);
-  return `${prefix}_${timestamp}_${random}`;
+  return `${prefix}_${timestamp2}_${random}`;
 }
 
 // src/script/builder.ts
@@ -23375,11 +23375,11 @@ var LoopService = class {
   nextId;
   previewBaseUrl;
   async createLoopContract(input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const resolvedInput = resolveScriptContractInput(input);
     const contract = compileContractWithVerificationInputKind(
       normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")),
-      timestamp
+      timestamp2
     );
     validateContract(contract);
     await this.options.store.updateState((state) => ({
@@ -23407,15 +23407,15 @@ var LoopService = class {
     return state.loops;
   }
   async pauseLoop(loopId, input = {}) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let update;
     await this.options.store.updateState((state) => {
       const loop = requireLoop(state, loopId);
       const nextLoops = state.loops.map(
-        (candidate) => candidate.id === loopId ? { ...candidate, status: "paused", updatedAt: timestamp } : candidate
+        (candidate) => candidate.id === loopId ? { ...candidate, status: "paused", updatedAt: timestamp2 } : candidate
       );
       const nextContracts = state.formalContracts.map(
-        (contract) => contract.id === loopId ? { ...contract, status: "paused", updatedAt: timestamp } : contract
+        (contract) => contract.id === loopId ? { ...contract, status: "paused", updatedAt: timestamp2 } : contract
       );
       const nextState = {
         ...state,
@@ -23437,15 +23437,15 @@ var LoopService = class {
     return update;
   }
   async resumeLoop(loopId) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let update;
     await this.options.store.updateState((state) => {
       const loop = requireLoop(state, loopId);
       const nextLoops = state.loops.map(
-        (candidate) => candidate.id === loopId ? { ...candidate, status: "active", updatedAt: timestamp } : candidate
+        (candidate) => candidate.id === loopId ? { ...candidate, status: "active", updatedAt: timestamp2 } : candidate
       );
       const nextContracts = state.formalContracts.map(
-        (contract) => contract.id === loopId ? { ...contract, status: "active", updatedAt: timestamp } : contract
+        (contract) => contract.id === loopId ? { ...contract, status: "active", updatedAt: timestamp2 } : contract
       );
       const nextState = {
         ...state,
@@ -23723,7 +23723,7 @@ ${priorOutput}`;
     };
   }
   async markRunWaitingForCodexSession(runId, session) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let updatedRun;
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
@@ -23771,7 +23771,7 @@ ${priorOutput}`;
           profilePreflight: run.codexSession?.profilePreflight,
           prompt: session.prompt ?? run.codexSession?.prompt ?? run.goal
         },
-        updatedAt: timestamp
+        updatedAt: timestamp2
       };
       return {
         ...state,
@@ -23783,7 +23783,7 @@ ${priorOutput}`;
             runId,
             "note",
             "Codex session requested; waiting for worker result",
-            timestamp,
+            timestamp2,
             { codexSession: session }
           )
         ]
@@ -23792,7 +23792,7 @@ ${priorOutput}`;
     return updatedRun;
   }
   async startCodexSessionRun(loopId, input = {}) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const initialState = await this.options.store.readState();
     const initialLoop = requireLoop(initialState, loopId);
     const initialLoopState = initialState.loopStates.find((candidate) => candidate.loopId === loopId);
@@ -23849,15 +23849,15 @@ ${priorOutput}`;
           ...profilePreflight ? { profilePreflight } : {},
           prompt
         },
-        createdAt: timestamp,
-        updatedAt: timestamp
+        createdAt: timestamp2,
+        updatedAt: timestamp2
       };
       const attempt = {
         id: attemptId,
         runId: run.id,
         status: "running",
         summary: attemptSummary,
-        createdAt: timestamp
+        createdAt: timestamp2
       };
       const workflowContext = createWorkflowContext({
         id: workflowContextId,
@@ -23865,7 +23865,7 @@ ${priorOutput}`;
         attempt,
         contract: launchContract,
         graphSnapshotId,
-        timestamp
+        timestamp: timestamp2
       });
       launch = {
         run,
@@ -23889,21 +23889,21 @@ ${priorOutput}`;
         workflowContexts: [...state.workflowContexts, workflowContext],
         events: [
           ...state.events,
-          lifecycleEvent(this.nextId("event"), run.id, "run_created", "Requested a host-created Codex session for this loop run", timestamp, {
+          lifecycleEvent(this.nextId("event"), run.id, "run_created", "Requested a host-created Codex session for this loop run", timestamp2, {
             codexSession: run.codexSession
           }),
-          lifecycleEvent(this.nextId("event"), run.id, "attempt_started", attemptSummary, timestamp, {
+          lifecycleEvent(this.nextId("event"), run.id, "attempt_started", attemptSummary, timestamp2, {
             attemptId: attempt.id,
             ...project
           })
         ],
-        loops: bindLoopProject(state.loops, loopId, project, timestamp)
+        loops: bindLoopProject(state.loops, loopId, project, timestamp2)
       };
     });
     return launch;
   }
   async openCodexSession(runId) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let result;
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
@@ -23936,7 +23936,7 @@ ${priorOutput}`;
         ...state,
         events: [
           ...state.events,
-          lifecycleEvent(this.nextId("event"), runId, "note", "Codex session open requested", timestamp, {
+          lifecycleEvent(this.nextId("event"), runId, "note", "Codex session open requested", timestamp2, {
             codexThread: {
               threadId: codexSession.threadId,
               threadTitle: codexSession.threadTitle,
@@ -23949,13 +23949,13 @@ ${priorOutput}`;
     return result;
   }
   async startAttempt(runId, input = {}) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const attempt = {
       id: this.nextId("attempt"),
       runId,
       status: "running",
       summary: input.summary,
-      createdAt: timestamp
+      createdAt: timestamp2
     };
     await this.options.store.updateState((state) => {
       requireRun(state, runId);
@@ -23964,14 +23964,14 @@ ${priorOutput}`;
         attempts: [...state.attempts, attempt],
         events: [
           ...state.events,
-          lifecycleEvent(this.nextId("event"), runId, "attempt_started", input.summary ?? "Attempt started", timestamp)
+          lifecycleEvent(this.nextId("event"), runId, "attempt_started", input.summary ?? "Attempt started", timestamp2)
         ]
       };
     });
     return attempt;
   }
   async recordCodexThread(runId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let updatedRun;
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
@@ -23985,7 +23985,7 @@ ${priorOutput}`;
       };
       updatedRun = {
         ...run,
-        updatedAt: timestamp,
+        updatedAt: timestamp2,
         codexSession: {
           ...run.codexSession,
           status: "started",
@@ -24015,7 +24015,7 @@ ${priorOutput}`;
             runId,
             "note",
             "Codex thread created and attached to this run",
-            timestamp,
+            timestamp2,
             { codexThread }
           )
         ]
@@ -24024,7 +24024,7 @@ ${priorOutput}`;
     return updatedRun;
   }
   async recordSessionResult(runId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     if (input.pausedReason === "failures") {
       throw new Error("Failure pauses are derived from stopPolicy");
     }
@@ -24073,7 +24073,7 @@ ${priorOutput}`;
           validateOutputAgainstSchema(resultInput.result, outputSchema);
         }
       }
-      const workflowContextAfterTaskResult = targetContext ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp, { finalize: false }) : void 0;
+      const workflowContextAfterTaskResult = targetContext ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp2, { finalize: false }) : void 0;
       const hasRemainingWorkflowSteps = Boolean(
         targetContract && workflowContextAfterTaskResult && hasRemainingExecutableSteps(targetContract, workflowContextAfterTaskResult)
       );
@@ -24099,7 +24099,7 @@ ${priorOutput}`;
           events: state.events,
           run,
           runId,
-          timestamp,
+          timestamp: timestamp2,
           input: resultInput
         }) : [];
         shouldContinueWorkflow = shouldContinueThisWorkflow;
@@ -24108,7 +24108,7 @@ ${priorOutput}`;
           ...run,
           status: "running",
           codexSession,
-          updatedAt: timestamp,
+          updatedAt: timestamp2,
           completedAt: void 0
         };
         return {
@@ -24141,7 +24141,7 @@ ${priorOutput}`;
               runId,
               "note",
               shouldContinueThisWorkflow ? "Codex task result recorded; continuing workflow" : "Codex task result recorded; waiting for pending workflow sessions",
-              timestamp,
+              timestamp2,
               {
                 attemptId,
                 workflowContextId: workflowContextAfterTaskResult.id,
@@ -24166,7 +24166,7 @@ ${priorOutput}`;
             ...codexSession,
             status: codexSession.status === "failed" || codexSession.status === "unavailable" ? codexSession.status : "started"
           },
-          updatedAt: timestamp,
+          updatedAt: timestamp2,
           completedAt: void 0
         };
         return {
@@ -24184,7 +24184,7 @@ ${priorOutput}`;
               ...workflowContextAfterTaskResult,
               verification: startWorkflowVerificationState(
                 workflowContextAfterTaskResult.verification,
-                timestamp
+                timestamp2
               )
             } : context
           ),
@@ -24195,7 +24195,7 @@ ${priorOutput}`;
               runId,
               "note",
               "Codex task result recorded; starting v2 verification",
-              timestamp,
+              timestamp2,
               {
                 attemptId,
                 workflowContextId: workflowContextAfterTaskResult.id,
@@ -24216,7 +24216,7 @@ ${priorOutput}`;
         status: resultInput.status === "needs_human" ? "skipped" : resultInput.status,
         summary: resultInput.summary,
         checks: resultInput.checks ?? [],
-        createdAt: timestamp
+        createdAt: timestamp2
       };
       const runStatus = resultInput.status === "passed" ? "completed" : resultInput.status === "needs_human" ? "waiting_for_human" : "failed";
       const attemptStatus = resultInput.status === "failed" ? "failed" : resultInput.status === "needs_human" ? "running" : "completed";
@@ -24224,8 +24224,8 @@ ${priorOutput}`;
         ...run,
         status: runStatus,
         codexSession,
-        updatedAt: timestamp,
-        ...runStatus === "completed" || runStatus === "failed" ? { completedAt: timestamp } : {},
+        updatedAt: timestamp2,
+        ...runStatus === "completed" || runStatus === "failed" ? { completedAt: timestamp2 } : {},
         ...resultInput.pausedReason ? { pausedReason: resultInput.pausedReason } : {}
       };
       const attempts = targetAttempt ? state.attempts.map(
@@ -24233,7 +24233,7 @@ ${priorOutput}`;
           ...attempt,
           status: attemptStatus,
           summary: resultInput.summary,
-          ...attemptStatus === "running" ? { completedAt: void 0 } : { completedAt: timestamp }
+          ...attemptStatus === "running" ? { completedAt: void 0 } : { completedAt: timestamp2 }
         } : attempt
       ) : [
         ...state.attempts,
@@ -24242,8 +24242,8 @@ ${priorOutput}`;
           runId,
           status: attemptStatus,
           summary: resultInput.summary,
-          createdAt: timestamp,
-          ...attemptStatus === "running" ? {} : { completedAt: timestamp }
+          createdAt: timestamp2,
+          ...attemptStatus === "running" ? {} : { completedAt: timestamp2 }
         }
       ];
       const humanRequest = resultInput.status === "needs_human" ? {
@@ -24256,19 +24256,19 @@ ${priorOutput}`;
         stepId: resultInput.stepId,
         question: resultInput.humanQuestion ?? resultInput.summary,
         status: "open",
-        createdAt: timestamp
+        createdAt: timestamp2
       } : void 0;
       const workflowCompletionEvents = workflowCompletionEngineEvents({
         events: state.events,
         run,
         runId,
         attemptId,
-        timestamp,
+        timestamp: timestamp2,
         input: resultInput,
         verification
       });
       const workflowContexts = targetContext ? state.workflowContexts.map(
-        (context) => context.id === targetContext.id ? completeWorkflowContextFromSessionResult(context, resultInput, timestamp, { finalize: true }) : context
+        (context) => context.id === targetContext.id ? completeWorkflowContextFromSessionResult(context, resultInput, timestamp2, { finalize: true }) : context
       ) : state.workflowContexts;
       const nextState = {
         ...state,
@@ -24289,7 +24289,7 @@ ${priorOutput}`;
               { engineEvent }
             )
           ),
-          lifecycleEvent(this.nextId("event"), runId, "verification_recorded", resultInput.summary, timestamp, {
+          lifecycleEvent(this.nextId("event"), runId, "verification_recorded", resultInput.summary, timestamp2, {
             attemptId,
             verificationId: verification.id,
             sessionResult: {
@@ -24299,7 +24299,7 @@ ${priorOutput}`;
             }
           }),
           ...attemptStatus === "running" ? [] : [
-            lifecycleEvent(this.nextId("event"), runId, "attempt_completed", resultInput.summary, timestamp, {
+            lifecycleEvent(this.nextId("event"), runId, "attempt_completed", resultInput.summary, timestamp2, {
               attemptId,
               verificationId: verification.id
             })
@@ -24310,7 +24310,7 @@ ${priorOutput}`;
               runId,
               "run_completed",
               `Codex session result ${resultInput.status}`,
-              timestamp,
+              timestamp2,
               {
                 attemptId,
                 verificationId: verification.id
@@ -24323,7 +24323,7 @@ ${priorOutput}`;
               runId,
               "human_request",
               humanRequest.question,
-              timestamp,
+              timestamp2,
               { requestId: humanRequest.id }
             )
           ] : []
@@ -24337,7 +24337,7 @@ ${priorOutput}`;
       if (runStatus !== "failed") {
         return terminalState;
       }
-      return resultInput.pausedReason ? applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp) : applyFailureStopPolicy(terminalState, run.loopId, timestamp);
+      return resultInput.pausedReason ? applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp2) : applyFailureStopPolicy(terminalState, run.loopId, timestamp2);
     });
     if (shouldContinueWorkflow && continuationAttemptId) {
       return this.executeWorkflowAttempt(runId, { attemptId: continuationAttemptId });
@@ -24345,7 +24345,7 @@ ${priorOutput}`;
     return updatedRun;
   }
   async completeAttempt(attemptId, input = {}) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const status = input.status ?? "completed";
     let completedAttempt;
     await this.options.store.updateState((state) => {
@@ -24362,7 +24362,7 @@ ${priorOutput}`;
         ...attempt,
         status,
         summary,
-        completedAt: timestamp
+        completedAt: timestamp2
       };
       return {
         ...state,
@@ -24374,7 +24374,7 @@ ${priorOutput}`;
             attempt.runId,
             "attempt_completed",
             completedAttempt.summary ?? `Attempt ${status}`,
-            timestamp
+            timestamp2
           )
         ]
       };
@@ -24400,7 +24400,7 @@ ${priorOutput}`;
     return event;
   }
   async recordValidatorResult(runId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     if (!input.idempotencyKey) {
       throw new Error("Validator results require an idempotencyKey");
     }
@@ -24435,7 +24435,7 @@ ${priorOutput}`;
       if (validator.type !== input.result.type) {
         throw new Error(`Validator result type does not match validator: ${input.validatorId}`);
       }
-      const verification = context.verification ?? createWorkflowVerificationState(timestamp);
+      const verification = context.verification ?? createWorkflowVerificationState(timestamp2);
       if (verification.idempotencyKeys.includes(idempotencyKey)) {
         duplicateResultId = verification.resultId;
         contextAfterWrite = context;
@@ -24466,12 +24466,12 @@ ${priorOutput}`;
         validatorResults,
         pendingValidatorIds,
         idempotencyKeys: appendUnique(verification.idempotencyKeys, idempotencyKey),
-        updatedAt: timestamp
+        updatedAt: timestamp2
       };
       contextAfterWrite = {
         ...context,
         verification: nextVerification,
-        updatedAt: timestamp
+        updatedAt: timestamp2
       };
       policy = contract.verification;
       return {
@@ -24484,7 +24484,7 @@ ${priorOutput}`;
             runId,
             "note",
             `Validator result recorded: ${input.validatorId}`,
-            timestamp,
+            timestamp2,
             {
               attemptId: context.attemptId,
               workflowContextId: context.id,
@@ -24510,14 +24510,14 @@ ${priorOutput}`;
         runId,
         contextAfterWrite.attemptId,
         contextAfterWrite.verification,
-        timestamp
+        timestamp2
       );
     }
     const result = await runVerificationV2({
       id: this.nextId("verification"),
       runId,
       attemptId: contextAfterWrite.attemptId,
-      createdAt: timestamp,
+      createdAt: timestamp2,
       policy,
       workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
       projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
@@ -24527,7 +24527,7 @@ ${priorOutput}`;
     return result;
   }
   async recordVerification(runId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const result = {
       id: this.nextId("verification"),
       runId,
@@ -24535,7 +24535,7 @@ ${priorOutput}`;
       status: input.status,
       summary: input.summary,
       checks: input.checks ?? [],
-      createdAt: timestamp
+      createdAt: timestamp2
     };
     await this.options.store.updateState((state) => {
       requireRun(state, runId);
@@ -24549,11 +24549,11 @@ ${priorOutput}`;
       const repairContext = shouldRepair2 ? findWorkflowContextForRepair(state, runId, input.attemptId) : void 0;
       return {
         ...state,
-        runs: shouldRepair2 ? updateRun(state.runs, runId, { status: "repairing", updatedAt: timestamp }) : state.runs,
+        runs: shouldRepair2 ? updateRun(state.runs, runId, { status: "repairing", updatedAt: timestamp2 }) : state.runs,
         workflowContexts: repairContext ? updateWorkflowContext(
           state.workflowContexts,
           repairContext.id,
-          repairWorkflowContext(repairContext, input.summary, timestamp)
+          repairWorkflowContext(repairContext, input.summary, timestamp2)
         ) : state.workflowContexts,
         verificationResults: [...state.verificationResults, result]
       };
@@ -24561,26 +24561,26 @@ ${priorOutput}`;
     return result;
   }
   async recordHumanRequest(runId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const request = {
       id: this.nextId("human"),
       runId,
       question: input.question,
       status: "open",
-      createdAt: timestamp
+      createdAt: timestamp2
     };
     await this.options.store.updateState((state) => {
       requireRun(state, runId);
       return {
         ...state,
-        runs: updateRun(state.runs, runId, { status: "waiting_for_human", updatedAt: timestamp }),
+        runs: updateRun(state.runs, runId, { status: "waiting_for_human", updatedAt: timestamp2 }),
         humanRequests: [...state.humanRequests, request]
       };
     });
     return request;
   }
   async resolveHumanRequest(requestId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let resolvedRequest;
     let workflowResume;
     await this.options.store.updateState((state) => {
@@ -24596,7 +24596,7 @@ ${priorOutput}`;
         ...request,
         status: "resolved",
         response: input.response,
-        resolvedAt: timestamp
+        resolvedAt: timestamp2
       };
       if (request.workflowContextId && request.taskRunId) {
         workflowResume = {
@@ -24675,7 +24675,7 @@ ${priorOutput}`;
     return artifact;
   }
   async markRunRepairing(runId, input = {}) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let repairingRun;
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
@@ -24683,23 +24683,23 @@ ${priorOutput}`;
       repairingRun = {
         ...run,
         status: "repairing",
-        updatedAt: timestamp
+        updatedAt: timestamp2
       };
       return {
         ...state,
-        runs: updateRun(state.runs, runId, { status: "repairing", updatedAt: timestamp }),
+        runs: updateRun(state.runs, runId, { status: "repairing", updatedAt: timestamp2 }),
         workflowContexts: repairContext ? updateWorkflowContext(
           state.workflowContexts,
           repairContext.id,
-          repairWorkflowContext(repairContext, input.reason, timestamp)
+          repairWorkflowContext(repairContext, input.reason, timestamp2)
         ) : state.workflowContexts,
-        events: input.reason ? [...state.events, lifecycleEvent(this.nextId("event"), runId, "note", input.reason, timestamp)] : state.events
+        events: input.reason ? [...state.events, lifecycleEvent(this.nextId("event"), runId, "note", input.reason, timestamp2)] : state.events
       };
     });
     return repairingRun;
   }
   async completeRun(runId, input = {}) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const status = input.status ?? "completed";
     if (input.pausedReason === "failures") {
       throw new Error("Failure pauses are derived from stopPolicy");
@@ -24726,8 +24726,8 @@ ${priorOutput}`;
           ...run,
           status,
           ...codexSession ? { codexSession } : {},
-          updatedAt: timestamp,
-          completedAt: timestamp,
+          updatedAt: timestamp2,
+          completedAt: timestamp2,
           ...input.pausedReason ? { pausedReason: input.pausedReason } : {}
         };
         return completedRun;
@@ -24744,7 +24744,7 @@ ${priorOutput}`;
       if (status !== "failed" || !completedRun) {
         return terminalState;
       }
-      return input.pausedReason ? applyImmediateStopPolicy(terminalState, completedRun.loopId, input.pausedReason, timestamp) : applyFailureStopPolicy(terminalState, completedRun.loopId, timestamp);
+      return input.pausedReason ? applyImmediateStopPolicy(terminalState, completedRun.loopId, input.pausedReason, timestamp2) : applyFailureStopPolicy(terminalState, completedRun.loopId, timestamp2);
     });
     return completedRun;
   }
@@ -24788,7 +24788,7 @@ ${priorOutput}`;
     this.previewBaseUrl = previewUrl;
   }
   async proposeWorkflowRevision(loopId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const state = await this.options.store.readState();
     const baseContract = requireFormalContract(state, loopId);
     const { run, attempt } = requireWorkflowRevisionSessionContext(state, loopId, input);
@@ -24811,9 +24811,9 @@ ${priorOutput}`;
         projectBinding: normalized.projectBinding ?? baseContract.projectBinding,
         status: normalized.status ?? baseContract.status,
         createdAt: baseContract.createdAt,
-        updatedAt: timestamp
+        updatedAt: timestamp2
       },
-      timestamp
+      timestamp2
     );
     validateContract(contract);
     return this.recordWorkflowRevision(run.id, attempt.id, loopId, {
@@ -24830,7 +24830,7 @@ ${priorOutput}`;
     return state.workflowRevisions.filter((revision) => revision.loopId === loopId);
   }
   async promoteWorkflowRevision(loopId, revisionId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let promotedRevision;
     await this.options.store.updateState((state) => {
       requireLoop(state, loopId);
@@ -24843,13 +24843,13 @@ ${priorOutput}`;
         ...revision.contract,
         id: loopId,
         status: "active",
-        updatedAt: timestamp
+        updatedAt: timestamp2
       };
       validateContract(contract);
       promotedRevision = {
         ...revision,
         status: "promoted",
-        promotedAt: timestamp,
+        promotedAt: timestamp2,
         rejectedAt: void 0,
         rejectionReason: void 0
       };
@@ -24874,7 +24874,7 @@ ${priorOutput}`;
             revision.runId,
             "note",
             "Promoted workflow revision",
-            timestamp,
+            timestamp2,
             { workflowRevisionId: revision.id, loopId, activeRevisionId: revision.id, attemptId: attempt.id }
           )
         ]
@@ -24883,7 +24883,7 @@ ${priorOutput}`;
     return promotedRevision;
   }
   async rejectWorkflowRevision(loopId, revisionId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let rejectedRevision;
     await this.options.store.updateState((state) => {
       requireLoop(state, loopId);
@@ -24895,7 +24895,7 @@ ${priorOutput}`;
       rejectedRevision = {
         ...revision,
         status: "rejected",
-        rejectedAt: timestamp,
+        rejectedAt: timestamp2,
         rejectionReason: input.reason
       };
       return {
@@ -24910,7 +24910,7 @@ ${priorOutput}`;
             revision.runId,
             "note",
             "Rejected workflow revision",
-            timestamp,
+            timestamp2,
             { workflowRevisionId: revision.id, loopId, attemptId: attempt.id, reason: input.reason }
           )
         ]
@@ -24923,7 +24923,7 @@ ${priorOutput}`;
     if (sessions.length === 0) {
       return (await this.getRunDetail(runId)).run;
     }
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let updatedRun;
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
@@ -24958,7 +24958,7 @@ ${priorOutput}`;
           profilePreflight: run.codexSession?.profilePreflight,
           prompt: latestSession.prompt ?? run.codexSession?.prompt ?? run.goal
         },
-        updatedAt: timestamp
+        updatedAt: timestamp2
       };
       return {
         ...state,
@@ -24970,7 +24970,7 @@ ${priorOutput}`;
             runId,
             "note",
             "Codex worker session completed and attached to this run",
-            timestamp,
+            timestamp2,
             { codexSessions: sessions }
           )
         ]
@@ -25001,7 +25001,7 @@ ${priorOutput}`;
     });
   }
   async recordWorkflowRevision(runId, attemptId, loopId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const revision = {
       id: this.nextId("revision"),
       loopId,
@@ -25012,7 +25012,7 @@ ${priorOutput}`;
       status: input.status,
       reason: input.reason,
       contract: input.contract,
-      createdAt: timestamp
+      createdAt: timestamp2
     };
     await this.options.store.updateState((state) => {
       requireRun(state, runId);
@@ -25026,7 +25026,7 @@ ${priorOutput}`;
             runId,
             "note",
             `Created ${revision.status} workflow revision`,
-            timestamp,
+            timestamp2,
             { workflowRevisionId: revision.id, attemptId, reason: revision.reason }
           )
         ]
@@ -25035,7 +25035,7 @@ ${priorOutput}`;
     return revision;
   }
   async recordVerificationV2Result(runId, result) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       requireRun(state, runId);
       const existing = state.verificationResults.find((candidate) => candidate.id === result.id);
@@ -25050,7 +25050,7 @@ ${priorOutput}`;
         verificationResults: [...state.verificationResults, result],
         events: [
           ...state.events,
-          lifecycleEvent(this.nextId("event"), runId, "verification_recorded", result.summary, timestamp, {
+          lifecycleEvent(this.nextId("event"), runId, "verification_recorded", result.summary, timestamp2, {
             attemptId: result.attemptId,
             verificationId: result.id,
             verificationVersion: 2,
@@ -25101,7 +25101,7 @@ ${priorOutput}`;
     return this.completeRun(runId, { status: "failed" });
   }
   async startPendingRubricAgentValidators(run, context, policy) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const pendingValidatorIds = pendingRubricAgentValidatorIds(policy, context);
     if (pendingValidatorIds.length === 0) {
       return;
@@ -25109,7 +25109,7 @@ ${priorOutput}`;
     await this.options.store.updateState((state) => {
       requireRun(state, run.id);
       const currentContext = requireWorkflowContext(state, context.id);
-      const verification = currentContext.verification ?? createWorkflowVerificationState(timestamp);
+      const verification = currentContext.verification ?? createWorkflowVerificationState(timestamp2);
       return {
         ...state,
         workflowContexts: updateWorkflowContext(state.workflowContexts, currentContext.id, {
@@ -25118,15 +25118,15 @@ ${priorOutput}`;
             ...verification,
             status: "waiting_for_validator",
             pendingValidatorIds,
-            updatedAt: timestamp
+            updatedAt: timestamp2
           },
-          updatedAt: timestamp,
+          updatedAt: timestamp2,
           completedAt: void 0
         }),
         events: [
           ...state.events,
           ...pendingValidatorIds.map(
-            (validatorId) => lifecycleEvent(this.nextId("event"), run.id, "note", `Waiting for validator result: ${validatorId}`, timestamp, {
+            (validatorId) => lifecycleEvent(this.nextId("event"), run.id, "note", `Waiting for validator result: ${validatorId}`, timestamp2, {
               attemptId: context.attemptId,
               workflowContextId: context.id,
               validatorId
@@ -25137,10 +25137,10 @@ ${priorOutput}`;
     });
   }
   async markWorkflowVerificationCompleted(workflowContextId, result) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
-      const verification = context.verification ?? createWorkflowVerificationState(timestamp);
+      const verification = context.verification ?? createWorkflowVerificationState(timestamp2);
       return {
         ...state,
         workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
@@ -25152,15 +25152,15 @@ ${priorOutput}`;
             pendingValidatorIds: [],
             decision: result.decision,
             resultId: result.id,
-            updatedAt: timestamp
+            updatedAt: timestamp2
           },
-          updatedAt: timestamp
+          updatedAt: timestamp2
         })
       };
     });
   }
   async prepareWorkflowContext(runId, attemptId, contract) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     let preparedContext;
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
@@ -25170,7 +25170,7 @@ ${priorOutput}`;
       );
       const existingContextWithGraph = existingContext ? ensureWorkflowContextGraphState(existingContext, contract, {
         graphSnapshotId: existingContext.executionGraphSnapshot ? existingContext.executionGraphSnapshot.snapshotId : this.nextId("graph"),
-        timestamp
+        timestamp: timestamp2
       }) : void 0;
       preparedContext = existingContext ? {
         ...existingContextWithGraph,
@@ -25179,7 +25179,7 @@ ${priorOutput}`;
           ...existingContext.cursor,
           state: "executing"
         },
-        updatedAt: timestamp,
+        updatedAt: timestamp2,
         completedAt: void 0
       } : {
         ...createWorkflowContext({
@@ -25188,7 +25188,7 @@ ${priorOutput}`;
           attempt,
           contract,
           graphSnapshotId: this.nextId("graph"),
-          timestamp
+          timestamp: timestamp2
         }),
         status: "running",
         cursor: { state: "executing" }
@@ -25201,7 +25201,7 @@ ${priorOutput}`;
     return preparedContext;
   }
   async markWorkflowTaskRunning(workflowContextId, input) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     const taskRunId = this.nextId("task");
     const stepId = input.stepId ?? taskRunId;
     await this.options.store.updateState((state) => {
@@ -25218,8 +25218,8 @@ ${priorOutput}`;
         agentProfile: input.agentProfile,
         profilePreflight: input.profilePreflight,
         status: "running",
-        createdAt: timestamp,
-        updatedAt: timestamp
+        createdAt: timestamp2,
+        updatedAt: timestamp2
       };
       return {
         ...state,
@@ -25235,11 +25235,11 @@ ${priorOutput}`;
             ...context.steps,
             [stepId]: {
               status: "running",
-              updatedAt: timestamp
+              updatedAt: timestamp2
             }
           },
           taskRuns: [...context.taskRuns, taskRun],
-          updatedAt: timestamp,
+          updatedAt: timestamp2,
           completedAt: void 0
         })
       };
@@ -25247,7 +25247,7 @@ ${priorOutput}`;
     return taskRunId;
   }
   async attachWorkflowTaskSession(workflowContextId, taskRunId, session) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
@@ -25267,7 +25267,7 @@ ${priorOutput}`;
             [stepId]: {
               status: "running",
               sessionId: session.sessionId,
-              updatedAt: timestamp
+              updatedAt: timestamp2
             }
           },
           taskRuns: context.taskRuns.map(
@@ -25277,16 +25277,16 @@ ${priorOutput}`;
               phaseId: session.phaseId ?? candidate.phaseId,
               sessionId: session.sessionId,
               agentProfile: candidate.agentProfile ?? session.agentProfile,
-              updatedAt: timestamp
+              updatedAt: timestamp2
             } : candidate
           ),
-          updatedAt: timestamp
+          updatedAt: timestamp2
         })
       };
     });
   }
   async suspendWorkflowTaskForSession(workflowContextId, taskRunId, session) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
@@ -25307,7 +25307,7 @@ ${priorOutput}`;
             [stepId]: {
               status: "suspended",
               sessionId: session.sessionId,
-              updatedAt: timestamp
+              updatedAt: timestamp2
             }
           },
           taskRuns: context.taskRuns.map(
@@ -25317,17 +25317,17 @@ ${priorOutput}`;
               phaseId: session.phaseId ?? candidate.phaseId,
               sessionId: session.sessionId,
               status: "suspended",
-              updatedAt: timestamp
+              updatedAt: timestamp2
             } : candidate
           ),
           pendingSessionIds: appendUnique(context.pendingSessionIds, session.sessionId),
-          updatedAt: timestamp
+          updatedAt: timestamp2
         })
       };
     });
   }
   async suspendWorkflowContextForSession(workflowContextId, session) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = context.taskRuns.find((candidate) => candidate.sessionId === session.sessionId);
@@ -25349,24 +25349,24 @@ ${priorOutput}`;
             [stepId]: {
               status: "suspended",
               sessionId: session.sessionId,
-              updatedAt: timestamp
+              updatedAt: timestamp2
             }
           },
           taskRuns: context.taskRuns.map(
             (candidate) => candidate.sessionId === session.sessionId ? {
               ...candidate,
               status: "suspended",
-              updatedAt: timestamp
+              updatedAt: timestamp2
             } : candidate
           ),
           pendingSessionIds: appendUnique(context.pendingSessionIds, session.sessionId),
-          updatedAt: timestamp
+          updatedAt: timestamp2
         })
       };
     });
   }
   async completeWorkflowTask(workflowContextId, taskRunId, result) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
@@ -25380,7 +25380,7 @@ ${priorOutput}`;
               status: "completed",
               sessionId: taskRun.sessionId,
               output: result,
-              updatedAt: timestamp
+              updatedAt: timestamp2
             }
           },
           taskRuns: context.taskRuns.map(
@@ -25388,18 +25388,18 @@ ${priorOutput}`;
               ...candidate,
               status: "completed",
               result,
-              updatedAt: timestamp,
-              completedAt: timestamp
+              updatedAt: timestamp2,
+              completedAt: timestamp2
             } : candidate
           ),
           pendingSessionIds: taskRun.sessionId ? context.pendingSessionIds.filter((sessionId) => sessionId !== taskRun.sessionId) : context.pendingSessionIds,
-          updatedAt: timestamp
+          updatedAt: timestamp2
         })
       };
     });
   }
   async failWorkflowTask(workflowContextId, taskRunId, error2) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
@@ -25420,7 +25420,7 @@ ${priorOutput}`;
               status: "failed",
               sessionId: taskRun.sessionId,
               error: error2,
-              updatedAt: timestamp
+              updatedAt: timestamp2
             }
           },
           taskRuns: context.taskRuns.map(
@@ -25428,19 +25428,19 @@ ${priorOutput}`;
               ...candidate,
               status: "failed",
               error: error2,
-              updatedAt: timestamp,
-              completedAt: timestamp
+              updatedAt: timestamp2,
+              completedAt: timestamp2
             } : candidate
           ),
           pendingSessionIds: taskRun.sessionId ? context.pendingSessionIds.filter((sessionId) => sessionId !== taskRun.sessionId) : context.pendingSessionIds,
-          updatedAt: timestamp,
-          completedAt: timestamp
+          updatedAt: timestamp2,
+          completedAt: timestamp2
         })
       };
     });
   }
   async completeWorkflowContext(workflowContextId) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       return {
@@ -25450,14 +25450,14 @@ ${priorOutput}`;
           status: "completed",
           cursor: { state: "completed" },
           pendingSessionIds: [],
-          updatedAt: timestamp,
-          completedAt: timestamp
+          updatedAt: timestamp2,
+          completedAt: timestamp2
         })
       };
     });
   }
   async markWorkflowContextRepairing(workflowContextId, reason) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       return {
@@ -25465,13 +25465,13 @@ ${priorOutput}`;
         workflowContexts: updateWorkflowContext(
           state.workflowContexts,
           workflowContextId,
-          repairWorkflowContext(context, reason, timestamp)
+          repairWorkflowContext(context, reason, timestamp2)
         )
       };
     });
   }
   async failWorkflowContext(workflowContextId, error2) {
-    const timestamp = this.now();
+    const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const currentStepId = context.cursor.stepId;
@@ -25490,12 +25490,12 @@ ${priorOutput}`;
               ...context.steps[currentStepId],
               status: "failed",
               error: error2,
-              updatedAt: timestamp
+              updatedAt: timestamp2
             }
           } : context.steps,
           pendingSessionIds: [],
-          updatedAt: timestamp,
-          completedAt: timestamp
+          updatedAt: timestamp2,
+          completedAt: timestamp2
         })
       };
     });
@@ -25546,21 +25546,21 @@ function ensureWorkflowContextGraphState(context, contract, input) {
     nodeRuns: createInitialNodeRuns(snapshot, input.timestamp)
   };
 }
-function createWorkflowVerificationState(timestamp) {
+function createWorkflowVerificationState(timestamp2) {
   return {
     status: "not_started",
     validatorResults: [],
     pendingValidatorIds: [],
     idempotencyKeys: [],
-    updatedAt: timestamp
+    updatedAt: timestamp2
   };
 }
-function startWorkflowVerificationState(existing, timestamp) {
-  const verification = existing ?? createWorkflowVerificationState(timestamp);
+function startWorkflowVerificationState(existing, timestamp2) {
+  const verification = existing ?? createWorkflowVerificationState(timestamp2);
   return {
     ...verification,
     status: "running",
-    updatedAt: timestamp
+    updatedAt: timestamp2
   };
 }
 function workflowVerificationAcceptsValidatorWriteback(context, verification) {
@@ -25752,8 +25752,8 @@ function normalizeFormalContractInput(input, id) {
     ...hasProjectBinding ? { projectBinding: normalizedProjectBinding } : {}
   };
 }
-function compileContractWithVerificationInputKind(input, timestamp) {
-  return withVerificationInputKind(compileContract(input, timestamp), verificationInputKind(input.verification));
+function compileContractWithVerificationInputKind(input, timestamp2) {
+  return withVerificationInputKind(compileContract(input, timestamp2), verificationInputKind(input.verification));
 }
 function verificationInputKind(verification) {
   const existing = verificationInputKindMarker(verification);
@@ -26007,7 +26007,7 @@ function findWorkflowContextForValidatorResult(state, runId, input) {
   }
   return context;
 }
-function completeWorkflowContextFromSessionResult(context, input, timestamp, options = {}) {
+function completeWorkflowContextFromSessionResult(context, input, timestamp2, options = {}) {
   const finalize = options.finalize ?? true;
   const targetTaskRun = context.taskRuns.find((taskRun) => matchesWorkflowTaskRun(taskRun, input)) ?? (input.attemptId ? context.taskRuns.find((taskRun) => taskRun.attemptId === input.attemptId) : void 0) ?? context.taskRuns.at(-1);
   const stepId = input.stepId ?? targetTaskRun?.stepId;
@@ -26026,7 +26026,7 @@ function completeWorkflowContextFromSessionResult(context, input, timestamp, opt
         status: taskStatus,
         sessionId,
         ...input.status === "failed" ? { error: input.result ?? input.summary } : input.status === "needs_human" ? { output: void 0, error: void 0 } : { output: input.result ?? input.summary, error: void 0 },
-        updatedAt: timestamp
+        updatedAt: timestamp2
       }
     } : context.steps,
     taskRuns: targetTaskRun ? context.taskRuns.map(
@@ -26036,14 +26036,14 @@ function completeWorkflowContextFromSessionResult(context, input, timestamp, opt
         status: taskStatus,
         ...input.status === "failed" ? { error: input.result ?? input.summary } : input.status === "needs_human" ? { result: void 0, error: void 0 } : { result: input.result ?? input.summary, error: void 0 },
         idempotencyKey: input.idempotencyKey ?? taskRun.idempotencyKey,
-        updatedAt: timestamp,
-        ...taskStatus === "completed" || taskStatus === "failed" ? { completedAt: timestamp } : { completedAt: void 0 }
+        updatedAt: timestamp2,
+        ...taskStatus === "completed" || taskStatus === "failed" ? { completedAt: timestamp2 } : { completedAt: void 0 }
       } : taskRun
     ) : context.taskRuns,
     pendingSessionIds: sessionId ? context.pendingSessionIds.filter((pendingSessionId) => pendingSessionId !== sessionId) : context.pendingSessionIds,
     idempotencyKeys: input.idempotencyKey ? appendUnique(context.idempotencyKeys, input.idempotencyKey) : context.idempotencyKeys,
-    updatedAt: timestamp,
-    ...contextStatus === "completed" || contextStatus === "failed" ? { completedAt: timestamp } : { completedAt: void 0 }
+    updatedAt: timestamp2,
+    ...contextStatus === "completed" || contextStatus === "failed" ? { completedAt: timestamp2 } : { completedAt: void 0 }
   };
 }
 function normalizeWorkflowSessionResultInput(input, taskRun) {
@@ -26083,7 +26083,7 @@ function normalizeRecordedRubricAgentInput(input) {
     }
   };
 }
-function pendingVerificationResultV2(id, runId, attemptId, verification, timestamp) {
+function pendingVerificationResultV2(id, runId, attemptId, verification, timestamp2) {
   const decision = {
     status: "needs_human",
     summary: `Waiting for validator results: ${verification.pendingValidatorIds.join(", ")}`,
@@ -26105,7 +26105,7 @@ function pendingVerificationResultV2(id, runId, attemptId, verification, timesta
     validatorResults: verification.validatorResults,
     decision,
     humanQuestion: decision.humanQuestion,
-    createdAt: timestamp
+    createdAt: timestamp2
   };
 }
 function isVerificationResultV22(result) {
@@ -26375,7 +26375,7 @@ function findWorkflowContextForRepair(state, runId, attemptId) {
   }
   return contexts.at(-1);
 }
-function repairWorkflowContext(context, reason, timestamp) {
+function repairWorkflowContext(context, reason, timestamp2) {
   return {
     ...context,
     status: "repairing",
@@ -26388,7 +26388,7 @@ function repairWorkflowContext(context, reason, timestamp) {
       repairReason: reason
     } : context.vars,
     pendingSessionIds: [],
-    updatedAt: timestamp,
+    updatedAt: timestamp2,
     completedAt: void 0
   };
 }
@@ -26479,7 +26479,7 @@ function terminalRunStateOverridesForPausedReason(state, loopId, pausedReason) {
   }
   return { consecutiveFailures: existingConsecutiveFailures(state, loopId) };
 }
-function applyFailureStopPolicy(state, loopId, timestamp) {
+function applyFailureStopPolicy(state, loopId, timestamp2) {
   const failures = existingConsecutiveFailures(state, loopId);
   const threshold = failureThresholdForLoop(state, loopId);
   if (failures < threshold) {
@@ -26489,10 +26489,10 @@ function applyFailureStopPolicy(state, loopId, timestamp) {
     ...state,
     runs: markLatestFailedRunPausedReason(state.runs, loopId, "failures"),
     loops: state.loops.map(
-      (loop) => loop.id === loopId ? { ...loop, status: "paused", updatedAt: timestamp } : loop
+      (loop) => loop.id === loopId ? { ...loop, status: "paused", updatedAt: timestamp2 } : loop
     ),
     formalContracts: state.formalContracts.map(
-      (contract) => contract.id === loopId ? { ...contract, status: "paused", updatedAt: timestamp } : contract
+      (contract) => contract.id === loopId ? { ...contract, status: "paused", updatedAt: timestamp2 } : contract
     ),
     loopStates: upsertLoopOperationalState(
       state.loopStates,
@@ -26500,16 +26500,16 @@ function applyFailureStopPolicy(state, loopId, timestamp) {
     )
   };
 }
-function applyImmediateStopPolicy(state, loopId, reason, timestamp) {
+function applyImmediateStopPolicy(state, loopId, reason, timestamp2) {
   const failures = existingConsecutiveFailures(state, loopId);
   return {
     ...state,
     runs: markLatestFailedRunPausedReason(state.runs, loopId, reason),
     loops: state.loops.map(
-      (loop) => loop.id === loopId ? { ...loop, status: "paused", updatedAt: timestamp } : loop
+      (loop) => loop.id === loopId ? { ...loop, status: "paused", updatedAt: timestamp2 } : loop
     ),
     formalContracts: state.formalContracts.map(
-      (contract) => contract.id === loopId ? { ...contract, status: "paused", updatedAt: timestamp } : contract
+      (contract) => contract.id === loopId ? { ...contract, status: "paused", updatedAt: timestamp2 } : contract
     ),
     loopStates: upsertLoopOperationalState(
       state.loopStates,
@@ -26636,14 +26636,14 @@ function normalizeProjectBinding(input) {
     projectPath: input.projectPath
   };
 }
-function bindLoopProject(loops, loopId, project, timestamp) {
+function bindLoopProject(loops, loopId, project, timestamp2) {
   if (!project.codexProjectId && !project.projectLabel && !project.projectPath) return loops;
   return loops.map((loop) => {
     if (loop.id !== loopId) return loop;
     return {
       ...loop,
       ...project,
-      updatedAt: timestamp
+      updatedAt: timestamp2
     };
   });
 }
@@ -27740,11 +27740,151 @@ import { spawn as spawn2 } from "node:child_process";
 import { readFile as readFile2 } from "node:fs/promises";
 import { extname, isAbsolute, join as join3, relative as relative2 } from "node:path";
 
+// src/workflowGraph/workflowView.ts
+function buildWorkflowView(detail) {
+  const context = newestWorkflowContext(detail);
+  if (!context) {
+    return void 0;
+  }
+  if (context.executionGraphSnapshot && context.nodeRuns) {
+    return buildGraphWorkflowView(detail, context, context.executionGraphSnapshot, context.nodeRuns);
+  }
+  if (context.taskRuns.length > 0) {
+    return buildLegacyWorkflowView(detail, context);
+  }
+  return void 0;
+}
+function buildGraphWorkflowView(detail, context, graph, nodeRuns) {
+  const runsByNodeId = new Map(nodeRuns.map((nodeRun) => [nodeRun.nodeId, nodeRun]));
+  const nodes = graph.nodes.map((node) => {
+    const nodeRun = runsByNodeId.get(node.nodeId);
+    return {
+      nodeId: node.nodeId,
+      kind: node.kind,
+      label: node.label,
+      status: nodeRun?.status ?? "pending",
+      order: node.order,
+      ...node.sourceStepId ? { sourceStepId: node.sourceStepId } : {},
+      ...node.parentNodeId ? { parentNodeId: node.parentNodeId } : {},
+      ...node.phaseNodeId ? { phaseNodeId: node.phaseNodeId } : {},
+      ...node.runtime ? { runtime: node.runtime } : {},
+      ...node.human ? { human: node.human } : {}
+    };
+  });
+  return {
+    version: 1,
+    runId: detail.run.id,
+    attemptId: context.attemptId,
+    workflowContextId: context.id,
+    contractId: graph.contractId,
+    ...graph.contractRevisionId ? { contractRevisionId: graph.contractRevisionId } : {},
+    snapshotId: graph.snapshotId,
+    graphHash: graph.graphHash,
+    status: context.status,
+    progress: progressForNodes(nodes),
+    nodes,
+    edges: graph.edges,
+    scheduler: {
+      mode: "dual_write",
+      runnableNodeIds: []
+    },
+    humanRequests: humanRequestsForContext(detail, context),
+    ...context.verification ? { verificationSummary: verificationSummaryForContext(context) } : {},
+    auditRefs: auditRefsForRun(detail),
+    updatedAt: context.updatedAt
+  };
+}
+function buildLegacyWorkflowView(detail, context) {
+  const nodes = context.taskRuns.map(legacyNodeForTaskRun);
+  return {
+    version: 1,
+    runId: detail.run.id,
+    attemptId: context.attemptId,
+    workflowContextId: context.id,
+    ...context.contractId ? { contractId: context.contractId } : {},
+    ...context.contractRevisionId ? { contractRevisionId: context.contractRevisionId } : {},
+    status: context.status,
+    progress: progressForNodes(nodes),
+    nodes,
+    edges: [],
+    scheduler: {
+      mode: "legacy",
+      runnableNodeIds: []
+    },
+    humanRequests: humanRequestsForContext(detail, context),
+    ...context.verification ? { verificationSummary: verificationSummaryForContext(context) } : {},
+    auditRefs: auditRefsForRun(detail),
+    updatedAt: context.updatedAt
+  };
+}
+function newestWorkflowContext(detail) {
+  return [...detail.workflowContexts].filter((context) => context.runId === detail.run.id).sort((left, right) => timestamp(right.updatedAt) - timestamp(left.updatedAt))[0];
+}
+function legacyNodeForTaskRun(taskRun, index) {
+  return {
+    nodeId: `legacy/task:${taskRun.id}`,
+    kind: "task",
+    label: taskRun.label ?? taskRun.stepId,
+    status: taskRun.status,
+    order: index + 1,
+    sourceStepId: taskRun.stepId,
+    ...taskRun.phaseId ? { phaseNodeId: taskRun.phaseId } : {},
+    runtime: "codex"
+  };
+}
+function progressForNodes(nodes) {
+  return nodes.reduce(
+    (progress, node) => {
+      progress.total += 1;
+      if (node.status === "completed") progress.completed += 1;
+      if (isRunningStatus(node.status)) progress.running += 1;
+      if (isWaitingStatus(node.status)) progress.waiting += 1;
+      if (node.status === "failed") progress.failed += 1;
+      return progress;
+    },
+    { total: 0, completed: 0, running: 0, waiting: 0, failed: 0 }
+  );
+}
+function isRunningStatus(status) {
+  return status === "running" || status === "dispatching";
+}
+function isWaitingStatus(status) {
+  return status === "suspended" || status === "ready" || status === "waiting_for_session" || status === "waiting_for_human" || status === "waiting_for_validator";
+}
+function humanRequestsForContext(detail, context) {
+  return detail.humanRequests.filter((request) => {
+    if (request.workflowContextId) {
+      return request.workflowContextId === context.id;
+    }
+    if (request.attemptId) {
+      return request.runId === detail.run.id && request.attemptId === context.attemptId;
+    }
+    return request.runId === detail.run.id;
+  });
+}
+function verificationSummaryForContext(context) {
+  return {
+    status: context.verification?.status,
+    pendingValidatorIds: context.verification?.pendingValidatorIds ?? [],
+    resultId: context.verification?.resultId,
+    decision: context.verification?.decision
+  };
+}
+function auditRefsForRun(detail) {
+  return detail.events.filter((event) => event.runId === detail.run.id).map((event) => ({ eventId: event.id, type: event.kind }));
+}
+function timestamp(value) {
+  const parsed = Date.parse(value ?? "");
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 // src/preview/eventAdapter.ts
 function enrichRunDetail(detail) {
   const engineEvents = extractEngineEvents(detail);
+  const workflowView = detail.workflowView ?? buildWorkflowView(detail);
   return {
     ...detail,
+    workflowView,
     engineEvents,
     timeline: buildTimeline(detail, engineEvents)
   };
