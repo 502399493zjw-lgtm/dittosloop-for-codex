@@ -2,11 +2,15 @@
 
 ## Status
 
-Proposed. Aligns the DittosLoop-for-Codex workflow model with the Claude Code (CC)
-dynamic-workflow "script design" mental model, while staying a strict minimal increment on
-top of `2026-06-25-session-first-dynamic-workflow-design.md`. This spec does **not** replace
-the session-first design; it adds an authoring-and-execution surface on top of the existing
-formal contract, step array, `WorkflowContext`, and all-settle engine.
+Superseded for runtime orchestration by
+`2026-06-27-durable-workflow-graph-design.md`. This document remains useful for the restricted
+script/builder authoring decision, but its replay/cache execution notes describe the pre-graph
+migration model and should not be read as current scheduler semantics.
+
+The script/builder front-end still compiles structured authoring input into contract body
+steps. New graph-backed attempts then compile that body into an immutable execution graph and
+advance durable node-run state. Replay/cache behavior is legacy and migration behavior, not the
+primary workflow orchestration model.
 
 ## Background: the CC "script design"
 
@@ -16,7 +20,7 @@ returns a single aggregate value. The orchestration is "visible execution": each
 node the user can watch, and the runtime owns suspend/resume, memoization, and replay. The
 script reads like imperative code but is really a declarative description of a step graph.
 
-DittosLoop already has the *execution* half of that model:
+DittosLoop had the *execution* half of that model before the durable graph migration:
 
 - `runFlow` (engine/runFlow.ts) exposes a `FlowApi` with `phase`, `agent`, `parallel`,
   `log`, `commit`.

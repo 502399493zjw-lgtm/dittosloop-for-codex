@@ -1,10 +1,11 @@
 # Durable Workflow Graph Design
 
-Status: ready for review before implementation planning starts.
+Status: implemented on branch `codex/durable-workflow-graph-design`; retained as
+the design reference for durable workflow orchestration.
 
 ## Context
 
-The current DittosLoop For Codex workflow runtime can complete useful work, but its orchestration model is replay-shaped. `execute_workflow_attempt` runs the stored body again, `runBody` starts from `body.steps`, and `runFlow` skips already completed task steps through `completedStepOutputs`. That prevents duplicate Codex work, but the replay still emits workflow events such as `agent_done` for cached steps. The preview then reads those events back into a task board, so repeated execution can make the UI look unstable even when the business task was not relaunched.
+Before this design, the DittosLoop For Codex workflow runtime could complete useful work, but its orchestration model was replay-shaped. `execute_workflow_attempt` ran the stored body again, `runBody` started from `body.steps`, and `runFlow` skipped already completed task steps through `completedStepOutputs`. That prevented duplicate Codex work, but the replay still emitted workflow events such as `agent_done` for cached steps. The preview then read those events back into a task board, so repeated execution could make the UI look unstable even when the business task was not relaunched.
 
 This is a runtime semantics issue, not only a presentation issue. The next workflow layer should make a stable execution graph and durable node states the source of truth. Events should become an audit trail and compatibility surface, not the thing the preview must parse to understand task state.
 
@@ -29,6 +30,8 @@ This is a runtime semantics issue, not only a presentation issue. The next workf
 - Do not make optional workflow quality-control patterns a top-level product concept. Contract authors may still model extra quality steps as ordinary workflow nodes when the loop requires them.
 
 ## Current Model To Replace
+
+This section documents the pre-graph runtime model that the durable scheduler replaces.
 
 The current path is:
 

@@ -10,7 +10,7 @@ Read this when running an existing loop or writing back task results from a visi
 4. Required profile skills in `requiredSkills` block `start_codex_session` when they are missing or unknown unless the request explicitly sets `allowDegradedProfiles: true`.
 5. Advisory profile skill failures may warn, but they do not block launch.
 6. Use the injected memory excerpt first. When more durable context is useful, call `read_loop_memory` with `loopId`, `limit`, and `offset`.
-7. From that Codex session, use `execute_workflow_attempt` with the returned `runId` and `attemptId` to run the local workflow engine in the same context.
+7. From that Codex session, use `execute_workflow_attempt` with the returned `runId` and `attemptId` to advance the local workflow scheduler in the same context. For graph-backed runs, this is a scheduler tick over durable node state, not a replay of completed work.
 8. Do not create new compatibility runs. Old compatibility runs may still appear in preview state, but new user-visible runs should start with a Codex session request.
 9. Use `start_attempt` only for substantive manual follow-up work outside the normal workflow attempt.
 10. Use `append_event` for meaningful progress notes.
@@ -32,6 +32,8 @@ Include:
 When multiple locators are provided, they must identify the same task run.
 
 Use `needs_human` when the task must suspend for a user decision. `needs_human` suspends the exact task and opens a linked human request when possible.
+
+When a task result is recorded, the runtime updates the targeted node run and may continue newly runnable workflow nodes. For graph-backed runs, inspect the task board through run detail or preview `workflowView`; lifecycle events are audit/history entries and legacy fallback, not the source of task-board truth.
 
 Workflow tasks may call `read_loop_memory` while working. They should return durable observations in task results rather than deciding long-term memory writes themselves.
 
