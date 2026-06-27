@@ -24491,11 +24491,14 @@ ${priorOutput}`;
         };
         return state;
       }
-      if (!codexSession.threadUrl) {
+      const threadUrl = codexSession.threadUrl ?? codexThreadUrl(codexSession.threadId);
+      if (!threadUrl) {
         result = {
           runId,
           status: "unavailable",
-          message: "The Codex session has not been created by the host yet."
+          message: "The Codex session has not been created by the host yet.",
+          launchRequest: codexSessionLaunchRequestForRun(state, run),
+          recordThread: recordCodexThreadInstruction(runId)
         };
         return state;
       }
@@ -24505,17 +24508,23 @@ ${priorOutput}`;
         message: "Codex session is ready to open.",
         threadId: codexSession.threadId,
         threadTitle: codexSession.threadTitle,
-        threadUrl: codexSession.threadUrl
+        threadUrl
+      };
+      const normalizedRun = codexSession.threadUrl === threadUrl ? run : {
+        ...run,
+        updatedAt: timestamp2,
+        codexSession: normalizeCodexSessionThreadUrl(codexSession, threadUrl)
       };
       return {
         ...state,
+        runs: normalizedRun === run ? state.runs : updateRun(state.runs, runId, normalizedRun),
         events: [
           ...state.events,
           lifecycleEvent(this.nextId("event"), runId, "note", "Codex session open requested", timestamp2, {
             codexThread: {
               threadId: codexSession.threadId,
               threadTitle: codexSession.threadTitle,
-              threadUrl: codexSession.threadUrl
+              threadUrl
             }
           })
         ]
@@ -24556,7 +24565,7 @@ ${priorOutput}`;
       const codexThread = {
         threadId: input.threadId,
         threadTitle: input.threadTitle,
-        threadUrl: input.threadUrl
+        threadUrl: input.threadUrl ?? codexThreadUrl(input.threadId)
       };
       updatedRun = {
         ...run,
@@ -26575,6 +26584,49 @@ function verificationCriterionLabel(verification, criterionId) {
     return legacy.rubrics.find((candidate) => candidate.id === criterionId)?.label;
   }
   return verification.criteria.find((candidate) => candidate.id === criterionId)?.label;
+}
+function codexThreadUrl(threadId) {
+  return threadId ? `codex://thread/${threadId}` : void 0;
+}
+function recordCodexThreadInstruction(runId) {
+  return {
+    tool: "record_codex_thread",
+    runId,
+    threadUrlTemplate: "codex://thread/{threadId}"
+  };
+}
+function normalizeCodexSessionThreadUrl(codexSession, threadUrl) {
+  return {
+    ...codexSession,
+    threadUrl,
+    subagents: codexSession.subagents?.map(
+      (subagent) => subagent.threadId && !subagent.threadUrl ? { ...subagent, threadUrl: codexThreadUrl(subagent.threadId) } : subagent
+    )
+  };
+}
+function codexSessionLaunchRequestForRun(state, run) {
+  const prompt = run.codexSession?.prompt;
+  if (!prompt) return void 0;
+  const attempts = state.attempts.filter((attempt2) => attempt2.runId === run.id);
+  const attempt = attempts.find((candidate) => candidate.status === "running") ?? attempts.at(-1);
+  const contexts = state.workflowContexts.filter((context) => context.runId === run.id);
+  const workflowContext = attempt ? contexts.find((context) => context.attemptId === attempt.id) ?? contexts.at(-1) : contexts.at(-1);
+  if (!attempt || !workflowContext) return void 0;
+  const loop = state.loops.find((candidate) => candidate.id === run.loopId);
+  const contract = workflowContext.contractSnapshot ?? state.formalContracts.find((candidate) => candidate.id === run.loopId);
+  const workflowLaunch = contract ? buildWorkflowLaunch(contract) : {};
+  return {
+    runId: run.id,
+    attemptId: attempt.id,
+    workflowContextId: workflowContext.id,
+    loopId: run.loopId,
+    title: `DittosLoop: ${loop?.title ?? run.goal}`,
+    prompt,
+    ...workflowLaunch,
+    codexProjectId: run.codexProjectId ?? run.codexSession?.codexProjectId,
+    projectLabel: run.projectLabel ?? run.codexSession?.projectLabel,
+    projectPath: run.projectPath ?? run.codexSession?.projectPath
+  };
 }
 function isCompletedCodexSession(value) {
   if (!value || typeof value !== "object") return false;

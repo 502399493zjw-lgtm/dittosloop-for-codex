@@ -147,6 +147,12 @@ export interface OpenCodexSessionResult {
   threadId?: string;
   threadTitle?: string;
   threadUrl?: string;
+  launchRequest?: CodexSessionLaunchRequest;
+  recordThread?: {
+    tool: "record_codex_thread";
+    runId: string;
+    threadUrlTemplate: "codex://thread/{threadId}";
+  };
 }
 
 export interface CreateNewLoopSessionInput {
@@ -159,20 +165,22 @@ export interface CodexSessionLaunch {
   run: LoopRun;
   attempt: RunAttempt;
   prompt: string;
-  launchRequest: {
-    runId: string;
-    attemptId: string;
-    workflowContextId: string;
-    loopId: string;
-    title: string;
-    prompt: string;
-    workflowRuntime?: "dittosloop-local-workflow";
-    workflowContractId?: string;
-    workflowPlan?: WorkflowLaunchPlan;
-    codexProjectId?: string;
-    projectLabel?: string;
-    projectPath?: string;
-  };
+  launchRequest: CodexSessionLaunchRequest;
+}
+
+export interface CodexSessionLaunchRequest {
+  runId: string;
+  attemptId: string;
+  workflowContextId: string;
+  loopId: string;
+  title: string;
+  prompt: string;
+  workflowRuntime?: "dittosloop-local-workflow";
+  workflowContractId?: string;
+  workflowPlan?: WorkflowLaunchPlan;
+  codexProjectId?: string;
+  projectLabel?: string;
+  projectPath?: string;
 }
 
 export interface WorkflowLaunchPlanStep {
@@ -1404,11 +1412,14 @@ export class LoopService {
         return state;
       }
 
-      if (!codexSession.threadUrl) {
+      const threadUrl = codexSession.threadUrl ?? codexThreadUrl(codexSession.threadId);
+      if (!threadUrl) {
         result = {
           runId,
           status: "unavailable",
-          message: "The Codex session has not been created by the host yet."
+          message: "The Codex session has not been created by the host yet.",
+          launchRequest: codexSessionLaunchRequestForRun(state, run),
+          recordThread: recordCodexThreadInstruction(runId)
         };
         return state;
       }
@@ -1419,18 +1430,27 @@ export class LoopService {
         message: "Codex session is ready to open.",
         threadId: codexSession.threadId,
         threadTitle: codexSession.threadTitle,
-        threadUrl: codexSession.threadUrl
+        threadUrl
       };
+      const normalizedRun =
+        codexSession.threadUrl === threadUrl
+          ? run
+          : {
+              ...run,
+              updatedAt: timestamp,
+              codexSession: normalizeCodexSessionThreadUrl(codexSession, threadUrl)
+            };
 
       return {
         ...state,
+        runs: normalizedRun === run ? state.runs : updateRun(state.runs, runId, normalizedRun),
         events: [
           ...state.events,
           lifecycleEvent(this.nextId("event"), runId, "note", "Codex session open requested", timestamp, {
             codexThread: {
               threadId: codexSession.threadId,
               threadTitle: codexSession.threadTitle,
-              threadUrl: codexSession.threadUrl
+              threadUrl
             }
           })
         ]
@@ -1479,7 +1499,7 @@ export class LoopService {
       const codexThread = {
         threadId: input.threadId,
         threadTitle: input.threadTitle,
-        threadUrl: input.threadUrl
+        threadUrl: input.threadUrl ?? codexThreadUrl(input.threadId)
       };
       updatedRun = {
         ...run,
@@ -4036,6 +4056,68 @@ type CompletedCodexSessionRef = CodexSessionRef & {
 };
 type CodexSubagentStatus = NonNullable<NonNullable<LoopRun["codexSession"]>["subagents"]>[number]["status"];
 type CodexSessionSubagent = NonNullable<NonNullable<LoopRun["codexSession"]>["subagents"]>[number];
+
+function codexThreadUrl(threadId: string | undefined): string | undefined {
+  return threadId ? `codex://thread/${threadId}` : undefined;
+}
+
+function recordCodexThreadInstruction(runId: string): NonNullable<OpenCodexSessionResult["recordThread"]> {
+  return {
+    tool: "record_codex_thread",
+    runId,
+    threadUrlTemplate: "codex://thread/{threadId}"
+  };
+}
+
+function normalizeCodexSessionThreadUrl(
+  codexSession: NonNullable<LoopRun["codexSession"]>,
+  threadUrl: string
+): NonNullable<LoopRun["codexSession"]> {
+  return {
+    ...codexSession,
+    threadUrl,
+    subagents: codexSession.subagents?.map((subagent) =>
+      subagent.threadId && !subagent.threadUrl
+        ? { ...subagent, threadUrl: codexThreadUrl(subagent.threadId) }
+        : subagent
+    )
+  };
+}
+
+function codexSessionLaunchRequestForRun(
+  state: LoopState,
+  run: LoopRun
+): CodexSessionLaunchRequest | undefined {
+  const prompt = run.codexSession?.prompt;
+  if (!prompt) return undefined;
+
+  const attempts = state.attempts.filter((attempt) => attempt.runId === run.id);
+  const attempt = attempts.find((candidate) => candidate.status === "running") ?? attempts.at(-1);
+  const contexts = state.workflowContexts.filter((context) => context.runId === run.id);
+  const workflowContext = attempt
+    ? contexts.find((context) => context.attemptId === attempt.id) ?? contexts.at(-1)
+    : contexts.at(-1);
+
+  if (!attempt || !workflowContext) return undefined;
+
+  const loop = state.loops.find((candidate) => candidate.id === run.loopId);
+  const contract =
+    workflowContext.contractSnapshot ?? state.formalContracts.find((candidate) => candidate.id === run.loopId);
+  const workflowLaunch = contract ? buildWorkflowLaunch(contract) : {};
+
+  return {
+    runId: run.id,
+    attemptId: attempt.id,
+    workflowContextId: workflowContext.id,
+    loopId: run.loopId,
+    title: `DittosLoop: ${loop?.title ?? run.goal}`,
+    prompt,
+    ...workflowLaunch,
+    codexProjectId: run.codexProjectId ?? run.codexSession?.codexProjectId,
+    projectLabel: run.projectLabel ?? run.codexSession?.projectLabel,
+    projectPath: run.projectPath ?? run.codexSession?.projectPath
+  };
+}
 
 function isCompletedCodexSession(value: unknown): value is CompletedCodexSessionRef {
   if (!value || typeof value !== "object") return false;

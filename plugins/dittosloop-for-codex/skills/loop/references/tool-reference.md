@@ -36,6 +36,10 @@ Read this when exact MCP tool purpose, required fields, or call caveats matter.
 - Use `create_loop_contract` for every new loop.
 - Use `list_loops` before reusing an existing loop.
 - Use `start_codex_session` to create the visible run, attempt, Codex session request, workflow context, and bounded memory excerpt.
+- `start_codex_session` returns a launch request; if no visible Codex thread appears automatically, create one with the returned prompt and call `record_codex_thread`.
+- `open_codex_session` may return `launchRequest` and `recordThread` when the thread has not been attached yet; use them to recover by creating the Codex thread and recording its `threadId`.
+- When only a `threadId` is available, record `threadUrl` as `codex://thread/{threadId}` or let `record_codex_thread` synthesize it.
+- Do not confuse workflow task `sessionId` values with Codex thread ids. `sessionId` is only for `record_session_result` targeting.
 - When `agentProfiles` are present, `start_codex_session` records the effective profile snapshot and runs best-effort local preflight only; it does not provide native Codex skill enforcement.
 - Required profile skills from `requiredSkills` with `missing` or `unknown` status block launch unless `allowDegradedProfiles: true` is passed.
 - Use `execute_workflow_attempt` with the returned `runId` and `attemptId` so run, attempt, workflow context, task runs, and result writeback stay on one path.

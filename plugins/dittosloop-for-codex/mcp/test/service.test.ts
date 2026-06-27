@@ -4388,6 +4388,70 @@ test("opens a Codex session backed run without creating a new run", async () => 
   });
 });
 
+test("opens a recorded Codex thread when only the thread id is provided", async () => {
+  const service = await createService();
+  const formal = await service.createLoopContract({
+    title: "Thread Id Link",
+    goal: "Open a linked Codex thread",
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Start a worker session" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "linked", label: "Linked", requirement: "Session has an openable URL", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Start a worker session" });
+
+  const updated = await service.recordCodexThread(launch.run.id, {
+    threadId: "019ef4e5-21f0-7131-be8c-708f720e49de"
+  });
+  const opened = await service.openCodexSession(launch.run.id);
+
+  expect(updated.codexSession?.threadUrl).toBe("codex://thread/019ef4e5-21f0-7131-be8c-708f720e49de");
+  expect(opened).toMatchObject({
+    runId: launch.run.id,
+    status: "ready",
+    threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
+    threadUrl: "codex://thread/019ef4e5-21f0-7131-be8c-708f720e49de"
+  });
+});
+
+test("returns a host launch request when a Codex session has not been created yet", async () => {
+  const service = await createService();
+  const formal = await service.createLoopContract({
+    title: "Launch Request Check",
+    goal: "Expose how the host should create the visible session",
+    body: {
+      steps: [{ id: "run-worker", kind: "agent", label: "Run worker", prompt: "Start a worker session" }]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "linked", label: "Linked", requirement: "Session launch request is available", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Start a worker session" });
+
+  const opened = await service.openCodexSession(launch.run.id);
+
+  expect(opened).toMatchObject({
+    runId: launch.run.id,
+    status: "unavailable",
+    launchRequest: {
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
+      workflowContextId: launch.launchRequest.workflowContextId,
+      loopId: formal.id,
+      title: "DittosLoop: Launch Request Check",
+      prompt: expect.stringContaining("execute_workflow_attempt")
+    },
+    recordThread: {
+      tool: "record_codex_thread",
+      runId: launch.run.id
+    }
+  });
+});
+
 test("records a default subagent when older session runs have none", async () => {
   const service = await createService();
   const loop = await seedLegacyLoop(service, {
@@ -4422,7 +4486,7 @@ test("records a default subagent when older session runs have none", async () =>
       status: "running",
       threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
       threadTitle: undefined,
-      threadUrl: undefined
+      threadUrl: "codex://thread/019ef4e5-21f0-7131-be8c-708f720e49de"
     }
   ]);
 });
@@ -5221,7 +5285,7 @@ test("profile preflight keeps the launched run on the same contract snapshot use
   ]);
 });
 
-test("does not mark a Codex session ready without an openable thread URL", async () => {
+test("synthesizes an openable Codex URL when a recorded thread only has an id", async () => {
   const service = await createService();
   const loop = await service.createLoopContract({
     title: "Session Link Check",
@@ -5239,10 +5303,12 @@ test("does not mark a Codex session ready without an openable thread URL", async
     threadId: "019ef4e5-21f0-7131-be8c-708f720e49de"
   });
 
-  await expect(service.openCodexSession(launch.run.id)).resolves.toEqual({
+  await expect(service.openCodexSession(launch.run.id)).resolves.toMatchObject({
     runId: launch.run.id,
-    status: "unavailable",
-    message: "The Codex session has not been created by the host yet."
+    status: "ready",
+    message: "Codex session is ready to open.",
+    threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
+    threadUrl: "codex://thread/019ef4e5-21f0-7131-be8c-708f720e49de"
   });
 });
 
