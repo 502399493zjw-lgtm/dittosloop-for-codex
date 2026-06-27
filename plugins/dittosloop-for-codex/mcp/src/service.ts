@@ -1243,7 +1243,7 @@ export class LoopService {
         status: "running",
         codexSession: {
           mode: "new_session",
-          status: "requested",
+          status: codexSessionStatusForPendingWorkflowSession(run.codexSession),
           threadId: run.codexSession?.threadId,
           threadTitle: run.codexSession?.threadTitle,
           threadUrl: run.codexSession?.threadUrl,
@@ -2458,6 +2458,7 @@ export class LoopService {
         const codexSession = run.codexSession
           ? {
               ...run.codexSession,
+              status: status === "failed" ? "failed" as const : "completed" as const,
               subagents: run.codexSession.subagents?.map((subagent) => ({
                 ...subagent,
                 status:
@@ -2482,7 +2483,8 @@ export class LoopService {
 
       const nextState = {
         ...state,
-        runs
+        runs,
+        workflowContexts: completeTerminalWorkflowContextForRun(state, runId, status, timestamp)
       };
       const terminalState = completedRun
         ? applyTerminalRunState(
@@ -4084,6 +4086,25 @@ function normalizeCodexSessionThreadUrl(
   };
 }
 
+function codexSessionStatusForPendingWorkflowSession(
+  codexSession: LoopRun["codexSession"]
+): NonNullable<LoopRun["codexSession"]>["status"] {
+  if (!codexSession) return "requested";
+  if (codexSession.status === "failed" || codexSession.status === "unavailable") {
+    return codexSession.status;
+  }
+  if (
+    codexSession.status === "started" ||
+    codexSession.status === "completed" ||
+    codexSession.threadId ||
+    codexSession.threadUrl
+  ) {
+    return "started";
+  }
+
+  return "requested";
+}
+
 function codexSessionLaunchRequestForRun(
   state: LoopState,
   run: LoopRun
@@ -4931,6 +4952,112 @@ function repairWorkflowContext(context: WorkflowContext, reason: string | undefi
     updatedAt: timestamp,
     completedAt: undefined
   };
+}
+
+function completeTerminalWorkflowContextForRun(
+  state: LoopState,
+  runId: string,
+  status: Extract<RunStatus, "completed" | "failed">,
+  timestamp: string
+): WorkflowContext[] {
+  const targetContext = latestWorkflowContextForRun(state, runId);
+  if (!targetContext) {
+    return state.workflowContexts;
+  }
+
+  const result = latestVerificationResultForContext(state, targetContext);
+  const terminalStatus = status === "failed" ? "failed" : "completed";
+
+  return updateWorkflowContext(state.workflowContexts, targetContext.id, {
+    ...targetContext,
+    status,
+    cursor: { state: terminalStatus },
+    verification: completeWorkflowVerificationState(targetContext.verification, result, terminalStatus, timestamp),
+    nodeRuns: completeTerminalWorkflowNodeRuns(targetContext, terminalStatus, result, timestamp),
+    pendingSessionIds: [],
+    updatedAt: timestamp,
+    completedAt: timestamp
+  });
+}
+
+function latestWorkflowContextForRun(state: LoopState, runId: string): WorkflowContext | undefined {
+  const contexts = state.workflowContexts.filter((context) => context.runId === runId);
+  if (contexts.length === 0) {
+    return undefined;
+  }
+
+  const latestAttempt = state.attempts.filter((attempt) => attempt.runId === runId).at(-1);
+  if (!latestAttempt) {
+    return contexts.at(-1);
+  }
+
+  return contexts.filter((context) => context.attemptId === latestAttempt.id).at(-1) ?? contexts.at(-1);
+}
+
+function latestVerificationResultForContext(
+  state: LoopState,
+  context: WorkflowContext
+): LoopState["verificationResults"][number] | undefined {
+  return [...state.verificationResults]
+    .reverse()
+    .find(
+      (result) =>
+        result.runId === context.runId &&
+        (!result.attemptId || result.attemptId === context.attemptId)
+    );
+}
+
+function completeWorkflowVerificationState(
+  existing: WorkflowVerificationState | undefined,
+  result: LoopState["verificationResults"][number] | undefined,
+  status: "completed" | "failed",
+  timestamp: string
+): WorkflowVerificationState {
+  const verification = existing ?? createWorkflowVerificationState(timestamp);
+
+  return {
+    ...verification,
+    status,
+    pendingValidatorIds: [],
+    ...(isVerificationResultV2(result)
+      ? {
+          validatorResults: result.validatorResults,
+          decision: result.decision
+        }
+      : {}),
+    ...(result ? { resultId: result.id } : {}),
+    updatedAt: timestamp
+  };
+}
+
+function completeTerminalWorkflowNodeRuns(
+  context: WorkflowContext,
+  status: "completed" | "failed",
+  result: LoopState["verificationResults"][number] | undefined,
+  timestamp: string
+): WorkflowNodeRun[] | undefined {
+  if (!context.executionGraphSnapshot || !context.nodeRuns) {
+    return context.nodeRuns;
+  }
+
+  const nodesById = new Map(context.executionGraphSnapshot.nodes.map((node) => [node.nodeId, node]));
+  const nodeRuns = context.nodeRuns.map((nodeRun) => {
+    const node = nodesById.get(nodeRun.nodeId);
+    if (!node || (node.kind !== "root" && node.kind !== "verification")) {
+      return nodeRun;
+    }
+
+    return {
+      ...nodeRun,
+      status,
+      ...(node.kind === "verification" && result ? { output: result.summary } : {}),
+      startedAt: nodeRun.startedAt ?? timestamp,
+      updatedAt: timestamp,
+      completedAt: timestamp
+    };
+  });
+
+  return advanceContainerNodeRuns(context.executionGraphSnapshot, nodeRuns, timestamp);
 }
 
 function requireWorkflowTaskRun(context: WorkflowContext, taskRunId: string): WorkflowTaskRun {

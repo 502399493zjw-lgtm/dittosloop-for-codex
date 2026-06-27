@@ -2468,6 +2468,51 @@ test("executes a visible session workflow attempt through the same attempt and s
   });
 });
 
+test("keeps the outer Codex session started when a recorded thread waits on workflow work", async () => {
+  const { bridge } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const service = new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await createFormalLoop(service, {
+    title: "AI Dev Tools Update Monitor",
+    goal: "Watch release updates and Twitter/X signals"
+  });
+  const launch = await service.startCodexSessionRun(loop.id, {
+    goal: "Check today updates"
+  });
+  await service.recordCodexThread(launch.run.id, {
+    threadId: "thread_outer",
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+    threadUrl: "codex://thread/thread_outer"
+  });
+
+  const run = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id
+  });
+
+  expect(run).toMatchObject({
+    id: launch.run.id,
+    status: "running",
+    codexSession: {
+      status: "started",
+      threadId: "thread_outer",
+      threadUrl: "codex://thread/thread_outer",
+      subagents: [{ role: "Run worker", status: "requested", sessionId: "session_1" }]
+    }
+  });
+});
+
 test("v2 worker session result cannot complete a run before validator results exist", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await service.createLoopContract(v2RubricAgentLoopInput());
@@ -2561,6 +2606,51 @@ test("recordValidatorResult finalizes v2 verification from a separate rubric age
           pendingValidatorIds: [],
           resultId: verification.id
         }
+      }
+    ]
+  });
+});
+
+test("manual verification completion keeps workflow view and codex session terminal", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract(v2RubricAgentLoopInput());
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  const verification = await service.recordVerification(launch.run.id, {
+    attemptId: launch.attempt.id,
+    status: "passed",
+    summary: "Manual review passed"
+  });
+  await service.completeAttempt(launch.attempt.id, {
+    status: "completed",
+    summary: "Manual review passed"
+  });
+  await service.completeRun(launch.run.id, { status: "completed" });
+
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "completed", codexSession: { status: "completed" } },
+    verificationResults: [{ id: verification.id, status: "passed" }],
+    workflowContexts: [
+      {
+        status: "completed",
+        cursor: { state: "completed" },
+        verification: {
+          status: "completed",
+          pendingValidatorIds: [],
+          resultId: verification.id
+        },
+        nodeRuns: expect.arrayContaining([
+          expect.objectContaining({ nodeId: "root", status: "completed" }),
+          expect.objectContaining({ nodeId: "root/verification", status: "completed" })
+        ])
       }
     ]
   });
