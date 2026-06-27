@@ -75,3 +75,20 @@ test("loop skill docs describe profile-based codex workflows and the generated l
   assert.match(toolReference, /requiredSkills/);
   assert.match(skill, /create_loop_contract/);
 });
+
+test("create loop guidance describes clarification, creation, and preview handoff", async () => {
+  const createLoop = await readSkillFile("references/create-loop.md");
+
+  assert.match(createLoop, /## Creation Method/);
+  assert.match(createLoop, /Restate the inferred loop goal, boundary, trigger, and expected outputs/);
+  assert.match(createLoop, /Make reasonable defaults for low-risk details/);
+  assert.match(
+    createLoop,
+    /safety, permissions, cost, destructive actions, external side effects, project binding, or verification/
+  );
+  assert.match(createLoop, /compact contract draft/);
+  assert.match(createLoop, /get_preview_url/);
+  assert.match(createLoop, /loopId/);
+  assert.match(createLoop, /local DittosLoop board URL/);
+  assert.match(createLoop, /local board URL could not be retrieved/);
+});
