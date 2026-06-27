@@ -294,7 +294,8 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("/codex-session");
   expect(app).toContain("/api/new-loop-session");
   expect(app).toContain("已复制成功，请打开 Codex 新会话粘贴构建。");
-  expect(app).toContain("复制启动请求");
+  expect(app).toContain("}, \"创建并复制启动请求\"),");
+  expect(app).not.toContain("}, \"复制启动请求\"),");
   expect(app).toContain("已复制启动提示，请打开 Codex 新会话粘贴运行。");
   expect(app).toContain("sessionActionForRun");
   expect(app).toContain("window.__dittosloopLastLaunchPrompt");

@@ -658,7 +658,7 @@ function renderLoopStage({ snapshot, detail }) {
       el("span", "trigger-actions", [
         button("ghost-button launch-button", () => {
           void copyLoopLaunchPrompt(loop);
-        }, "复制启动请求"),
+        }, "创建并复制启动请求"),
         button("danger-button", () => {
           void deleteLoop(loop);
         }, "删除")
