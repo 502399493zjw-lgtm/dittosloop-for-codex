@@ -449,6 +449,81 @@
     }
   },
   {
+    "id": "hook-session-brief",
+    "title": "会话启动简报",
+    "category": "operations",
+    "cadence": "event",
+    "desc": "每次打开或恢复 AI 工作台时输出日期、天气、日程和提醒",
+    "trigger": "打开或恢复 AI 工作台时",
+    "checks": [
+      "无法读取日程时降级为时间、天气和提醒",
+      "启动简报不阻塞会话",
+      "外部日历连接失败时有明确说明"
+    ],
+    "buildPrompt": "请用 DittosLoop For Codex 创建一个循环。标题：会话启动简报。意图：每次打开或恢复 AI 工作台时输出一段今日简报，包含日期、时间、天气、日程和一句简短提醒；如果无法读取日程，就降级为时间、天气和提醒，不要报错中断会话。触发：打开或恢复 AI 工作台时。验证检查：（1）无法读取日程时降级为时间、天气和提醒 （2）启动简报不阻塞会话 （3）外部日历连接失败时有明确说明。请调用 create_loop 创建该循环；创建后调用 get_preview_url 打开预览，并把 loopId 告诉我。",
+    "source": {
+      "label": "数字生命卡兹克",
+      "url": "https://x.com/khazix0918/status/2070403772703285575?s=46"
+    }
+  },
+  {
+    "id": "hook-inbox-file-triage",
+    "title": "文件收件箱分诊",
+    "category": "operations",
+    "cadence": "event",
+    "desc": "监听 Inbox/Downloads 新文件，识别类型并给出命名与归档建议，默认 dry-run",
+    "trigger": "Inbox/Downloads 有新文件进入时",
+    "checks": [
+      "等待文件写入完成后再分析",
+      "默认只输出整理计划，不移动或删除文件",
+      "移动、删除、重命名前必须先确认",
+      "归档建议可追溯到文件类型或内容依据"
+    ],
+    "buildPrompt": "请用 DittosLoop For Codex 创建一个循环。标题：文件收件箱分诊。意图：监听 Inbox/Downloads 新文件，等待文件写入完成后识别文件类型和大致内容，给出建议文件名和归档目录；第一版默认 dry-run，只输出整理计划，不移动、删除或重命名文件，任何移动、删除、重命名前必须先确认。触发：Inbox/Downloads 有新文件进入时。验证检查：（1）等待文件写入完成后再分析 （2）默认只输出整理计划，不移动或删除文件 （3）移动、删除、重命名前必须先确认 （4）归档建议可追溯到文件类型或内容依据。请调用 create_loop 创建该循环；创建后调用 get_preview_url 打开预览，并把 loopId 告诉我。",
+    "source": {
+      "label": "数字生命卡兹克",
+      "url": "https://x.com/khazix0918/status/2070403772703285575?s=46"
+    }
+  },
+  {
+    "id": "hook-long-session-break",
+    "title": "久坐提醒",
+    "category": "personal",
+    "cadence": "recurring",
+    "desc": "AI 编程会话持续运行超过固定时长时提醒休息，不打断当前任务",
+    "trigger": "AI 编程会话持续运行超过 60 分钟后每 60 分钟",
+    "checks": [
+      "按固定间隔提醒",
+      "不打断当前任务执行",
+      "会话结束后停止提醒",
+      "通知文案简短"
+    ],
+    "buildPrompt": "请用 DittosLoop For Codex 创建一个循环。标题：久坐提醒。意图：当 AI 编程会话持续运行超过 60 分钟时发送简短提醒，之后每 60 分钟提醒一次；提醒不打断当前任务执行，如果会话结束就停止提醒。触发：AI 编程会话持续运行超过 60 分钟后每 60 分钟。验证检查：（1）按固定间隔提醒 （2）不打断当前任务执行 （3）会话结束后停止提醒 （4）通知文案简短。请调用 create_loop 创建该循环；创建后调用 get_preview_url 打开预览，并把 loopId 告诉我。",
+    "source": {
+      "label": "数字生命卡兹克",
+      "url": "https://x.com/khazix0918/status/2070403772703285575?s=46"
+    }
+  },
+  {
+    "id": "hook-task-completion-push",
+    "title": "长任务完成推送",
+    "category": "operations",
+    "cadence": "event",
+    "desc": "长任务完成、失败或等待输入时发送系统或手机通知，减少盯终端等待",
+    "trigger": "长任务完成、失败或等待输入时",
+    "checks": [
+      "通知区分成功完成、执行失败和等待输入",
+      "推送通道已用测试任务验证",
+      "外部 webhook 或 Bark URL 不写入仓库",
+      "失败原因可读"
+    ],
+    "buildPrompt": "请用 DittosLoop For Codex 创建一个循环。标题：长任务完成推送。意图：当长任务成功完成、执行失败或等待输入时发送系统通知或手机推送，减少守着终端等待；如果接入 Bark 或外部 webhook，URL 由我提供，并且不得写入仓库或输出到持久文件。触发：长任务完成、失败或等待输入时。验证检查：（1）通知区分成功完成、执行失败和等待输入 （2）推送通道已用测试任务验证 （3）外部 webhook 或 Bark URL 不写入仓库 （4）失败原因可读。请调用 create_loop 创建该循环；创建后调用 get_preview_url 打开预览，并把 loopId 告诉我。",
+    "source": {
+      "label": "数字生命卡兹克",
+      "url": "https://x.com/khazix0918/status/2070403772703285575?s=46"
+    }
+  },
+  {
     "id": "awesome-kill-flaky-tests",
     "title": "清理不稳定测试",
     "category": "engineering",

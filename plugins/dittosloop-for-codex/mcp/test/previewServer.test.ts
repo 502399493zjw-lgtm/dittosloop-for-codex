@@ -709,9 +709,9 @@ test("bundled templates cover common categories and cadence modes", async () => 
 
   expect(templates.length).toBeGreaterThanOrEqual(107);
   expect(new Set(templates.map((template) => template.category))).toEqual(
-    new Set(["engineering", "product", "documentation", "operations", "research", "content", "evaluation", "design"])
+    new Set(["engineering", "product", "documentation", "operations", "personal", "research", "content", "evaluation", "design"])
   );
-  expect(new Set(templates.map((template) => template.cadence))).toEqual(new Set(["manual", "recurring"]));
+  expect(new Set(templates.map((template) => template.cadence))).toEqual(new Set(["manual", "event", "recurring"]));
   expect(templates.filter((template) => template.id?.startsWith("awesome-"))).toHaveLength(18);
   expect(templates.filter((template) => template.id?.startsWith("ff-"))).toHaveLength(64);
   expect(templates.map((template) => template.id)).toEqual(

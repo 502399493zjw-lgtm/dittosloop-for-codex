@@ -46,6 +46,7 @@ const templateFilters = {
     { id: "product", label: "产品" },
     { id: "documentation", label: "文档" },
     { id: "operations", label: "运营" },
+    { id: "personal", label: "个人" },
     { id: "research", label: "研究" },
     { id: "content", label: "内容" },
     { id: "evaluation", label: "评估" },
@@ -54,6 +55,7 @@ const templateFilters = {
   cadences: [
     { id: "all", label: "全部循环" },
     { id: "manual", label: "手动触发" },
+    { id: "event", label: "事件触发" },
     { id: "recurring", label: "周期循环" }
   ]
 };
@@ -388,6 +390,7 @@ function templateCategoryLabel(category) {
     operations: "运营",
     documentation: "文档",
     product: "产品",
+    personal: "个人",
     research: "研究",
     content: "内容",
     evaluation: "评估",
