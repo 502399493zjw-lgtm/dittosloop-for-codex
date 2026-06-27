@@ -3,14 +3,10 @@ import { effectiveProfileToSubagent, resolveEffectiveProfilesByStep } from "../c
 import { runBody } from "../engine/runBody.js";
 import { runFlow } from "../engine/runFlow.js";
 import type { EngineEvent, EngineEventInput, Executor, WorkflowExecutionPlan, WorkflowExecutionPlanStep } from "../engine/types.js";
+import { runContractVerification } from "./contractVerification.js";
 import { shouldRepair as decideRepair } from "./repair.js";
-import {
-  runVerificationV2,
-  type CommandExecutor,
-  type RunVerificationV2Event,
-  type VerificationResultV2
-} from "./verificationV2.js";
-import { createPassedDecision, type VerificationDecision } from "./verifier.js";
+import { type CommandExecutor, type VerificationResultV2 } from "./verificationV2.js";
+import type { VerificationDecision } from "./verifier.js";
 
 export interface LoopRunnerOptions {
   executor: Executor;
@@ -72,12 +68,14 @@ export class LoopRunner {
     );
     const attemptId = request.attemptId ?? `attempt_${request.attemptNumber ?? 1}`;
     emitRuntimeEvent({ type: "verification_started", attemptId });
-    const verification = await this.verify({
+    const verification = await runContractVerification({
       contract: request.contract,
       result: flowResult.result,
       runId: request.runId,
       attemptId,
       now,
+      verifier: this.options.verifier,
+      commandExecutor: this.options.commandExecutor,
       emit: emitRuntimeEvent
     });
     emitRuntimeEvent({ type: "verification_done", attemptId, decision: verification });
@@ -113,66 +111,9 @@ export class LoopRunner {
     };
   }
 
-  private async verify(input: {
-    contract: FormalLoopContract;
-    result: unknown;
-    runId: string;
-    attemptId: string;
-    now: () => string;
-    emit: (event: EngineEventInput) => void;
-  }): Promise<VerificationDecision | VerificationResultV2> {
-    const { contract, result } = input;
-
-    if (contract.verification.version === 2) {
-      return runVerificationV2({
-        id: `${input.runId}:${input.attemptId}:verification`,
-        runId: input.runId,
-        attemptId: input.attemptId,
-        createdAt: input.now(),
-        policy: contract.verification,
-        workflowResult: result,
-        projectPath: contract.projectBinding?.projectPath,
-        commandExecutor: this.options.commandExecutor,
-        emit: (event) => input.emit(toEngineVerificationEvent(event, input.attemptId))
-      });
-    }
-
-    if (this.options.verifier) {
-      return this.options.verifier({ contract, result });
-    }
-
-    const legacyVerification = contract.verification as unknown as { rubrics?: Array<{ id: string }> };
-    return createPassedDecision("No verifier configured; workflow completed.", (legacyVerification.rubrics ?? []).map((rubric) => ({
-      rubricId: rubric.id
-    })));
-  }
 }
 
-function toEngineVerificationEvent(event: RunVerificationV2Event, attemptId: string): EngineEventInput {
-  if (event.type === "validator_started") {
-    return {
-      type: "validator_started",
-      attemptId,
-      validatorId: event.validatorId,
-      validatorType: event.validatorType,
-      label: event.label
-    };
-  }
-  if (event.type === "validator_done") {
-    return {
-      type: "validator_done",
-      attemptId,
-      result: event.result
-    };
-  }
-  return {
-    type: "verification_decided",
-    attemptId,
-    decision: event.decision
-  };
-}
-
-function buildWorkflowExecutionPlan(contract: FormalLoopContract): WorkflowExecutionPlan {
+export function buildWorkflowExecutionPlan(contract: FormalLoopContract): WorkflowExecutionPlan {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
 
   return {

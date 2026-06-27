@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { compileContract } from "../src/contract/compileContract.js";
 import { compileExecutionGraph } from "../src/workflowGraph/compileGraph.js";
 import { createInitialNodeRuns } from "../src/workflowGraph/nodeRuns.js";
+import { buildPipelineInputSnapshot, deriveRunnableNodeIds } from "../src/workflowGraph/scheduler.js";
 import { buildWorkflowView } from "../src/workflowGraph/workflowView.js";
 import type { RunDetail } from "../src/types.js";
 
@@ -225,3 +226,95 @@ describe("workflow view", () => {
     });
   });
 });
+
+describe("workflow graph scheduler", () => {
+  test("scheduler returns only the next sequential runnable task", () => {
+    const { graph, nodeRuns } = makeSequentialGraphState(["draft", "review"]);
+
+    expect(deriveRunnableNodeIds(graph, nodeRuns)).toEqual(["root/task:draft"]);
+
+    const afterDraft = nodeRuns.map((nodeRun) =>
+      nodeRun.nodeId === "root/task:draft" ? { ...nodeRun, status: "completed" as const } : nodeRun
+    );
+
+    expect(deriveRunnableNodeIds(graph, afterDraft)).toEqual(["root/task:review"]);
+  });
+
+  test("pipeline input snapshot freezes upstream output before dispatch", () => {
+    const { graph, nodeRuns } = makePipelineGraphState({ draftOutput: "DRAFT-OUTPUT" });
+
+    expect(buildPipelineInputSnapshot(graph, nodeRuns, "root/phase:produce/task:review")).toEqual({
+      upstream: [{ nodeId: "root/phase:produce/task:draft", sourceStepId: "draft", output: "DRAFT-OUTPUT" }]
+    });
+  });
+});
+
+function makeSequentialGraphState(stepIds: string[]) {
+  const contract = compileContract(
+    {
+      id: "loop_scheduler_sequential",
+      title: "Scheduler sequential",
+      goal: "Derive runnable sequential nodes",
+      body: {
+        steps: stepIds.map((stepId) => ({
+          id: stepId,
+          kind: "task" as const,
+          runtime: "codex" as const,
+          label: stepId,
+          prompt: stepId
+        }))
+      },
+      verification: { mode: "after_workflow", rubrics: [] }
+    },
+    fixedTime
+  );
+  const graph = compileExecutionGraph({
+    contract,
+    runId: "run_1",
+    attemptId: "attempt_1",
+    workflowContextId: "workflow_1",
+    compiledAt: fixedTime,
+    snapshotId: "graph_1"
+  });
+  return { graph, nodeRuns: createInitialNodeRuns(graph, fixedTime) };
+}
+
+function makePipelineGraphState(input: { draftOutput: string }) {
+  const contract = compileContract(
+    {
+      id: "loop_scheduler_pipeline",
+      title: "Scheduler pipeline",
+      goal: "Freeze pipeline inputs",
+      body: {
+        steps: [
+          {
+            id: "produce",
+            kind: "phase",
+            label: "Produce",
+            pipeline: true,
+            children: [
+              { id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft" },
+              { id: "review", kind: "task", runtime: "codex", label: "Review", prompt: "Review" }
+            ]
+          }
+        ]
+      },
+      verification: { mode: "after_workflow", rubrics: [] }
+    },
+    fixedTime
+  );
+  const graph = compileExecutionGraph({
+    contract,
+    runId: "run_1",
+    attemptId: "attempt_1",
+    workflowContextId: "workflow_1",
+    compiledAt: fixedTime,
+    snapshotId: "graph_1"
+  });
+  const nodeRuns = createInitialNodeRuns(graph, fixedTime).map((nodeRun) =>
+    nodeRun.nodeId === "root/phase:produce/task:draft"
+      ? { ...nodeRun, status: "completed" as const, output: input.draftOutput }
+      : nodeRun
+  );
+  return { graph, nodeRuns };
+}

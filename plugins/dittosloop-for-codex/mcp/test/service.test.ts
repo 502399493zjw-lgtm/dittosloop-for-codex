@@ -2946,6 +2946,53 @@ test("duplicate workflow task writeback does not duplicate node-run completion",
   expect(secondCollectRun?.completedAt).toBe(firstCollectRun?.completedAt);
 });
 
+test("scheduler resumes a sequential workflow without replaying completed nodes", async () => {
+  const { service, requests } = await createPendingServiceWithSequentialIds();
+  const loop = await service.createLoopContract({
+    title: "Scheduler sequential",
+    goal: "Resume from node runs",
+    body: {
+      steps: [
+        { id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft" },
+        { id: "review", kind: "task", runtime: "codex", label: "Review", prompt: "Review" }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run scheduler sequential" });
+
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_1",
+    stepId: "draft",
+    idempotencyKey: "draft:done",
+    status: "passed",
+    summary: "Draft done",
+    result: "DRAFT"
+  });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  expect(requests.map((request) => request.stepId)).toEqual(["draft", "review"]);
+  const detail = await service.getRunDetail(launch.run.id);
+  const agentDoneEvents = detail.events
+    .map((event) => event.data?.engineEvent)
+    .filter((event: any) => event?.type === "agent_done" && event.stepId === "draft");
+  expect(agentDoneEvents).toHaveLength(0);
+  expect(detail.workflowContexts[0].nodeRuns?.find((nodeRun) => nodeRun.nodeId === "root/task:draft")).toMatchObject({
+    status: "completed",
+    output: "DRAFT"
+  });
+  expect(detail.workflowContexts[0].nodeRuns?.find((nodeRun) => nodeRun.nodeId === "root/task:review")).toMatchObject({
+    status: "waiting_for_session",
+    sessionId: "session_2"
+  });
+});
+
 test("rejects session result writeback when workflowContextId and attemptId disagree", async () => {
   const { bridge } = createPendingSessionBridge();
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));

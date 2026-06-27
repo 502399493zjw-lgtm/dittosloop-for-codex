@@ -15,8 +15,9 @@ import type {
   VerificationPolicyV2
 } from "./contract/types.js";
 import { validateContract } from "./contract/validateContract.js";
-import type { AgentRequest, AgentResult, EngineEvent, Executor } from "./engine/types.js";
-import { LoopRunner, type LoopRunResult, type LoopVerifier } from "./runner/loopRunner.js";
+import type { AgentRequest, AgentResult, EngineEvent, EngineEventInput, Executor } from "./engine/types.js";
+import { buildWorkflowExecutionPlan, LoopRunner, type LoopRunResult, type LoopVerifier } from "./runner/loopRunner.js";
+import { runContractVerification } from "./runner/contractVerification.js";
 import { shouldRepair } from "./runner/repair.js";
 import type { VerificationDecision, VerificationDecisionStatus } from "./runner/verifier.js";
 import {
@@ -62,6 +63,14 @@ import {
   updateNodeRunForTaskSession,
   updateNodeRunForTaskWaitingForSession
 } from "./workflowGraph/nodeRuns.js";
+import {
+  advanceContainerNodeRuns,
+  buildPipelineInputSnapshot,
+  deriveRunnableNodeIds,
+  startAncestorContainerNodeRuns,
+  workflowNodesComplete
+} from "./workflowGraph/scheduler.js";
+import type { ExecutionGraphNode, ExecutionGraphSnapshot, WorkflowNodeRun } from "./workflowGraph/types.js";
 
 export interface LoopServiceOptions {
   store: LoopStore;
@@ -508,6 +517,14 @@ export class LoopService {
       await this.startPendingRubricAgentValidators(run, workflowContext, contract.verification);
       return (await this.getRunDetail(runId)).run;
     }
+    if (
+      !input.executor &&
+      workflowContext.executionGraphSnapshot &&
+      workflowContext.nodeRuns &&
+      canUseGraphScheduler(workflowContext.executionGraphSnapshot)
+    ) {
+      return this.executeGraphWorkflowAttempt(run, attempt, workflowContext, contract, input);
+    }
     const engineEvents: EngineEvent[] = [];
     const runner = new LoopRunner({
       executor: input.executor ?? this.createWorkflowContextExecutor(run, attempt.id, workflowContext.id),
@@ -590,6 +607,410 @@ export class LoopService {
     });
     finalRun = await this.completeRun(runId, { status: "failed" });
     return finalRun;
+  }
+
+  private async executeGraphWorkflowAttempt(
+    run: LoopRun,
+    attempt: RunAttempt,
+    workflowContext: WorkflowContext,
+    contract: FormalLoopContract,
+    input: ExecuteWorkflowAttemptInput
+  ): Promise<LoopRun> {
+    let sequence = latestEngineEventSequence((await this.getRunDetail(run.id)).events);
+    const nextEngineEvent = <TEvent extends EngineEvent>(
+      event: Omit<TEvent, "runId" | "createdAt" | "sequence">
+    ): TEvent => ({
+      ...event,
+      runId: run.id,
+      createdAt: this.now(),
+      sequence: ++sequence
+    } as TEvent);
+
+    let currentRun = run;
+    let currentContext = workflowContext;
+
+    while (true) {
+      currentContext = await this.advanceGraphWorkflowContainers(currentContext.id, nextEngineEvent);
+      const state = await this.options.store.readState();
+      currentRun = requireRun(state, run.id);
+      currentContext = requireWorkflowContext(state, currentContext.id);
+      if (!currentContext.executionGraphSnapshot || !currentContext.nodeRuns) {
+        return currentRun;
+      }
+      if (currentContext.status === "completed") {
+        return currentRun;
+      }
+      if (currentContext.status === "failed") {
+        throw new Error(`Workflow context already failed: ${currentContext.id}`);
+      }
+      if (hasOpenWorkflowSessions(currentContext)) {
+        return currentRun;
+      }
+
+      const snapshot = currentContext.executionGraphSnapshot;
+      const runnableNodeIds = deriveRunnableNodeIds(snapshot, currentContext.nodeRuns);
+      const runnableTaskNode = runnableNodeIds
+        .map((nodeId) => snapshot.nodes.find((node) => node.nodeId === nodeId))
+        .find((node): node is ExecutionGraphNode => {
+          return node !== undefined && (node.kind === "task" || node.kind === "human");
+        });
+      if (runnableTaskNode) {
+        const bridge = this.options.sessionBridge;
+        if (!bridge) {
+          throw new Error("No workflow executor or Codex session bridge is configured.");
+        }
+
+        currentContext = await this.startGraphWorkflowContainersForNode(
+          currentContext.id,
+          runnableTaskNode.nodeId,
+          nextEngineEvent
+        );
+        if (!currentContext.nodeRuns) {
+          return currentRun;
+        }
+        const inputSnapshot = buildPipelineInputSnapshot(snapshot, currentContext.nodeRuns, runnableTaskNode.nodeId);
+        if (inputSnapshot) {
+          currentContext = await this.recordWorkflowNodeInputSnapshot(currentContext.id, runnableTaskNode.nodeId, inputSnapshot);
+        }
+
+        const request = await this.buildGraphAgentRequest(currentRun, attempt, currentContext, contract, runnableTaskNode);
+        await this.recordEngineEvents(run.id, [
+          nextEngineEvent<Extract<EngineEvent, { type: "agent_started" }>>({
+            type: "agent_started",
+            label: request.label,
+            prompt: request.prompt,
+            stepId: request.stepId,
+            nodeId: runnableTaskNode.nodeId,
+            phaseId: request.phaseId,
+            pipeline: request.pipeline,
+            human: request.human
+          })
+        ]);
+
+        try {
+          const result = await this.runCodexSessionStep(bridge, currentRun, request, {
+            attemptId: attempt.id,
+            workflowContextId: currentContext.id
+          });
+          const session = result.data?.session;
+          const agentDoneEvent = nextEngineEvent<Extract<EngineEvent, { type: "agent_done" }>>({
+            type: "agent_done",
+            label: request.label,
+            result: result.text,
+            stepId: request.stepId,
+            nodeId: runnableTaskNode.nodeId,
+            phaseId: request.phaseId,
+            pipeline: request.pipeline,
+            human: request.human,
+            session
+          });
+          await this.recordEngineEvents(run.id, [agentDoneEvent]);
+          await this.recordCompletedCodexSessions(run.id, [agentDoneEvent]);
+          continue;
+        } catch (error) {
+          if (isCodexSessionPendingError(error)) {
+            return this.markRunWaitingForCodexSession(run.id, error.session);
+          }
+
+          const message = error instanceof Error ? error.message : String(error);
+          await this.recordEngineEvents(run.id, [
+            nextEngineEvent<Extract<EngineEvent, { type: "agent_failed" }>>({
+              type: "agent_failed",
+              label: request.label,
+              stepId: request.stepId,
+              phaseId: request.phaseId,
+              error: message
+            })
+          ]);
+          await this.failWorkflowContext(currentContext.id, message);
+          await this.completeAttempt(attempt.id, { status: "failed", summary: message });
+          await this.completeRun(run.id, { status: "failed" });
+          throw error;
+        }
+      }
+
+      const runsByNodeId = new Map(currentContext.nodeRuns.map((nodeRun) => [nodeRun.nodeId, nodeRun]));
+      if (workflowNodesComplete(snapshot, runsByNodeId)) {
+        return this.verifyGraphWorkflowCompletion(currentRun, attempt, currentContext, contract, input, nextEngineEvent);
+      }
+
+      return currentRun;
+    }
+  }
+
+  private async advanceGraphWorkflowContainers(
+    workflowContextId: string,
+    nextEngineEvent: <TEvent extends EngineEvent>(event: Omit<TEvent, "runId" | "createdAt" | "sequence">) => TEvent
+  ): Promise<WorkflowContext> {
+    const timestamp = this.now();
+    let nextContext: WorkflowContext | undefined;
+    let transitionEvents: EngineEvent[] = [];
+
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      if (!context.executionGraphSnapshot || !context.nodeRuns) {
+        nextContext = context;
+        return state;
+      }
+
+      const previousNodeRuns = context.nodeRuns;
+      const nodeRuns = advanceContainerNodeRuns(context.executionGraphSnapshot, context.nodeRuns, timestamp);
+      transitionEvents = containerTransitionEngineEvents(
+        context.executionGraphSnapshot,
+        previousNodeRuns,
+        nodeRuns,
+        nextEngineEvent
+      );
+      nextContext = {
+        ...context,
+        nodeRuns,
+        updatedAt: timestamp
+      };
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
+      };
+    });
+
+    if (transitionEvents.length > 0 && nextContext) {
+      await this.recordEngineEvents(nextContext.runId, transitionEvents);
+    }
+
+    return nextContext!;
+  }
+
+  private async startGraphWorkflowContainersForNode(
+    workflowContextId: string,
+    nodeId: string,
+    nextEngineEvent: <TEvent extends EngineEvent>(event: Omit<TEvent, "runId" | "createdAt" | "sequence">) => TEvent
+  ): Promise<WorkflowContext> {
+    const timestamp = this.now();
+    let nextContext: WorkflowContext | undefined;
+    let transitionEvents: EngineEvent[] = [];
+
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      if (!context.executionGraphSnapshot || !context.nodeRuns) {
+        nextContext = context;
+        return state;
+      }
+
+      const previousNodeRuns = context.nodeRuns;
+      const nodeRuns = startAncestorContainerNodeRuns(
+        context.executionGraphSnapshot,
+        context.nodeRuns,
+        nodeId,
+        timestamp
+      );
+      transitionEvents = containerTransitionEngineEvents(
+        context.executionGraphSnapshot,
+        previousNodeRuns,
+        nodeRuns,
+        nextEngineEvent
+      );
+      nextContext = {
+        ...context,
+        nodeRuns,
+        updatedAt: timestamp
+      };
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
+      };
+    });
+
+    if (transitionEvents.length > 0 && nextContext) {
+      await this.recordEngineEvents(nextContext.runId, transitionEvents);
+    }
+
+    return nextContext!;
+  }
+
+  private async recordWorkflowNodeInputSnapshot(
+    workflowContextId: string,
+    nodeId: string,
+    inputSnapshot: Record<string, unknown>
+  ): Promise<WorkflowContext> {
+    const timestamp = this.now();
+    let nextContext: WorkflowContext | undefined;
+
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      if (!context.nodeRuns) {
+        nextContext = context;
+        return state;
+      }
+
+      nextContext = {
+        ...context,
+        nodeRuns: context.nodeRuns.map((nodeRun) =>
+          nodeRun.nodeId === nodeId
+            ? {
+                ...nodeRun,
+                inputSnapshot,
+                updatedAt: timestamp
+              }
+            : nodeRun
+        ),
+        updatedAt: timestamp
+      };
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
+      };
+    });
+
+    return nextContext!;
+  }
+
+  private async buildGraphAgentRequest(
+    run: LoopRun,
+    attempt: RunAttempt,
+    context: WorkflowContext,
+    contract: FormalLoopContract,
+    node: ExecutionGraphNode
+  ): Promise<AgentRequest> {
+    const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+    const agentProfile = node.sourceStepId ? effectiveProfilesByStep.get(node.sourceStepId) : undefined;
+    const phaseId = node.phaseNodeId
+      ? context.executionGraphSnapshot?.nodes.find((candidate) => candidate.nodeId === node.phaseNodeId)?.sourceStepId
+      : undefined;
+    const pipeline = context.executionGraphSnapshot?.edges.some(
+      (edge) => edge.kind === "pipeline_data" && edge.toNodeId === node.nodeId
+    ) || undefined;
+    const request: AgentRequest = {
+      prompt: node.prompt ?? node.label,
+      label: node.label,
+      stepId: node.sourceStepId,
+      phaseId,
+      pipeline,
+      human: node.kind === "human" || node.human === true ? true : undefined,
+      subagent: node.subagent ?? effectiveProfileToSubagent(agentProfile),
+      agentProfile,
+      attemptId: attempt.id,
+      workflowContextId: context.id,
+      workflowRuntime: "dittosloop-local-workflow",
+      workflowContractId: contract.id,
+      workflowPlan: buildWorkflowExecutionPlan(contract)
+    };
+    if (!pipeline) {
+      return request;
+    }
+
+    return {
+      ...request,
+      prompt: await this.injectPipelinePromptContext(context.id, request)
+    };
+  }
+
+  private async verifyGraphWorkflowCompletion(
+    run: LoopRun,
+    attempt: RunAttempt,
+    context: WorkflowContext,
+    contract: FormalLoopContract,
+    input: ExecuteWorkflowAttemptInput,
+    nextEngineEvent: <TEvent extends EngineEvent>(event: Omit<TEvent, "runId" | "createdAt" | "sequence">) => TEvent
+  ): Promise<LoopRun> {
+    if (
+      usesExternalV2ValidatorWriteback(contract.verification) &&
+      pendingRubricAgentValidatorIds(contract.verification, context).length > 0
+    ) {
+      await this.startPendingRubricAgentValidators(run, context, contract.verification);
+      return (await this.getRunDetail(run.id)).run;
+    }
+
+    const usesV2Verification = usesVerificationV2Runtime(contract.verification);
+    const verificationContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
+    const engineEvents: EngineEvent[] = [];
+    const emitRuntimeEvent = (event: EngineEventInput): void => {
+      engineEvents.push(nextEngineEvent(event as Omit<EngineEvent, "runId" | "createdAt" | "sequence">));
+    };
+    emitRuntimeEvent({ type: "verification_started", attemptId: attempt.id });
+    const verification = await runContractVerification({
+      contract: verificationContract,
+      result: completedWorkflowStepOutputs(context),
+      runId: run.id,
+      attemptId: attempt.id,
+      now: this.now,
+      verifier: input.verifier,
+      emit: emitRuntimeEvent
+    });
+    emitRuntimeEvent({ type: "verification_done", attemptId: attempt.id, decision: verification });
+    const attemptNumber = Math.max(1, (await this.getRunDetail(run.id)).attempts.findIndex((candidate) => candidate.id === attempt.id) + 1);
+    const shouldRepairRun = shouldRepair(verification, contract.repairPolicy, attemptNumber);
+    const finalStatus = verification.status === "passed"
+      ? "completed"
+      : verification.status === "needs_human"
+        ? "waiting_for_human"
+        : "failed";
+    if (shouldRepairRun) {
+      emitRuntimeEvent({
+        type: "repair_started",
+        attemptId: attempt.id,
+        reason: verification.repairInstructions ?? verification.summary
+      });
+    } else {
+      if (verification.status === "needs_human") {
+        emitRuntimeEvent({
+          type: "human_request",
+          question: verification.humanQuestion ?? verification.summary
+        });
+      }
+      emitRuntimeEvent({
+        type: "run_done",
+        status: finalStatus,
+        summary: verification.summary
+      });
+    }
+    await this.recordEngineEvents(run.id, engineEvents);
+
+    if (usesV2Verification && isVerificationResultV2(verification)) {
+      return this.finalizeV2Verification(run.id, context.id, verification);
+    }
+
+    await this.recordVerification(run.id, {
+      attemptId: attempt.id,
+      status: verificationDecisionToResultStatus(verification.status),
+      summary: verification.summary,
+      checks: verificationDecisionChecksToResults(verificationContract, verification),
+      repair: shouldRepairRun
+    });
+
+    if (shouldRepairRun) {
+      await this.markWorkflowContextRepairing(context.id, verification.repairInstructions ?? verification.summary);
+      return (await this.getRunDetail(run.id)).run;
+    }
+
+    if (verification.status === "passed") {
+      await this.completeWorkflowContext(context.id);
+      await this.completeAttempt(attempt.id, {
+        status: "completed",
+        summary: verification.summary
+      });
+      return this.completeRun(run.id, { status: "completed" });
+    }
+
+    if (verification.status === "needs_human") {
+      await this.completeWorkflowContext(context.id);
+      await this.completeAttempt(attempt.id, {
+        status: "completed",
+        summary: verification.summary
+      });
+      await this.recordHumanRequest(run.id, {
+        question: verification.humanQuestion ?? verification.summary
+      });
+      return (await this.getRunDetail(run.id)).run;
+    }
+
+    await this.failWorkflowContext(context.id, verification.summary);
+    await this.completeAttempt(attempt.id, {
+      status: "failed",
+      summary: verification.summary
+    });
+    return this.completeRun(run.id, { status: "failed" });
   }
 
   private createWorkflowContextExecutor(run: LoopRun, attemptId: string, workflowContextId: string): Executor {
@@ -3138,6 +3559,80 @@ function sameStringSet(left: string[], right: string[]): boolean {
 function hasOpenWorkflowSessions(context: WorkflowContext): boolean {
   return context.pendingSessionIds.length > 0 ||
     context.taskRuns.some((taskRun) => taskRun.status === "running" || taskRun.status === "suspended");
+}
+
+function canUseGraphScheduler(snapshot: ExecutionGraphSnapshot): boolean {
+  return !snapshot.nodes.some((node) => node.kind === "parallel");
+}
+
+function containerTransitionEngineEvents(
+  snapshot: ExecutionGraphSnapshot,
+  previousNodeRuns: WorkflowNodeRun[],
+  nextNodeRuns: WorkflowNodeRun[],
+  nextEngineEvent: <TEvent extends EngineEvent>(event: Omit<TEvent, "runId" | "createdAt" | "sequence">) => TEvent
+): EngineEvent[] {
+  const previousByNodeId = new Map(previousNodeRuns.map((nodeRun) => [nodeRun.nodeId, nodeRun]));
+  const nextByNodeId = new Map(nextNodeRuns.map((nodeRun) => [nodeRun.nodeId, nodeRun]));
+  const events: EngineEvent[] = [];
+
+  for (const node of [...snapshot.nodes].sort((left, right) => left.order - right.order || left.nodeId.localeCompare(right.nodeId))) {
+    const previousStatus = previousByNodeId.get(node.nodeId)?.status;
+    const nextStatus = nextByNodeId.get(node.nodeId)?.status;
+    if (previousStatus === nextStatus) {
+      continue;
+    }
+
+    if (node.kind === "phase") {
+      const phaseId = node.sourceStepId ?? node.nodeId;
+      const pipeline = node.pipeline === true ? true : undefined;
+      if (nextStatus === "running") {
+        events.push(
+          nextEngineEvent<Extract<EngineEvent, { type: "phase_started" }>>({
+            type: "phase_started",
+            label: node.label,
+            title: node.label,
+            phaseId,
+            pipeline
+          })
+        );
+      }
+      if (nextStatus === "completed") {
+        events.push(
+          nextEngineEvent<Extract<EngineEvent, { type: "phase_done" }>>({
+            type: "phase_done",
+            phaseId,
+            title: node.label,
+            status: "ok",
+            pipeline
+          })
+        );
+      }
+    }
+
+    if (node.kind === "parallel") {
+      const count = snapshot.edges.filter((edge) => edge.kind === "contains" && edge.fromNodeId === node.nodeId).length;
+      if (nextStatus === "running") {
+        events.push(
+          nextEngineEvent<Extract<EngineEvent, { type: "parallel_started" }>>({
+            type: "parallel_started",
+            label: node.label,
+            count
+          })
+        );
+      }
+      if (nextStatus === "completed") {
+        events.push(
+          nextEngineEvent<Extract<EngineEvent, { type: "parallel_completed" }>>({
+            type: "parallel_completed",
+            label: node.label,
+            count
+          })
+        );
+      }
+    }
+  }
+
+  return events;
 }
 
 function validateWorkflowSessionResultTarget(
