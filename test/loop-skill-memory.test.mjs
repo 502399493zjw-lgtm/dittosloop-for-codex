@@ -87,12 +87,15 @@ test("create loop guidance describes clarification, creation, and preview handof
     /safety, permissions, cost, destructive actions, external side effects, project binding, or verification/
   );
   assert.match(createLoop, /compact contract draft/);
-  assert.match(createLoop, /Rubric Draft/);
-  assert.match(createLoop, /must/);
-  assert.match(createLoop, /should/);
-  assert.match(createLoop, /validators/);
-  assert.match(createLoop, /evidence/);
-  assert.match(createLoop, /repair, ask the user, or fail/);
+  const rubricDraftMatch = createLoop.match(/```text\nRubric Draft\n([\s\S]*?)\n```/);
+  assert.ok(rubricDraftMatch, "expected create-loop guidance to include a Rubric Draft text block");
+  const rubricDraft = rubricDraftMatch[1];
+
+  assert.match(rubricDraft, /- Must:/);
+  assert.match(rubricDraft, /- Should:/);
+  assert.match(rubricDraft, /- Validators:/);
+  assert.match(rubricDraft, /- Evidence:/);
+  assert.match(rubricDraft, /- Failure handling: repair, ask the user, or fail/);
   assert.match(createLoop, /get_preview_url/);
   assert.match(createLoop, /loopId/);
   assert.match(createLoop, /local DittosLoop board URL/);
