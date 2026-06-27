@@ -434,6 +434,26 @@ async function createPendingServiceWithSequentialIds() {
   return { service, requests };
 }
 
+async function startTwoStepPendingWorkflow(service: LoopService) {
+  const loop = await service.createLoopContract({
+    title: "Dual write workflow",
+    goal: "Track node runs while legacy execution still launches sessions",
+    body: {
+      steps: [
+        { id: "collect", kind: "task", runtime: "codex", label: "Collect", prompt: "Collect notes." },
+        { id: "review", kind: "task", runtime: "codex", label: "Review", prompt: "Review notes." }
+      ]
+    },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run dual write workflow" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  return launch;
+}
+
 test("creates a formal loop contract with manual trigger defaults", async () => {
   const service = await createService();
 
@@ -2854,6 +2874,76 @@ test("uses the workflow context attempt when precise writeback omits attemptId",
     ],
     verificationResults: [{ attemptId: launch.attempt.id, status: "passed" }]
   });
+});
+
+test("dual-writes node runs when a workflow task suspends and resumes", async () => {
+  const { service } = await createPendingServiceWithSequentialIds();
+  const launch = await startTwoStepPendingWorkflow(service);
+
+  let context = (await service.getRunDetail(launch.run.id)).workflowContexts[0];
+  expect(context.nodeRuns?.find((node) => node.nodeId === "root/task:collect")).toMatchObject({
+    status: "waiting_for_session",
+    taskRunId: "task_1",
+    sessionId: "session_1"
+  });
+
+  await service.recordSessionResult(launch.run.id, {
+    attemptId: launch.attempt.id,
+    workflowContextId: context.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:done",
+    status: "passed",
+    summary: "Collect done",
+    result: "COLLECTED"
+  });
+
+  context = (await service.getRunDetail(launch.run.id)).workflowContexts[0];
+  expect(context.nodeRuns?.find((node) => node.nodeId === "root/task:collect")).toMatchObject({
+    status: "completed",
+    output: "COLLECTED",
+    idempotencyKeys: ["collect:done"]
+  });
+  expect(context.nodeRuns?.find((node) => node.nodeId === "root/task:review")).toMatchObject({
+    status: "waiting_for_session",
+    sessionId: "session_2"
+  });
+});
+
+test("duplicate workflow task writeback does not duplicate node-run completion", async () => {
+  const { service } = await createPendingServiceWithSequentialIds();
+  const launch = await startTwoStepPendingWorkflow(service);
+
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:done",
+    status: "passed",
+    summary: "Collected notes.",
+    result: "COLLECTED"
+  });
+  const afterFirst = await service.getRunDetail(launch.run.id);
+  const firstContext = afterFirst.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
+  const firstCollectRun = firstContext?.nodeRuns?.find((nodeRun) => nodeRun.nodeId === "root/task:collect");
+
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "collect",
+    idempotencyKey: "collect:done",
+    status: "passed",
+    summary: "Collected notes replay.",
+    result: "COLLECTED"
+  });
+  const afterSecond = await service.getRunDetail(launch.run.id);
+  const secondContext = afterSecond.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
+  const secondCollectRun = secondContext?.nodeRuns?.find((nodeRun) => nodeRun.nodeId === "root/task:collect");
+
+  expect(secondCollectRun?.idempotencyKeys.filter((key) => key === "collect:done")).toHaveLength(1);
+  expect(secondCollectRun?.completedAt).toBe(firstCollectRun?.completedAt);
 });
 
 test("rejects session result writeback when workflowContextId and attemptId disagree", async () => {

@@ -55,7 +55,13 @@ import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
 import { deleteLoopWorkspaceDirectory, syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
 import { compileExecutionGraph } from "./workflowGraph/compileGraph.js";
-import { createInitialNodeRuns } from "./workflowGraph/nodeRuns.js";
+import {
+  createInitialNodeRuns,
+  updateNodeRunForTaskResult,
+  updateNodeRunForTaskRunning,
+  updateNodeRunForTaskSession,
+  updateNodeRunForTaskWaitingForSession
+} from "./workflowGraph/nodeRuns.js";
 
 export interface LoopServiceOptions {
   store: LoopStore;
@@ -2554,10 +2560,8 @@ export class LoopService {
         createdAt: timestamp,
         updatedAt: timestamp
       };
-
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskRunning(
+        {
           ...context,
           status: "running",
           cursor: {
@@ -2575,7 +2579,13 @@ export class LoopService {
           taskRuns: [...context.taskRuns, taskRun],
           updatedAt: timestamp,
           completedAt: undefined
-        })
+        },
+        { stepId, taskRunId, timestamp }
+      );
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
 
@@ -2593,10 +2603,8 @@ export class LoopService {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
       const stepId = session.stepId ?? taskRun.stepId;
-
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskSession(
+        {
           ...context,
           cursor: {
             state: "executing",
@@ -2625,7 +2633,13 @@ export class LoopService {
               : candidate
           ),
           updatedAt: timestamp
-        })
+        },
+        { stepId, taskRunId, sessionId: session.sessionId, timestamp }
+      );
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -2641,10 +2655,8 @@ export class LoopService {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
       const stepId = session.stepId ?? taskRun.stepId;
-
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskWaitingForSession(
+        {
           ...context,
           status: "suspended",
           cursor: {
@@ -2675,7 +2687,13 @@ export class LoopService {
           ),
           pendingSessionIds: appendUnique(context.pendingSessionIds, session.sessionId),
           updatedAt: timestamp
-        })
+        },
+        { stepId, taskRunId, sessionId: session.sessionId, timestamp }
+      );
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -2688,38 +2706,47 @@ export class LoopService {
       const taskRun = context.taskRuns.find((candidate) => candidate.sessionId === session.sessionId);
       const stepId = session.stepId ?? taskRun?.stepId;
       if (!stepId) return state;
+      const nextContextBase: WorkflowContext = {
+        ...context,
+        status: "suspended",
+        cursor: {
+          state: "waiting_for_session",
+          stepId,
+          phaseId: session.phaseId ?? taskRun?.phaseId,
+          sessionId: session.sessionId
+        },
+        steps: {
+          ...context.steps,
+          [stepId]: {
+            status: "suspended",
+            sessionId: session.sessionId,
+            updatedAt: timestamp
+          }
+        },
+        taskRuns: context.taskRuns.map((candidate) =>
+          candidate.sessionId === session.sessionId
+            ? {
+                ...candidate,
+                status: "suspended",
+                updatedAt: timestamp
+              }
+            : candidate
+        ),
+        pendingSessionIds: appendUnique(context.pendingSessionIds, session.sessionId),
+        updatedAt: timestamp
+      };
+      const nextContext = taskRun
+        ? updateNodeRunForTaskWaitingForSession(nextContextBase, {
+            stepId,
+            taskRunId: taskRun.id,
+            sessionId: session.sessionId,
+            timestamp
+          })
+        : nextContextBase;
 
       return {
         ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
-          ...context,
-          status: "suspended",
-          cursor: {
-            state: "waiting_for_session",
-            stepId,
-            phaseId: session.phaseId ?? taskRun?.phaseId,
-            sessionId: session.sessionId
-          },
-          steps: {
-            ...context.steps,
-            [stepId]: {
-              status: "suspended",
-              sessionId: session.sessionId,
-              updatedAt: timestamp
-            }
-          },
-          taskRuns: context.taskRuns.map((candidate) =>
-            candidate.sessionId === session.sessionId
-              ? {
-                  ...candidate,
-                  status: "suspended",
-                  updatedAt: timestamp
-                }
-              : candidate
-          ),
-          pendingSessionIds: appendUnique(context.pendingSessionIds, session.sessionId),
-          updatedAt: timestamp
-        })
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -2734,10 +2761,8 @@ export class LoopService {
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
-
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskResult(
+        {
           ...context,
           steps: {
             ...context.steps,
@@ -2763,7 +2788,21 @@ export class LoopService {
             ? context.pendingSessionIds.filter((sessionId) => sessionId !== taskRun.sessionId)
             : context.pendingSessionIds,
           updatedAt: timestamp
-        })
+        },
+        {
+          stepId: taskRun.stepId,
+          taskRunId,
+          sessionId: taskRun.sessionId,
+          status: "passed",
+          result,
+          summary: result,
+          timestamp
+        }
+      );
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -2774,10 +2813,8 @@ export class LoopService {
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
-
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskResult(
+        {
           ...context,
           status: "failed",
           cursor: {
@@ -2811,7 +2848,21 @@ export class LoopService {
             : context.pendingSessionIds,
           updatedAt: timestamp,
           completedAt: timestamp
-        })
+        },
+        {
+          stepId: taskRun.stepId,
+          taskRunId,
+          sessionId: taskRun.sessionId,
+          status: "failed",
+          result: error,
+          summary: error,
+          timestamp
+        }
+      );
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -3650,7 +3701,7 @@ function completeWorkflowContextFromSessionResult(
           ? { state: "completed" as const }
           : { state: "executing" as const, stepId, phaseId, sessionId };
 
-  return {
+  const nextContext: WorkflowContext = {
     ...context,
     status: contextStatus,
     cursor,
@@ -3701,6 +3752,19 @@ function completeWorkflowContextFromSessionResult(
       ? { completedAt: timestamp }
       : { completedAt: undefined })
   };
+
+  return stepId
+    ? updateNodeRunForTaskResult(nextContext, {
+        stepId,
+        taskRunId: targetTaskRun?.id,
+        sessionId,
+        status: input.status,
+        result: input.result,
+        summary: input.summary,
+        idempotencyKey: input.idempotencyKey,
+        timestamp
+      })
+    : nextContext;
 }
 
 function normalizeWorkflowSessionResultInput(

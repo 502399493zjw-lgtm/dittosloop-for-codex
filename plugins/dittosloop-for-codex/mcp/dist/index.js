@@ -23358,6 +23358,77 @@ function createInitialNodeRuns(snapshot, now) {
     updatedAt: now
   }));
 }
+function findNodeIdForStep(snapshot, stepId) {
+  return snapshot.nodes.find((node) => node.sourceStepId === stepId)?.nodeId;
+}
+function updateNodeRunForTaskRunning(context, input) {
+  return updateNodeRunForStep(context, input.stepId, (nodeRun) => ({
+    ...nodeRun,
+    status: "running",
+    taskRunId: input.taskRunId,
+    startedAt: nodeRun.startedAt ?? input.timestamp,
+    updatedAt: input.timestamp
+  }));
+}
+function updateNodeRunForTaskSession(context, input) {
+  return updateNodeRunForStep(context, input.stepId, (nodeRun) => ({
+    ...nodeRun,
+    status: "running",
+    taskRunId: input.taskRunId,
+    sessionId: input.sessionId,
+    startedAt: nodeRun.startedAt ?? input.timestamp,
+    updatedAt: input.timestamp
+  }));
+}
+function updateNodeRunForTaskWaitingForSession(context, input) {
+  return updateNodeRunForStep(context, input.stepId, (nodeRun) => ({
+    ...nodeRun,
+    status: "waiting_for_session",
+    taskRunId: input.taskRunId,
+    sessionId: input.sessionId,
+    startedAt: nodeRun.startedAt ?? input.timestamp,
+    updatedAt: input.timestamp
+  }));
+}
+function updateNodeRunForTaskResult(context, input) {
+  return updateNodeRunForStep(context, input.stepId, (nodeRun) => {
+    if (input.idempotencyKey && nodeRun.idempotencyKeys.includes(input.idempotencyKey)) {
+      return nodeRun;
+    }
+    const status = nodeRunStatusForTaskResult(input.status);
+    return {
+      ...nodeRun,
+      status,
+      ...input.taskRunId ? { taskRunId: input.taskRunId } : {},
+      ...input.sessionId ? { sessionId: input.sessionId } : {},
+      ...input.status === "failed" ? { error: input.result ?? input.summary, output: void 0 } : input.status === "needs_human" ? { error: void 0 } : { output: input.result ?? input.summary, error: void 0 },
+      idempotencyKeys: input.idempotencyKey ? appendUnique(nodeRun.idempotencyKeys, input.idempotencyKey) : nodeRun.idempotencyKeys,
+      updatedAt: input.timestamp,
+      ...status === "completed" || status === "failed" ? { completedAt: nodeRun.completedAt ?? input.timestamp } : { completedAt: void 0 }
+    };
+  });
+}
+function updateNodeRunForStep(context, stepId, update) {
+  if (!context.executionGraphSnapshot || !context.nodeRuns) {
+    return context;
+  }
+  const nodeId = findNodeIdForStep(context.executionGraphSnapshot, stepId);
+  if (!nodeId) {
+    return context;
+  }
+  return {
+    ...context,
+    nodeRuns: context.nodeRuns.map((nodeRun) => nodeRun.nodeId === nodeId ? update(nodeRun) : nodeRun)
+  };
+}
+function nodeRunStatusForTaskResult(status) {
+  if (status === "passed") return "completed";
+  if (status === "failed") return "failed";
+  return "waiting_for_human";
+}
+function appendUnique(values, value) {
+  return values.includes(value) ? values : [...values, value];
+}
 
 // src/service.ts
 var DEFAULT_LOOP_MEMORY_READ_LIMIT = 80;
@@ -24465,7 +24536,7 @@ ${priorOutput}`;
         status: pendingValidatorIds.length > 0 ? "waiting_for_validator" : "running",
         validatorResults,
         pendingValidatorIds,
-        idempotencyKeys: appendUnique(verification.idempotencyKeys, idempotencyKey),
+        idempotencyKeys: appendUnique2(verification.idempotencyKeys, idempotencyKey),
         updatedAt: timestamp2
       };
       contextAfterWrite = {
@@ -25221,9 +25292,8 @@ ${priorOutput}`;
         createdAt: timestamp2,
         updatedAt: timestamp2
       };
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskRunning(
+        {
           ...context,
           status: "running",
           cursor: {
@@ -25241,7 +25311,12 @@ ${priorOutput}`;
           taskRuns: [...context.taskRuns, taskRun],
           updatedAt: timestamp2,
           completedAt: void 0
-        })
+        },
+        { stepId, taskRunId, timestamp: timestamp2 }
+      );
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
     return taskRunId;
@@ -25252,9 +25327,8 @@ ${priorOutput}`;
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
       const stepId = session.stepId ?? taskRun.stepId;
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskSession(
+        {
           ...context,
           cursor: {
             state: "executing",
@@ -25281,7 +25355,12 @@ ${priorOutput}`;
             } : candidate
           ),
           updatedAt: timestamp2
-        })
+        },
+        { stepId, taskRunId, sessionId: session.sessionId, timestamp: timestamp2 }
+      );
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -25291,9 +25370,8 @@ ${priorOutput}`;
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
       const stepId = session.stepId ?? taskRun.stepId;
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskWaitingForSession(
+        {
           ...context,
           status: "suspended",
           cursor: {
@@ -25320,9 +25398,14 @@ ${priorOutput}`;
               updatedAt: timestamp2
             } : candidate
           ),
-          pendingSessionIds: appendUnique(context.pendingSessionIds, session.sessionId),
+          pendingSessionIds: appendUnique2(context.pendingSessionIds, session.sessionId),
           updatedAt: timestamp2
-        })
+        },
+        { stepId, taskRunId, sessionId: session.sessionId, timestamp: timestamp2 }
+      );
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -25333,35 +25416,42 @@ ${priorOutput}`;
       const taskRun = context.taskRuns.find((candidate) => candidate.sessionId === session.sessionId);
       const stepId = session.stepId ?? taskRun?.stepId;
       if (!stepId) return state;
+      const nextContextBase = {
+        ...context,
+        status: "suspended",
+        cursor: {
+          state: "waiting_for_session",
+          stepId,
+          phaseId: session.phaseId ?? taskRun?.phaseId,
+          sessionId: session.sessionId
+        },
+        steps: {
+          ...context.steps,
+          [stepId]: {
+            status: "suspended",
+            sessionId: session.sessionId,
+            updatedAt: timestamp2
+          }
+        },
+        taskRuns: context.taskRuns.map(
+          (candidate) => candidate.sessionId === session.sessionId ? {
+            ...candidate,
+            status: "suspended",
+            updatedAt: timestamp2
+          } : candidate
+        ),
+        pendingSessionIds: appendUnique2(context.pendingSessionIds, session.sessionId),
+        updatedAt: timestamp2
+      };
+      const nextContext = taskRun ? updateNodeRunForTaskWaitingForSession(nextContextBase, {
+        stepId,
+        taskRunId: taskRun.id,
+        sessionId: session.sessionId,
+        timestamp: timestamp2
+      }) : nextContextBase;
       return {
         ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
-          ...context,
-          status: "suspended",
-          cursor: {
-            state: "waiting_for_session",
-            stepId,
-            phaseId: session.phaseId ?? taskRun?.phaseId,
-            sessionId: session.sessionId
-          },
-          steps: {
-            ...context.steps,
-            [stepId]: {
-              status: "suspended",
-              sessionId: session.sessionId,
-              updatedAt: timestamp2
-            }
-          },
-          taskRuns: context.taskRuns.map(
-            (candidate) => candidate.sessionId === session.sessionId ? {
-              ...candidate,
-              status: "suspended",
-              updatedAt: timestamp2
-            } : candidate
-          ),
-          pendingSessionIds: appendUnique(context.pendingSessionIds, session.sessionId),
-          updatedAt: timestamp2
-        })
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -25370,9 +25460,8 @@ ${priorOutput}`;
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskResult(
+        {
           ...context,
           steps: {
             ...context.steps,
@@ -25394,7 +25483,20 @@ ${priorOutput}`;
           ),
           pendingSessionIds: taskRun.sessionId ? context.pendingSessionIds.filter((sessionId) => sessionId !== taskRun.sessionId) : context.pendingSessionIds,
           updatedAt: timestamp2
-        })
+        },
+        {
+          stepId: taskRun.stepId,
+          taskRunId,
+          sessionId: taskRun.sessionId,
+          status: "passed",
+          result,
+          summary: result,
+          timestamp: timestamp2
+        }
+      );
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -25403,9 +25505,8 @@ ${priorOutput}`;
     await this.options.store.updateState((state) => {
       const context = requireWorkflowContext(state, workflowContextId);
       const taskRun = requireWorkflowTaskRun(context, taskRunId);
-      return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+      const nextContext = updateNodeRunForTaskResult(
+        {
           ...context,
           status: "failed",
           cursor: {
@@ -25435,7 +25536,20 @@ ${priorOutput}`;
           pendingSessionIds: taskRun.sessionId ? context.pendingSessionIds.filter((sessionId) => sessionId !== taskRun.sessionId) : context.pendingSessionIds,
           updatedAt: timestamp2,
           completedAt: timestamp2
-        })
+        },
+        {
+          stepId: taskRun.stepId,
+          taskRunId,
+          sessionId: taskRun.sessionId,
+          status: "failed",
+          result: error2,
+          summary: error2,
+          timestamp: timestamp2
+        }
+      );
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, nextContext)
       };
     });
   }
@@ -26016,7 +26130,7 @@ function completeWorkflowContextFromSessionResult(context, input, timestamp2, op
   const taskStatus = input.status === "failed" ? "failed" : input.status === "needs_human" ? "suspended" : "completed";
   const contextStatus = input.status === "failed" ? "failed" : input.status === "needs_human" ? "suspended" : finalize ? "completed" : "running";
   const cursor = input.status === "failed" ? { state: "failed", stepId, phaseId, sessionId } : input.status === "needs_human" ? { state: "waiting_for_human", stepId, phaseId, sessionId } : finalize ? { state: "completed" } : { state: "executing", stepId, phaseId, sessionId };
-  return {
+  const nextContext = {
     ...context,
     status: contextStatus,
     cursor,
@@ -26041,10 +26155,20 @@ function completeWorkflowContextFromSessionResult(context, input, timestamp2, op
       } : taskRun
     ) : context.taskRuns,
     pendingSessionIds: sessionId ? context.pendingSessionIds.filter((pendingSessionId) => pendingSessionId !== sessionId) : context.pendingSessionIds,
-    idempotencyKeys: input.idempotencyKey ? appendUnique(context.idempotencyKeys, input.idempotencyKey) : context.idempotencyKeys,
+    idempotencyKeys: input.idempotencyKey ? appendUnique2(context.idempotencyKeys, input.idempotencyKey) : context.idempotencyKeys,
     updatedAt: timestamp2,
     ...contextStatus === "completed" || contextStatus === "failed" ? { completedAt: timestamp2 } : { completedAt: void 0 }
   };
+  return stepId ? updateNodeRunForTaskResult(nextContext, {
+    stepId,
+    taskRunId: targetTaskRun?.id,
+    sessionId,
+    status: input.status,
+    result: input.result,
+    summary: input.summary,
+    idempotencyKey: input.idempotencyKey,
+    timestamp: timestamp2
+  }) : nextContext;
 }
 function normalizeWorkflowSessionResultInput(input, taskRun) {
   return {
@@ -26609,7 +26733,7 @@ function terminalRunsForLoop(runs, loopId) {
 function updateWorkflowContext(workflowContexts, workflowContextId, nextContext) {
   return workflowContexts.map((context) => context.id === workflowContextId ? nextContext : context);
 }
-function appendUnique(items, item) {
+function appendUnique2(items, item) {
   return items.includes(item) ? items : [...items, item];
 }
 function lifecycleEvent(id, runId, kind, message, createdAt, data) {
