@@ -87,6 +87,12 @@ test("create loop guidance describes clarification, creation, and preview handof
     /safety, permissions, cost, destructive actions, external side effects, project binding, or verification/
   );
   assert.match(createLoop, /compact contract draft/);
+  assert.match(createLoop, /Rubric Draft/);
+  assert.match(createLoop, /must/);
+  assert.match(createLoop, /should/);
+  assert.match(createLoop, /validators/);
+  assert.match(createLoop, /evidence/);
+  assert.match(createLoop, /repair, ask the user, or fail/);
   assert.match(createLoop, /get_preview_url/);
   assert.match(createLoop, /loopId/);
   assert.match(createLoop, /local DittosLoop board URL/);

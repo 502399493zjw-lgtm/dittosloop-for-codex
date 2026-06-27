@@ -9,8 +9,21 @@ Before calling `create_loop_contract`, keep the interaction lightweight and expl
 1. Restate the inferred loop goal, boundary, trigger, and expected outputs.
 2. Make reasonable defaults for low-risk details instead of asking for every missing field.
 3. Ask follow-up questions only for missing details that affect safety, permissions, cost, destructive actions, external side effects, project binding, or verification.
-4. If the request is vague but safe, propose a compact contract draft and ask the user to confirm or correct it.
-5. Convert the agreed or safely inferred shape into a formal loop contract.
+4. When verification expectations are material, show a compact `Rubric Draft` before creating the contract. Include success criteria, `must` versus `should` severity, validators, evidence requirements, and failure handling.
+5. For obvious, low-risk loops, state the inferred rubric and continue with reasonable defaults. For vague or high-impact loops, ask the user to confirm or correct the rubric before creating the contract.
+6. If the request is vague but safe, propose a compact contract draft and ask the user to confirm or correct it.
+7. Convert the agreed or safely inferred shape into a formal loop contract.
+
+Use a user-facing rubric draft instead of raw JSON:
+
+```text
+Rubric Draft
+- Must: the result satisfies the loop's primary goal with evidence.
+- Should: the result follows the user's preferred format and tone.
+- Validators: automated checks, rubric agents, human review, or a mix.
+- Evidence: command output, cited sources, artifact links, or reviewer notes.
+- Failure handling: repair, ask the user, or fail the run.
+```
 
 ## Creation Flow
 
