@@ -18,6 +18,18 @@ Then open Codex plugin settings and install `DittosLoop For Codex` from the `Dit
 
 After installing or updating the plugin, restart Codex and start a new thread so the bundled skill and MCP runtime are loaded fresh.
 
+## Quick Update
+
+If you already installed the plugin from this GitHub marketplace source, refresh the marketplace:
+
+```bash
+codex plugin marketplace upgrade dittosloop
+```
+
+Then restart Codex or start a new thread. Codex may not show a separate update button for installed marketplace plugins; refreshing the marketplace source is the update path for Git-backed installs.
+
+If you added the marketplace with a different name, replace `dittosloop` with that configured marketplace name.
+
 ## Quick Check
 
 From the repo root:
@@ -56,7 +68,7 @@ codex plugin marketplace add "$(pwd)"
 
 Then open Codex plugin settings and install `DittosLoop For Codex` from the `DittosLoop` marketplace.
 
-After installing or reinstalling the plugin, restart Codex and start a new thread so the bundled skill and MCP tools are loaded fresh.
+After installing or reinstalling the plugin, restart Codex and start a new thread so the bundled skill and MCP tools are loaded fresh. For an existing Git-backed install, refresh the source with `codex plugin marketplace upgrade dittosloop` first.
 
 ## GitHub Setup
 
