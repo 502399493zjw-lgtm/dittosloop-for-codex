@@ -84,3 +84,34 @@ Observed results:
 - `npm run typecheck`: passed.
 - `npm run build`: passed; `dist/index.js` content was unchanged.
 - `git diff --check`: passed with no whitespace errors.
+
+## Follow-up Fix: Service Runtime Script Scenarios
+
+- Main-controller second-pass revalidation exposed older runtime-script service tests that still assumed execution could begin immediately after contract creation:
+  - `npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts`
+  - three `test/service.runtimeScript.test.ts` scenarios received `waiting_for_human` under the new default `approval.required === true` behavior.
+- Updated `plugins/dittosloop-for-codex/mcp/test/service.runtimeScript.test.ts` so the existing execution, resume, and rubric-validator-writeback scenarios explicitly call the public service approval path:
+  - `await service.approveRuntimeScript(contract.id, { approvedBy: "test" })`
+- This keeps the approval-specific regression in `test/runtimeScript/approval.test.ts` as the place that proves unapproved runtime scripts remain blocked.
+
+### Follow-up Verification
+
+Commands run:
+
+```bash
+cd plugins/dittosloop-for-codex/mcp
+npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts
+npm test -- --run test/service.runtimeScript.test.ts test/service.test.ts
+npm run typecheck
+npm run build
+cd ../..
+git diff --check
+```
+
+Observed results:
+
+- `test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts`: 41 tests passed.
+- `test/service.runtimeScript.test.ts test/service.test.ts`: 105 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed; `dist/index.js` content was unchanged.
+- `git diff --check`: passed with no whitespace errors.

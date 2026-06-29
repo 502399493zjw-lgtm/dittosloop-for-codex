@@ -196,6 +196,7 @@ test("executes a runtime script workflow end-to-end with a completed bridge", as
       rubrics: [{ id: "done", label: "Done", requirement: "Runtime script result is acceptable", severity: "must" }]
     }
   });
+  await service.approveRuntimeScript(contract.id, { approvedBy: "test" });
   const launch = await service.startCodexSessionRun(contract.id, { goal: "Run runtime script execution" });
   const verifier = vi.fn(async ({ result }) => {
     const runtimeResult = result as { output: string; score: number };
@@ -302,6 +303,7 @@ test("reuses a completed pending runtime script agent result when the run resume
       rubrics: [{ id: "done", label: "Done", requirement: "Runtime script result is acceptable", severity: "must" }]
     }
   });
+  await service.approveRuntimeScript(contract.id, { approvedBy: "test" });
   const launch = await service.startCodexSessionRun(contract.id, { goal: "Run async runtime script execution" });
 
   const firstRun = await service.executeWorkflowAttempt(launch.run.id, {
@@ -438,6 +440,7 @@ test("runtime script v2 rubric agent verification waits for validator writeback 
     version: 2,
     validators: [expect.objectContaining({ id: "rubric-agent", type: "rubric_agent" })]
   });
+  await service.approveRuntimeScript(contract.id, { approvedBy: "test" });
   const launch = await service.startCodexSessionRun(contract.id, { goal: "Run runtime script validator workflow" });
 
   const firstRun = await service.executeWorkflowAttempt(launch.run.id, {
