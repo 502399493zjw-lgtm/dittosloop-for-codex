@@ -7,9 +7,56 @@ import {
 } from "../src/contract/agentProfiles.js";
 import { compileContract } from "../src/contract/compileContract.js";
 import { migrateLegacyContract } from "../src/contract/migrateLegacyContract.js";
+import type { VerificationScriptValidator } from "../src/contract/types.js";
 import { validateContract } from "../src/contract/validateContract.js";
 
 const fixedTime = "2026-06-24T00:00:00.000Z";
+
+// @ts-expect-error VerificationScriptValidator must require input, output, and builder.
+const invalidMissingScriptValidatorFields: VerificationScriptValidator = {
+  id: "invalid-missing-fields",
+  type: "script",
+  label: "Invalid script validator",
+  criteriaIds: ["done"],
+  severity: "must",
+  runtime: "node",
+  scriptRef: {
+    path: "evaluators/release-note-script/evaluator.mjs",
+    checksum: "sha256:0123456789abcdef",
+    timeoutMs: 30000
+  },
+  evidenceRequired: true
+};
+
+// @ts-expect-error VerificationScriptValidator output.schema must stay on verification_result_v1.
+const invalidScriptValidatorSchema: VerificationScriptValidator = {
+  id: "invalid-schema",
+  type: "script",
+  label: "Invalid schema validator",
+  criteriaIds: ["done"],
+  severity: "must",
+  runtime: "node",
+  scriptRef: {
+    path: "evaluators/release-note-script/evaluator.mjs",
+    checksum: "sha256:0123456789abcdef",
+    timeoutMs: 30000
+  },
+  input: { source: "workflow_result" },
+  output: { schema: "anything_else" },
+  evidenceRequired: true,
+  builder: {
+    kind: "codex_subagent",
+    builtAt: fixedTime,
+    selfCheck: {
+      status: "passed",
+      command: "node",
+      evidence: "fixture passed"
+    }
+  }
+};
+
+void invalidMissingScriptValidatorFields;
+void invalidScriptValidatorSchema;
 
 function passingLegacyVerification() {
   return {
@@ -1026,8 +1073,8 @@ describe("formal loop contracts", () => {
     expect(() => validateContract(contract)).not.toThrow();
   });
 
-  test("rejects script validators without script refs checksums output schema or self-check", () => {
-    const contract = compileContract(
+  function compileScriptValidatorContract(validatorOverrides: Record<string, unknown> = {}) {
+    return compileContract(
       {
         id: "loop_bad_script",
         title: "Bad script evaluator loop",
@@ -1050,23 +1097,26 @@ describe("formal loop contracts", () => {
               severity: "must",
               runtime: "node",
               scriptRef: {
-                path: "../outside.mjs",
-                checksum: "",
+                path: "evaluators/release-note-script/evaluator.mjs",
+                checksum: "sha256:0123456789abcdef",
                 cwd: "loop",
-                timeoutMs: 0
+                args: [],
+                timeoutMs: 30000
               },
               input: { source: "workflow_result" },
-              output: { schema: "anything_else" },
+              output: { schema: "verification_result_v1" },
               evidenceRequired: true,
               builder: {
                 kind: "codex_subagent",
-                builtAt: "",
+                builtAt: fixedTime,
                 selfCheck: {
-                  status: "failed",
-                  command: "",
-                  evidence: ""
+                  status: "passed",
+                  command: "node",
+                  args: ["evaluators/release-note-script/evaluator.mjs"],
+                  evidence: "fixture passed"
                 }
-              }
+              },
+              ...validatorOverrides
             } as any
           ],
           decision: {
@@ -1080,7 +1130,67 @@ describe("formal loop contracts", () => {
       },
       fixedTime
     );
+  }
+
+  test("rejects script validators without script refs checksums output schema or self-check", () => {
+    const contract = compileScriptValidatorContract({
+      scriptRef: {
+        path: "../outside.mjs",
+        checksum: "",
+        cwd: "loop",
+        timeoutMs: 0
+      },
+      output: { schema: "anything_else" },
+      builder: {
+        kind: "codex_subagent",
+        builtAt: "",
+        selfCheck: {
+          status: "failed",
+          command: "",
+          evidence: ""
+        }
+      }
+    });
 
     expect(() => validateContract(contract)).toThrow(/script validator/i);
+  });
+
+  test("rejects script validators without a checksum", () => {
+    const contract = compileScriptValidatorContract({
+      scriptRef: {
+        path: "evaluators/release-note-script/evaluator.mjs",
+        checksum: "",
+        cwd: "loop",
+        args: [],
+        timeoutMs: 30000
+      }
+    });
+
+    expect(() => validateContract(contract)).toThrow(/script validator scriptRef\.checksum is required/i);
+  });
+
+  test("rejects script validators with an unsupported output schema", () => {
+    const contract = compileScriptValidatorContract({
+      output: { schema: "anything_else" }
+    });
+
+    expect(() => validateContract(contract)).toThrow(/script validator output\.schema must be verification_result_v1/i);
+  });
+
+  test("rejects script validators without self-check metadata", () => {
+    const contract = compileScriptValidatorContract({
+      builder: {
+        kind: "codex_subagent",
+        builtAt: fixedTime,
+        selfCheck: {
+          status: "passed",
+          command: "",
+          evidence: ""
+        }
+      }
+    });
+
+    expect(() => validateContract(contract)).toThrow(/script validator builder\.selfCheck\.command is required/i);
+    expect(() => validateContract(contract)).toThrow(/script validator builder\.selfCheck\.evidence is required/i);
   });
 });

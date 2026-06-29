@@ -143,17 +143,17 @@ export interface VerificationScriptValidator {
     args?: string[];
     timeoutMs: number;
   };
-  input?: {
+  input: {
     source: "workflow_result" | "artifact" | "project";
   };
-  output?: {
-    schema: "verification_result_v1" | string;
+  output: {
+    schema: "verification_result_v1";
   };
   evidenceRequired: boolean;
-  builder?: {
+  builder: {
     kind: "codex_subagent";
     builtAt: string;
-    selfCheck?: {
+    selfCheck: {
       status: "passed" | "failed";
       command: string;
       args?: string[];
