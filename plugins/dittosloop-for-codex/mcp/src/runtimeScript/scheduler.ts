@@ -194,11 +194,13 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
 
     emit("runtime_parallel_started", {
       label: options?.label,
+      count: tasks.length,
       branches: tasks.length
     });
     const results = await Promise.all(tasks.map((task) => task()));
     emit("runtime_parallel_completed", {
       label: options?.label,
+      count: tasks.length,
       branches: tasks.length
     });
     return results;
@@ -221,6 +223,7 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
 
     emit("runtime_pipeline_started", {
       label: options?.label,
+      count: items.length,
       items: items.length,
       stages: stages.length
     });
@@ -235,6 +238,7 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
     );
     emit("runtime_pipeline_completed", {
       label: options?.label,
+      count: items.length,
       items: items.length,
       stages: stages.length
     });

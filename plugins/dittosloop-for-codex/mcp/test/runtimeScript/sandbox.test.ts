@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+
 import { describe, expect, test } from "vitest";
 
 import { runRuntimeScriptInVm } from "../../src/runtimeScript/sandbox.js";
@@ -101,44 +103,34 @@ describe("runRuntimeScriptInVm", () => {
   });
 
   test("parallel starts all branches before awaiting results", async () => {
-    const starts: string[] = [];
-    const waiters: Array<() => void> = [];
-    const waitForAllStarted = () =>
-      starts.length >= 3
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => {
-            waiters.push(resolve);
-          });
-    const markStart = (label: string) => {
-      starts.push(label);
-      if (starts.length === 3) {
-        waiters.splice(0).forEach((resolve) => resolve());
+    const bridge = new class implements WorkflowSubagentBridge {
+      readonly calls: WorkflowSubagentInput[] = [];
+      private release!: () => void;
+      private readonly allStarted = new Promise<void>((resolve) => {
+        this.release = resolve;
+      });
+
+      async runAgent(input: WorkflowSubagentInput): Promise<WorkflowSubagentResult> {
+        this.calls.push(input);
+        if (this.calls.length === 3) {
+          this.release();
+        }
+        await this.allStarted;
+        return completed(`${input.prompt}:done`);
       }
     };
 
     await expect(runRuntimeScriptInVm(createRunInput({
       source: `
         return await parallel([
-          async () => {
-            args.markStart("a");
-            await args.waitForAllStarted();
-            return "a:done";
-          },
-          async () => {
-            args.markStart("b");
-            await args.waitForAllStarted();
-            return "b:done";
-          },
-          async () => {
-            args.markStart("c");
-            await args.waitForAllStarted();
-            return "c:done";
-          }
+          () => agent("a"),
+          () => agent("b"),
+          () => agent("c")
         ]);
       `,
-      args: { markStart, waitForAllStarted }
+      subagentBridge: bridge
     }))).resolves.toEqual(["a:done", "b:done", "c:done"]);
-    expect(starts).toEqual(["a", "b", "c"]);
+    expect(bridge.calls.map((call) => call.prompt)).toEqual(["a", "b", "c"]);
   });
 
   test("parallel preserves result order", async () => {
@@ -170,6 +162,33 @@ describe("runRuntimeScriptInVm", () => {
     }));
 
     expect(result).toEqual(["a-extract-verify", "b-extract-verify", "c-extract-verify"]);
+  });
+
+  test("parallel and pipeline events include count", async () => {
+    const events: RuntimeScriptEventInput[] = [];
+
+    await runRuntimeScriptInVm(createRunInput({
+      source: `
+        await parallel([
+          async () => "a",
+          async () => "b"
+        ], { label: "branches" });
+        return await pipeline(
+          args.items,
+          [
+            async (item) => item
+          ],
+          { label: "items" }
+        );
+      `,
+      args: { items: ["one", "two", "three"] },
+      emit: (event) => events.push(event)
+    }));
+
+    expect(events.find((event) => event.type === "runtime_parallel_started")?.data).toMatchObject({ count: 2 });
+    expect(events.find((event) => event.type === "runtime_parallel_completed")?.data).toMatchObject({ count: 2 });
+    expect(events.find((event) => event.type === "runtime_pipeline_started")?.data).toMatchObject({ count: 3 });
+    expect(events.find((event) => event.type === "runtime_pipeline_completed")?.data).toMatchObject({ count: 3 });
   });
 
   test("if and for JavaScript control flow can decide later agent calls", async () => {
@@ -270,4 +289,104 @@ describe("runRuntimeScriptInVm", () => {
 
     expect(bridge.calls).toHaveLength(0);
   });
+
+  test("async CPU loop after agent is terminated by timeout without hanging the parent process", async () => {
+    const result = await runTimeoutProbeChildProcess();
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Runtime script timed out");
+  }, 10_000);
 });
+
+function runTimeoutProbeChildProcess(): Promise<{
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}> {
+  const childSource = `
+    import { runRuntimeScriptInVm } from "./src/runtimeScript/sandbox.ts";
+
+    class MemoryRuntimeScriptJournal {
+      records = new Map();
+      async get(key) {
+        return this.records.get(key);
+      }
+      async recordCompleted(input) {
+        return this.upsert(input);
+      }
+      async recordFailed(input) {
+        return this.upsert(input);
+      }
+      async upsert(input) {
+        const record = {
+          ...input,
+          id: "journal_1",
+          createdAt: "2026-06-29T00:00:00.000Z",
+          updatedAt: "2026-06-29T00:00:00.000Z"
+        };
+        this.records.set(input.key, record);
+        return record;
+      }
+    }
+
+    const input = {
+      runId: "run_timeout",
+      attemptId: "attempt_timeout",
+      workflowContextId: "workflow_timeout",
+      contractId: "contract_timeout",
+      source: 'await agent("ok"); while (true) {}',
+      args: {},
+      limits: {
+        timeoutMs: 100,
+        maxAgentCalls: 2,
+        maxParallelBranches: 2,
+        maxPipelineItems: 2,
+        maxLogChars: 100
+      },
+      journal: new MemoryRuntimeScriptJournal(),
+      subagentBridge: {
+        async runAgent() {
+          return { status: "completed", output: "ok" };
+        }
+      },
+      now: () => "2026-06-29T00:00:00.000Z"
+    };
+
+    try {
+      await runRuntimeScriptInVm(input);
+      console.log("resolved unexpectedly");
+      process.exit(2);
+    } catch (error) {
+      console.log(error instanceof Error ? error.message : String(error));
+      process.exit(/Runtime script timed out/.test(String(error instanceof Error ? error.message : error)) ? 0 : 3);
+    }
+  `;
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childSource], {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stdout = "";
+  let stderr = "";
+  let timedOut = false;
+  const killTimer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, 1_500);
+
+  child.stdout.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+
+  return new Promise((resolve) => {
+    child.on("close", (code, signal) => {
+      clearTimeout(killTimer);
+      resolve({ code, signal, stdout, stderr, timedOut });
+    });
+  });
+}
