@@ -21900,6 +21900,9 @@ function validateVerificationValidator(validator, validatorIds, errors) {
     case "command":
       validateCommandValidator(validator, errors);
       return;
+    case "script":
+      validateScriptValidator(validator, errors);
+      return;
     case "score":
       validateScoreValidator(validator, validatorIds, errors);
       return;
@@ -21928,14 +21931,73 @@ function validateCommandValidator(validator, errors) {
     errors.push("command validator cwd relativeToProject is required");
     return;
   }
-  if (path.isAbsolute(relativePath)) {
-    errors.push("command validator cwd must not be absolute");
+  const pathErrors = [];
+  validateSafeRelativePath(relativePath, "command validator cwd", pathErrors);
+  if (pathErrors.includes("command validator cwd must stay within the workspace")) {
+    errors.push("command validator cwd must stay within the project");
+  } else {
+    errors.push(...pathErrors);
+  }
+}
+function validateScriptValidator(validator, errors) {
+  if (!Array.isArray(validator.criteriaIds) || validator.criteriaIds.length === 0) {
+    errors.push("script validator criteriaIds must contain at least one criterion");
+  }
+  if (validator.runtime !== "node" && validator.runtime !== "python") {
+    errors.push("script validator runtime must be node or python");
+  }
+  validateScriptRef(validator, errors);
+  if (validator.input?.source !== "workflow_result" && validator.input?.source !== "artifact" && validator.input?.source !== "project") {
+    errors.push("script validator input.source must be workflow_result, artifact, or project");
+  }
+  if (validator.output?.schema !== "verification_result_v1") {
+    errors.push("script validator output.schema must be verification_result_v1");
+  }
+  if (validator.builder?.kind !== "codex_subagent") {
+    errors.push("script validator builder.kind must be codex_subagent");
+  }
+  required2(validator.builder?.builtAt, "script validator builder.builtAt", errors);
+  if (validator.builder?.selfCheck?.status !== "passed") {
+    errors.push("script validator builder.selfCheck.status must be passed");
+  }
+  required2(validator.builder?.selfCheck?.command, "script validator builder.selfCheck.command", errors);
+  required2(validator.builder?.selfCheck?.evidence, "script validator builder.selfCheck.evidence", errors);
+}
+function validateScriptRef(validator, errors) {
+  const ref = validator.scriptRef;
+  const checksumPattern = /^sha256:[0-9a-f]{64}$/;
+  if (!ref || typeof ref !== "object") {
+    errors.push("script validator scriptRef is required");
     return;
   }
-  const normalized = path.normalize(relativePath);
-  if (normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
-    errors.push("command validator cwd must stay within the project");
+  if (!ref.path || ref.path.trim().length === 0) {
+    errors.push("script validator scriptRef.path is required");
+  } else {
+    validateSafeRelativePath(ref.path, "script validator scriptRef.path", errors);
   }
+  if (!ref.checksum || ref.checksum.trim().length === 0) {
+    errors.push("script validator scriptRef.checksum is required");
+  } else if (!checksumPattern.test(ref.checksum)) {
+    errors.push("script validator scriptRef.checksum must match sha256:<64 hex characters>");
+  }
+  if (!Number.isInteger(ref.timeoutMs) || ref.timeoutMs <= 0) {
+    errors.push("script validator scriptRef.timeoutMs must be a positive integer");
+  }
+  validateScriptCwd(ref.cwd, errors);
+}
+function validateScriptCwd(cwd, errors) {
+  if (cwd === void 0) {
+    return;
+  }
+  if (cwd === "project" || cwd === "contract" || cwd === "loop") {
+    return;
+  }
+  const relativePath = cwd.relativeToProject?.trim();
+  if (!relativePath) {
+    errors.push("script validator scriptRef.cwd relativeToProject is required");
+    return;
+  }
+  validateSafeRelativePath(relativePath, "script validator scriptRef.cwd", errors);
 }
 function validateScoreValidator(validator, validatorIds, errors) {
   if (!validator.metric || validator.metric.trim().length === 0) {
@@ -21998,6 +22060,16 @@ function validateRubricAgentValidator(validator, errors) {
   }
   if (validator.passScore < validator.scoreScale.min || validator.passScore > validator.scoreScale.max) {
     errors.push("rubric_agent validator passScore must be inside scoreScale");
+  }
+}
+function validateSafeRelativePath(relativePath, label, errors) {
+  if (path.isAbsolute(relativePath)) {
+    errors.push(`${label} must not be absolute`);
+    return;
+  }
+  const normalized = path.normalize(relativePath);
+  if (normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
+    errors.push(`${label} must stay within the workspace`);
   }
 }
 function isRecord(value) {
@@ -22150,10 +22222,15 @@ async function runFlow(flow, deps) {
 
 // src/runner/verificationV2.ts
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path2 from "node:path";
 var MAX_EVIDENCE_CHARS = 8e3;
 async function runVerificationV2(input) {
-  const validatorResults = [...input.priorValidatorResults ?? []];
+  const validatorResults = normalizeValidatorResults(
+    input.policy,
+    input.priorValidatorResults ?? []
+  );
   for (const validator of input.policy.validators) {
     if (validatorResults.some((result2) => result2.validatorId === validator.id)) {
       continue;
@@ -22165,7 +22242,10 @@ async function runVerificationV2(input) {
       validatorType: validator.type,
       label: validator.label
     });
-    const result = await runDeterministicValidator(validator, input, validatorResults);
+    const result = normalizeValidatorResult(
+      input.policy,
+      await runDeterministicValidator(validator, input, validatorResults)
+    );
     input.emit?.({ type: "validator_done", attemptId: input.attemptId, result });
     validatorResults.push(result);
   }
@@ -22187,7 +22267,7 @@ async function runVerificationV2(input) {
   };
 }
 function aggregateVerificationDecision(policy, validatorResults) {
-  const effectiveResults = validatorResults.map((result) => enforceRubricAgentPolicy(policy, result));
+  const effectiveResults = normalizeValidatorResults(policy, validatorResults);
   const failures = effectiveResults.filter((result) => result.status === "failed");
   const mustFailures = failures.filter((result) => result.severity === "must");
   const shouldFailures = failures.filter((result) => result.severity === "should");
@@ -22259,6 +22339,8 @@ async function runDeterministicValidator(validator, input, validatorResults) {
       return runScoreValidator(validator, input, validatorResults);
     case "rubric_agent":
       return rubricAgentNeedsHumanResult(validator);
+    case "script":
+      return runScriptValidator(validator, input);
   }
 }
 async function runCommandValidator(validator, input) {
@@ -22342,6 +22424,264 @@ function rubricAgentNeedsHumanResult(validator) {
     summary: "Rubric agent validator requires an explicit recorded result."
   };
 }
+async function runScriptValidator(validator, input) {
+  const executor = input.commandExecutor ?? defaultCommandExecutor;
+  const cwd = resolveScriptCwd(validator, input);
+  const checksumCheck = await verifyScriptChecksum(validator, cwd);
+  if (!checksumCheck.ok) {
+    return {
+      validatorId: validator.id,
+      type: "script",
+      label: validator.label,
+      severity: validator.severity,
+      criteriaIds: validator.criteriaIds,
+      status: "failed",
+      summary: checksumCheck.summary,
+      evidence: checksumCheck.evidence,
+      runtime: validator.runtime,
+      scriptPath: validator.scriptRef.path,
+      cwd
+    };
+  }
+  const execution = await executor({
+    command: scriptRuntimeCommand(validator.runtime),
+    args: [validator.scriptRef.path, ...validator.scriptRef.args ?? []],
+    cwd,
+    timeoutMs: validator.scriptRef.timeoutMs,
+    stdin: JSON.stringify(scriptValidatorInputEnvelope(validator, input))
+  });
+  const parsed = parseScriptVerificationJson(execution.stdout, validator);
+  const stdout = truncateEvidence(execution.stdout);
+  const stderr = truncateEvidence(execution.stderr);
+  const error2 = execution.error ? truncateEvidence(execution.error) : void 0;
+  if (execution.exitCode !== 0 || execution.timedOut || error2) {
+    return {
+      validatorId: validator.id,
+      type: "script",
+      label: validator.label,
+      severity: validator.severity,
+      criteriaIds: validator.criteriaIds,
+      status: "failed",
+      summary: `Script validator ${validator.id} failed to execute.`,
+      evidence: commandEvidence(stdout, stderr, error2),
+      runtime: validator.runtime,
+      scriptPath: validator.scriptRef.path,
+      cwd,
+      exitCode: execution.exitCode,
+      stdout,
+      stderr,
+      timedOut: execution.timedOut
+    };
+  }
+  if (!parsed.ok) {
+    return {
+      validatorId: validator.id,
+      type: "script",
+      label: validator.label,
+      severity: validator.severity,
+      criteriaIds: validator.criteriaIds,
+      status: "failed",
+      summary: `Script validator ${validator.id} did not return valid verification_result_v1 JSON.`,
+      evidence: commandEvidence(stdout, stderr, parsed.error),
+      runtime: validator.runtime,
+      scriptPath: validator.scriptRef.path,
+      cwd,
+      exitCode: execution.exitCode,
+      stdout,
+      stderr
+    };
+  }
+  return {
+    validatorId: validator.id,
+    type: "script",
+    label: validator.label,
+    severity: validator.severity,
+    criteriaIds: validator.criteriaIds,
+    status: parsed.value.status,
+    summary: parsed.value.summary,
+    evidence: parsed.value.evidence,
+    runtime: validator.runtime,
+    scriptPath: validator.scriptRef.path,
+    cwd,
+    exitCode: execution.exitCode,
+    stdout,
+    stderr,
+    score: parsed.value.score,
+    output: parsed.value.output
+  };
+}
+async function verifyScriptChecksum(validator, cwd) {
+  const scriptPath = resolveExecutablePath(validator.scriptRef.path, cwd);
+  let content;
+  try {
+    content = await readFile(scriptPath);
+  } catch (error2) {
+    return {
+      ok: false,
+      summary: `Script validator ${validator.id} checksum verification failed.`,
+      evidence: `Unable to read script file at ${scriptPath}: ${error2 instanceof Error ? error2.message : String(error2)}`
+    };
+  }
+  const actualChecksum = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+  if (actualChecksum !== validator.scriptRef.checksum) {
+    return {
+      ok: false,
+      summary: `Script validator ${validator.id} checksum verification failed.`,
+      evidence: `Expected ${validator.scriptRef.checksum} but found ${actualChecksum} for ${scriptPath}.`
+    };
+  }
+  return { ok: true };
+}
+function resolveExecutablePath(scriptPath, cwd) {
+  if (path2.isAbsolute(scriptPath)) {
+    return scriptPath;
+  }
+  return path2.resolve(cwd ?? process.cwd(), scriptPath);
+}
+function scriptRuntimeCommand(runtime) {
+  return runtime === "python" ? "python3" : "node";
+}
+function scriptValidatorInputEnvelope(validator, input) {
+  return {
+    validatorId: validator.id,
+    criteriaIds: validator.criteriaIds,
+    source: validator.input.source,
+    workflowResult: input.workflowResult,
+    runId: input.runId,
+    attemptId: input.attemptId,
+    projectPath: input.projectPath,
+    contractWorkspacePath: input.contractWorkspacePath
+  };
+}
+function parseScriptVerificationJson(stdout, validator) {
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (error2) {
+    return {
+      ok: false,
+      error: `Invalid JSON: ${error2 instanceof Error ? error2.message : String(error2)}`
+    };
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return { ok: false, error: "JSON output must be an object." };
+  }
+  const record2 = parsed;
+  const status = record2.status;
+  if (status !== "passed" && status !== "failed" && status !== "needs_human") {
+    return { ok: false, error: "JSON output status must be passed, failed, or needs_human." };
+  }
+  const summary = record2.summary;
+  if (typeof summary !== "string" || !summary.trim()) {
+    return { ok: false, error: "JSON output summary must be a non-empty string." };
+  }
+  const score = record2.score;
+  if (score !== void 0 && (typeof score !== "number" || !Number.isFinite(score))) {
+    return { ok: false, error: "JSON output score must be a finite number when provided." };
+  }
+  const evidence = normalizeScriptEvidence(record2.evidence);
+  if (record2.evidence !== void 0 && evidence === void 0) {
+    return { ok: false, error: "JSON output evidence must be a non-empty string or array of non-empty strings." };
+  }
+  const criteriaResults = parseScriptCriteriaResults(record2.criteriaResults, validator);
+  if (!criteriaResults.ok) {
+    return criteriaResults;
+  }
+  const combinedEvidence = mergeEvidence([
+    evidence,
+    ...criteriaResults.value.flatMap((criterionResult) => normalizeEvidenceParts(criterionResult.evidence))
+  ]);
+  return {
+    ok: true,
+    value: {
+      status,
+      summary,
+      evidence: combinedEvidence,
+      score,
+      output: record2.output ?? (criteriaResults.value.length > 0 ? { criteriaResults: criteriaResults.value } : void 0),
+      criteriaResults: criteriaResults.value.length > 0 ? criteriaResults.value : void 0
+    }
+  };
+}
+function normalizeScriptEvidence(value) {
+  if (value === void 0) {
+    return void 0;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? value : void 0;
+  }
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim().length > 0)) {
+    return value.join("\n");
+  }
+  return void 0;
+}
+function parseScriptCriteriaResults(value, validator) {
+  if (value === void 0) {
+    return { ok: true, value: [] };
+  }
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "JSON output criteriaResults must be an array when provided." };
+  }
+  const allowedCriterionIds = new Set(validator.criteriaIds);
+  const results = [];
+  for (const [index, candidate] of value.entries()) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return { ok: false, error: `criteriaResults[${index}] must be an object.` };
+    }
+    const record2 = candidate;
+    const criterionId = record2.criterionId;
+    if (typeof criterionId !== "string" || criterionId.trim().length === 0) {
+      return { ok: false, error: `criteriaResults[${index}].criterionId must be a non-empty string.` };
+    }
+    if (!allowedCriterionIds.has(criterionId)) {
+      return { ok: false, error: `criteriaResults[${index}].criterionId must be covered by the validator criteriaIds.` };
+    }
+    const status = record2.status;
+    if (status !== "passed" && status !== "failed" && status !== "needs_human") {
+      return { ok: false, error: `criteriaResults[${index}].status must be passed, failed, or needs_human.` };
+    }
+    const score = record2.score;
+    if (score !== void 0 && (typeof score !== "number" || !Number.isFinite(score))) {
+      return { ok: false, error: `criteriaResults[${index}].score must be a finite number when provided.` };
+    }
+    const evidence = normalizeCriteriaEvidence(record2.evidence);
+    if (record2.evidence !== void 0 && evidence === void 0) {
+      return {
+        ok: false,
+        error: `criteriaResults[${index}].evidence must be a non-empty string or array of non-empty strings.`
+      };
+    }
+    results.push({
+      criterionId,
+      status,
+      score,
+      evidence
+    });
+  }
+  return { ok: true, value: results };
+}
+function normalizeCriteriaEvidence(value) {
+  if (value === void 0) {
+    return void 0;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? value : void 0;
+  }
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim().length > 0)) {
+    return value;
+  }
+  return void 0;
+}
+function normalizeEvidenceParts(value) {
+  if (value === void 0) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+function mergeEvidence(values) {
+  const parts = values.flatMap((value) => value ? [value] : []);
+  return parts.length > 0 ? parts.join("\n") : void 0;
+}
 function readScoreSource(validator, input, validatorResults) {
   const source = validator.source;
   switch (source.type) {
@@ -22421,6 +22761,30 @@ function enforceRubricAgentPolicy(policy, result) {
   }
   return result;
 }
+function normalizeValidatorResults(policy, results) {
+  return results.map((result) => normalizeValidatorResult(policy, result));
+}
+function normalizeValidatorResult(policy, result) {
+  return enforceScriptPolicy(policy, enforceRubricAgentPolicy(policy, result));
+}
+function enforceScriptPolicy(policy, result) {
+  if (result.type !== "script" || result.status !== "passed") {
+    return result;
+  }
+  const validator = policy.validators.find(
+    (candidate) => candidate.id === result.validatorId && candidate.type === "script"
+  );
+  const requiresEvidence = policy.decision.requireEvidenceForScriptResults || validator?.type === "script" && validator.evidenceRequired;
+  const hasRequiredEvidence = !requiresEvidence || Boolean(result.evidence?.trim());
+  if (!hasRequiredEvidence) {
+    return {
+      ...result,
+      status: "needs_human",
+      summary: "Script validator result requires evidence."
+    };
+  }
+  return result;
+}
 function validatorResultsToDecisionChecks(validatorResults) {
   return validatorResults.flatMap((result) => {
     const rubricIds = result.criteriaIds.length > 0 ? result.criteriaIds : [result.validatorId];
@@ -22468,12 +22832,22 @@ function resolveCommandCwd(validator, input) {
   }
   return input.projectPath ? path2.resolve(input.projectPath, cwd.relativeToProject) : cwd.relativeToProject;
 }
+function resolveScriptCwd(validator, input) {
+  const cwd = validator.scriptRef.cwd;
+  if (!cwd || cwd === "loop" || cwd === "contract") {
+    return input.contractWorkspacePath;
+  }
+  if (cwd === "project") {
+    return input.projectPath;
+  }
+  return input.projectPath ? path2.resolve(input.projectPath, cwd.relativeToProject) : cwd.relativeToProject;
+}
 async function defaultCommandExecutor(request) {
   return new Promise((resolve) => {
     const child = spawn(request.command, request.args, {
       cwd: request.cwd,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"]
     });
     const stdoutChunks = [];
     const stderrChunks = [];
@@ -22488,6 +22862,11 @@ async function defaultCommandExecutor(request) {
     }
     child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
     child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
+    if (request.stdin !== void 0) {
+      child.stdin.end(request.stdin);
+    } else {
+      child.stdin.end();
+    }
     child.on("error", (error2) => {
       if (settled) {
         return;
@@ -22498,8 +22877,8 @@ async function defaultCommandExecutor(request) {
       }
       resolve({
         exitCode: null,
-        stdout: truncateEvidence(Buffer.concat(stdoutChunks).toString("utf8")),
-        stderr: truncateEvidence(Buffer.concat(stderrChunks).toString("utf8")),
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
         timedOut,
         error: error2.message
       });
@@ -22514,8 +22893,8 @@ async function defaultCommandExecutor(request) {
       }
       resolve({
         exitCode,
-        stdout: truncateEvidence(Buffer.concat(stdoutChunks).toString("utf8")),
-        stderr: truncateEvidence(Buffer.concat(stderrChunks).toString("utf8")),
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
         timedOut
       });
     });
@@ -22580,6 +22959,7 @@ async function runContractVerification(input) {
       policy: contract.verification,
       workflowResult: result,
       projectPath: contract.projectBinding?.projectPath,
+      contractWorkspacePath: input.contractWorkspacePath,
       commandExecutor: input.commandExecutor,
       emit: (event) => input.emit?.(toEngineVerificationEvent(event, input.attemptId))
     });
@@ -22661,6 +23041,7 @@ var LoopRunner = class {
       runId: request.runId,
       attemptId,
       now,
+      contractWorkspacePath: this.options.contractWorkspacePath,
       verifier: this.options.verifier,
       commandExecutor: this.options.commandExecutor,
       emit: emitRuntimeEvent
@@ -22804,7 +23185,7 @@ function formalLoopDirectoryFiles(input) {
     path: "verification.md",
     kind: "verification",
     language: "markdown",
-    content: verificationFile({ contract: input.contract, latestVerification })
+    content: verificationFile({ contract: input.contract })
   }) : withSize({
     path: "rubrics.md",
     kind: "rubrics",
@@ -22959,54 +23340,63 @@ function legacyRubricsFile(input) {
 function verificationFile(input) {
   const verification = input.contract.verification;
   if (!isVerificationPolicyV2(verification)) {
-    return legacyRubricsFile({ contract: input.contract, rubricStatuses: rubricStatusByLabel(input.latestVerification) });
+    throw new Error("verificationFile requires a v2 verification policy");
   }
-  const v2Result = isVerificationResultV2(input.latestVerification) ? input.latestVerification : void 0;
-  const validatorResults = v2Result?.validatorResults ?? [];
+  const requireEvidenceForScriptResults = verification.decision.requireEvidenceForScriptResults;
   return [
     `# ${input.contract.title} verification`,
     "",
     `Mode: \`${verification.mode}\``,
     "",
     "## Criteria",
-    "| id | severity | status | covering validators |",
+    "| id | severity | description | evaluated by |",
     "| --- | --- | --- | --- |",
     ...verification.criteria.map((criterion) => {
       const coveringValidatorIds = verification.validators.filter((validator) => validator.criteriaIds?.includes(criterion.id)).map((validator) => validator.id);
       return [
         `| \`${criterion.id}\``,
         criterion.severity,
-        statusText(criterionStatus(criterion.id, validatorResults)),
+        escapeMarkdownTableCell(criterion.description),
         coveringValidatorIds.map((id) => `\`${id}\``).join(", ") || "none"
       ].join(" | ") + " |";
     }),
     "",
-    "## Validators",
-    "| id | type | severity | status | score | evidence |",
+    "## Evaluators",
+    "| id | type | severity | evaluates | evidence | failure effect |",
     "| --- | --- | --- | --- | --- | --- |",
-    ...verification.validators.map((validator) => {
-      const result = validatorResults.find((candidate) => validatorResultId(candidate) === validator.id);
-      return [
-        `| \`${validator.id}\``,
-        validator.type,
-        validator.severity,
-        statusText(result?.status ?? "not-run"),
-        validatorScoreText(result),
-        evidenceExcerpt(result?.evidence)
-      ].join(" | ") + " |";
-    }),
+    ...verification.validators.map((validator) => [
+      `| \`${validator.id}\``,
+      validator.type,
+      validator.severity,
+      (validator.criteriaIds ?? []).map((id) => `\`${id}\``).join(", ") || "none",
+      escapeMarkdownTableCell(validatorEvidenceRequirement(validator)),
+      escapeMarkdownTableCell(validatorFailureEffect(validator, verification.decision))
+    ].join(" | ") + " |"),
     "",
-    "## Decision",
-    `- status: ${statusText(v2Result?.decision.status ?? v2Result?.status ?? "not-run")}`,
-    `- summary: ${v2Result?.decision.summary ?? v2Result?.summary ?? "No verification result yet."}`,
+    "## Decision Policy",
     `- requireAllMustCriteriaCovered: ${verification.decision.requireAllMustCriteriaCovered}`,
     `- failOnMustValidatorFailure: ${verification.decision.failOnMustValidatorFailure}`,
     `- failOnShouldValidatorFailure: ${verification.decision.failOnShouldValidatorFailure}`,
     `- requireEvidenceForAgentScores: ${verification.decision.requireEvidenceForAgentScores}`,
-    v2Result?.decision.repairInstructions ? `- repairInstructions: ${v2Result.decision.repairInstructions}` : "",
-    v2Result?.decision.humanQuestion ? `- humanQuestion: ${v2Result.decision.humanQuestion}` : "",
+    requireEvidenceForScriptResults === void 0 ? void 0 : `- requireEvidenceForScriptResults: ${requireEvidenceForScriptResults}`,
     ""
-  ].filter(Boolean).join("\n");
+  ].filter((line) => line !== void 0).join("\n");
+}
+function validatorEvidenceRequirement(validator) {
+  if (validator.type === "command") return "stdout/stderr";
+  if (validator.type === "score") return `${validator.metric} from ${validator.source?.type ?? "source"}`;
+  if (validator.type === "rubric_agent") return validator.evidenceRequired ? "agent score with evidence" : "agent score";
+  if (validator.type === "script") return validator.evidenceRequired ? "script JSON evidence" : "script JSON summary";
+  return "verification result";
+}
+function validatorFailureEffect(validator, decision) {
+  if (validator.severity === "must") {
+    return decision.failOnMustValidatorFailure ? "must failure fails the run" : "must failure records a warning";
+  }
+  return decision.failOnShouldValidatorFailure ? "should failure fails the run" : "should failure warns";
+}
+function escapeMarkdownTableCell(value) {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 function latestVerificationForRun(state, runId) {
   return [...state.verificationResults].reverse().find((result) => result.runId === runId);
@@ -23075,18 +23465,6 @@ function validatorResultId(result) {
   const resultWithId = result;
   return result.validatorId ?? resultWithId.id ?? result.label;
 }
-function criterionStatus(criterionId, results) {
-  const covering = results.filter((result) => result.criteriaIds.includes(criterionId));
-  if (covering.some((result) => result.status === "failed")) return "failed";
-  if (covering.some((result) => result.status === "needs_human")) return "needs_human";
-  if (covering.some((result) => result.status === "passed")) return "passed";
-  return "not-run";
-}
-function validatorScoreText(result) {
-  if (!result || !("score" in result) || typeof result.score !== "number") return "";
-  const maxScore = "maxScore" in result && typeof result.maxScore === "number" ? `/${result.maxScore}` : "";
-  return `${result.score}${maxScore}`;
-}
 function evidenceExcerpt(value) {
   if (!value) return "";
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -23116,10 +23494,14 @@ function statusText(status) {
 }
 
 // src/workspaceDirectory.ts
-import { mkdir, readdir as readdir2, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir as readdir2, readFile as readFile2, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join as join2, relative, sep } from "node:path";
+var PRESERVED_TOP_LEVEL_DIRS = /* @__PURE__ */ new Set(["evaluators"]);
+function loopWorkspacePath(dataDir, loopId) {
+  return join2(dataDir, "loops", loopId);
+}
 async function syncLoopWorkspaceDirectory(dataDir, loopId, files) {
-  const loopDir = join2(dataDir, "loops", loopId);
+  const loopDir = loopWorkspacePath(dataDir, loopId);
   const desiredPaths = new Set(files.map((file) => file.path));
   await mkdir(loopDir, { recursive: true });
   for (const file of files) {
@@ -23130,7 +23512,7 @@ async function syncLoopWorkspaceDirectory(dataDir, loopId, files) {
   await removeStaleFiles(loopDir, loopDir, desiredPaths);
   return Promise.all(
     files.map(async (file) => {
-      const content = await readFile(resolveLoopFilePath(loopDir, file.path), "utf8");
+      const content = await readFile2(resolveLoopFilePath(loopDir, file.path), "utf8");
       return {
         ...file,
         content,
@@ -23140,7 +23522,7 @@ async function syncLoopWorkspaceDirectory(dataDir, loopId, files) {
   );
 }
 async function deleteLoopWorkspaceDirectory(dataDir, loopId) {
-  await rm(join2(dataDir, "loops", loopId), { recursive: true, force: true });
+  await rm(loopWorkspacePath(dataDir, loopId), { recursive: true, force: true });
 }
 function resolveLoopFilePath(loopDir, filePath) {
   const parts = filePath.split("/");
@@ -23160,6 +23542,10 @@ async function removeStaleFiles(rootDir, currentDir, desiredPaths) {
   for (const entry of entries) {
     const entryPath = join2(currentDir, entry.name);
     if (entry.isDirectory()) {
+      const relativeDir = relative(rootDir, entryPath).split(sep).join("/");
+      if (PRESERVED_TOP_LEVEL_DIRS.has(relativeDir)) {
+        continue;
+      }
       await removeStaleFiles(rootDir, entryPath, desiredPaths);
       const remaining = await readdir2(entryPath);
       if (remaining.length === 0) {
@@ -23178,7 +23564,7 @@ function isNodeError(error2) {
 }
 
 // src/workflowGraph/compileGraph.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 var compilerVersion = 1;
 function compileExecutionGraph(input) {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(input.contract);
@@ -23324,7 +23710,7 @@ function addPipelineEdges(edges, step, nodeIds) {
   }
 }
 function hashGraph(input) {
-  return createHash("sha256").update(stableStringify(input)).digest("hex");
+  return createHash2("sha256").update(stableStringify(input)).digest("hex");
 }
 function stableStringify(value) {
   if (Array.isArray(value)) {
@@ -23746,9 +24132,11 @@ var LoopService = class {
       return this.executeGraphWorkflowAttempt(run, attempt, workflowContext, contract, input);
     }
     const engineEvents = [];
+    const contractWorkspace = await this.syncLoopWorkspace(run.loopId);
     const runner = new LoopRunner({
       executor: input.executor ?? this.createWorkflowContextExecutor(run, attempt.id, workflowContext.id),
       verifier: input.verifier,
+      contractWorkspacePath: contractWorkspace,
       now: this.now,
       completedStepOutputs: completedWorkflowStepOutputs(workflowContext)
     });
@@ -24099,6 +24487,7 @@ var LoopService = class {
     const usesV2Verification = usesVerificationV2Runtime(contract.verification);
     const verificationContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
     const engineEvents = [];
+    const contractWorkspace = await this.syncLoopWorkspace(run.loopId);
     const emitRuntimeEvent = (event) => {
       engineEvents.push(nextEngineEvent(event));
     };
@@ -24109,6 +24498,7 @@ var LoopService = class {
       runId: run.id,
       attemptId: attempt.id,
       now: this.now,
+      contractWorkspacePath: contractWorkspace,
       verifier: input.verifier,
       emit: emitRuntimeEvent
     });
@@ -25022,8 +25412,10 @@ ${priorOutput}`;
     let contextAfterWrite;
     let policy;
     let duplicateResultId;
+    let loopId;
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
+      loopId = run.loopId;
       const context = findWorkflowContextForValidatorResult(state, runId, input);
       if (input.attemptId && context.attemptId !== input.attemptId) {
         throw new Error(`Workflow context does not belong to attempt: ${context.id}`);
@@ -25118,6 +25510,9 @@ ${priorOutput}`;
     if (!contextAfterWrite?.verification || !policy) {
       throw new Error("Validator result was not recorded");
     }
+    if (!loopId) {
+      throw new Error(`Run not found: ${runId}`);
+    }
     if (contextAfterWrite.verification.pendingValidatorIds.length > 0) {
       return pendingVerificationResultV2(
         this.nextId("verification"),
@@ -25127,6 +25522,17 @@ ${priorOutput}`;
         timestamp2
       );
     }
+    const detailBeforeFinalization = await this.getRunDetail(runId);
+    let sequence = latestEngineEventSequence(detailBeforeFinalization.events);
+    const engineEvents = [];
+    const emitRuntimeEvent = (event) => {
+      engineEvents.push({
+        ...event,
+        runId,
+        createdAt: timestamp2,
+        sequence: ++sequence
+      });
+    };
     const result = await runVerificationV2({
       id: this.nextId("verification"),
       runId,
@@ -25135,8 +25541,11 @@ ${priorOutput}`;
       policy,
       workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
       projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
-      priorValidatorResults: contextAfterWrite.verification.validatorResults
+      contractWorkspacePath: await this.syncLoopWorkspace(loopId),
+      priorValidatorResults: contextAfterWrite.verification.validatorResults,
+      emit: (event) => emitRuntimeEvent(toEngineVerificationEvent(event, contextAfterWrite.attemptId))
     });
+    await this.recordEngineEvents(runId, engineEvents);
     await this.finalizeV2Verification(runId, contextAfterWrite.id, result);
     return result;
   }
@@ -25388,6 +25797,15 @@ ${priorOutput}`;
       loopId,
       loopWorkspaceFiles(legacyCompatibleWorkspaceState(state), loopId)
     );
+  }
+  async syncLoopWorkspace(loopId) {
+    const state = await this.options.store.readState();
+    await syncLoopWorkspaceDirectory(
+      this.options.store.dataDir,
+      loopId,
+      loopWorkspaceFiles(legacyCompatibleWorkspaceState(state), loopId)
+    );
+    return loopWorkspacePath(this.options.store.dataDir, loopId);
   }
   async getSnapshot() {
     const state = await this.options.store.readState();
@@ -27907,7 +28325,8 @@ var verificationDecisionPolicySchema = external_exports.object({
   requireAllMustCriteriaCovered: external_exports.boolean(),
   failOnMustValidatorFailure: external_exports.boolean(),
   failOnShouldValidatorFailure: external_exports.boolean(),
-  requireEvidenceForAgentScores: external_exports.boolean()
+  requireEvidenceForAgentScores: external_exports.boolean(),
+  requireEvidenceForScriptResults: external_exports.boolean().optional()
 });
 var commandValidatorSchema = external_exports.object({
   id: external_exports.string().min(1),
@@ -27954,10 +28373,48 @@ var rubricAgentValidatorSchema = external_exports.object({
   evidenceRequired: external_exports.boolean(),
   severity: verificationSeveritySchema
 });
+var scriptValidatorSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  type: external_exports.literal("script"),
+  label: external_exports.string().min(1),
+  criteriaIds: external_exports.array(external_exports.string().min(1)).min(1),
+  severity: verificationSeveritySchema,
+  runtime: external_exports.enum(["node", "python"]),
+  scriptRef: external_exports.object({
+    path: external_exports.string().min(1),
+    checksum: external_exports.string().min(1),
+    cwd: external_exports.union([
+      external_exports.literal("project"),
+      external_exports.literal("contract"),
+      external_exports.literal("loop"),
+      external_exports.object({ relativeToProject: external_exports.string().min(1) })
+    ]).optional(),
+    args: external_exports.array(external_exports.string()).optional(),
+    timeoutMs: external_exports.number().int().positive()
+  }),
+  input: external_exports.object({
+    source: external_exports.enum(["workflow_result", "artifact", "project"])
+  }),
+  output: external_exports.object({
+    schema: external_exports.literal("verification_result_v1")
+  }),
+  evidenceRequired: external_exports.boolean(),
+  builder: external_exports.object({
+    kind: external_exports.literal("codex_subagent"),
+    builtAt: external_exports.string().min(1),
+    selfCheck: external_exports.object({
+      status: external_exports.literal("passed"),
+      command: external_exports.string().min(1),
+      args: external_exports.array(external_exports.string()).optional(),
+      evidence: external_exports.string().min(1)
+    })
+  })
+});
 var verificationValidatorSchema = external_exports.discriminatedUnion("type", [
   commandValidatorSchema,
   scoreValidatorSchema,
-  rubricAgentValidatorSchema
+  rubricAgentValidatorSchema,
+  scriptValidatorSchema
 ]);
 var verificationV2Schema = external_exports.object({
   version: external_exports.literal(2),
@@ -28649,7 +29106,7 @@ var HostMediatedSessionBridge = class {
 // src/previewServer.ts
 import { createServer } from "node:http";
 import { spawn as spawn2 } from "node:child_process";
-import { readFile as readFile2 } from "node:fs/promises";
+import { readFile as readFile3 } from "node:fs/promises";
 import { extname, isAbsolute, join as join3, relative as relative2 } from "node:path";
 
 // src/workflowGraph/workflowView.ts
@@ -29203,7 +29660,7 @@ async function sendStaticFile(response, staticDir, pathname) {
     return;
   }
   try {
-    const body = await readFile2(filePath);
+    const body = await readFile3(filePath);
     response.writeHead(200, {
       "cache-control": "no-store",
       "content-type": CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream"
@@ -29219,7 +29676,7 @@ async function sendStaticFile(response, staticDir, pathname) {
   }
 }
 async function readTemplates(templatesFile) {
-  const raw = await readFile2(templatesFile, "utf8");
+  const raw = await readFile3(templatesFile, "utf8");
   const parsed = JSON.parse(raw);
   if (!Array.isArray(parsed)) {
     throw new Error("Templates file must contain an array");
@@ -29403,7 +29860,7 @@ function normalizeCodexProject(value) {
 }
 
 // src/store.ts
-import { mkdir as mkdir2, readFile as readFile3, rename, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir2, readFile as readFile4, rename, writeFile as writeFile2 } from "node:fs/promises";
 import { join as join5 } from "node:path";
 
 // src/loopOperationalState.ts
@@ -29486,7 +29943,7 @@ var LoopStore = class {
   updateQueue = Promise.resolve();
   async readState() {
     try {
-      const raw = await readFile3(this.statePath, "utf8");
+      const raw = await readFile4(this.statePath, "utf8");
       return normalizeState(JSON.parse(raw));
     } catch (error2) {
       if (isNodeError2(error2) && error2.code === "ENOENT") {
