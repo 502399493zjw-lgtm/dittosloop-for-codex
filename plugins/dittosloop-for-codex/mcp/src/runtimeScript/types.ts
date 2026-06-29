@@ -4,6 +4,7 @@ import type {
   EffectiveAgentProfile,
   RuntimeScriptLimits
 } from "../contract/types.js";
+import type { RuntimeScriptJournal } from "./journal.js";
 
 export interface RuntimeScriptEventInput {
   type: string;
@@ -15,12 +16,8 @@ export interface RuntimeScriptEventInput {
   data?: Record<string, unknown>;
 }
 
-export interface RuntimeScriptJournal {
-  readAgentResult(idempotencyKey: string): Promise<WorkflowSubagentResult | undefined>;
-  writeAgentResult(idempotencyKey: string, result: WorkflowSubagentResult): Promise<void>;
-}
-
 export interface RuntimeScriptRunInput {
+  loopId?: string;
   runId: string;
   attemptId: string;
   workflowContextId: string;
@@ -35,6 +32,7 @@ export interface RuntimeScriptRunInput {
 }
 
 export interface RuntimeScriptAgentOptions {
+  key?: string;
   label?: string;
   phaseId?: string;
   subagent?: CodexSubagentSpec;
