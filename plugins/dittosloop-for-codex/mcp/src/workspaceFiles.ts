@@ -93,7 +93,7 @@ function formalLoopDirectoryFiles(input: {
         path: "verification.md",
         kind: "verification",
         language: "markdown",
-        content: verificationFile({ contract: input.contract, latestVerification })
+        content: verificationFile({ contract: input.contract })
       })
     : withSize({
         path: "rubrics.md",
@@ -268,15 +268,11 @@ function legacyRubricsFile(input: {
 
 function verificationFile(input: {
   contract: FormalLoopContract;
-  latestVerification?: VerificationResultRecord;
 }): string {
   const verification = input.contract.verification;
   if (!isVerificationPolicyV2(verification)) {
-    return legacyRubricsFile({ contract: input.contract, rubricStatuses: rubricStatusByLabel(input.latestVerification) });
+    throw new Error("verificationFile requires a v2 verification policy");
   }
-
-  const v2Result = isVerificationResultV2(input.latestVerification) ? input.latestVerification : undefined;
-  const validatorResults = v2Result?.validatorResults ?? [];
 
   return [
     `# ${input.contract.title} verification`,
@@ -284,7 +280,7 @@ function verificationFile(input: {
     `Mode: \`${verification.mode}\``,
     "",
     "## Criteria",
-    "| id | severity | status | covering validators |",
+    "| id | severity | description | evaluated by |",
     "| --- | --- | --- | --- |",
     ...verification.criteria.map((criterion) => {
       const coveringValidatorIds = verification.validators
@@ -293,37 +289,51 @@ function verificationFile(input: {
       return [
         `| \`${criterion.id}\``,
         criterion.severity,
-        statusText(criterionStatus(criterion.id, validatorResults)),
+        escapeMarkdownTableCell(criterion.description),
         coveringValidatorIds.map((id) => `\`${id}\``).join(", ") || "none"
       ].join(" | ") + " |";
     }),
     "",
-    "## Validators",
-    "| id | type | severity | status | score | evidence |",
+    "## Evaluators",
+    "| id | type | severity | evaluates | evidence | failure effect |",
     "| --- | --- | --- | --- | --- | --- |",
-    ...verification.validators.map((validator) => {
-      const result = validatorResults.find((candidate) => validatorResultId(candidate) === validator.id);
-      return [
-        `| \`${validator.id}\``,
-        validator.type,
-        validator.severity,
-        statusText(result?.status ?? "not-run"),
-        validatorScoreText(result),
-        evidenceExcerpt(result?.evidence)
-      ].join(" | ") + " |";
-    }),
+    ...verification.validators.map((validator) => [
+      `| \`${validator.id}\``,
+      validator.type,
+      validator.severity,
+      (validator.criteriaIds ?? []).map((id) => `\`${id}\``).join(", ") || "none",
+      escapeMarkdownTableCell(validatorEvidenceRequirement(validator)),
+      escapeMarkdownTableCell(validatorFailureEffect(validator, verification.decision))
+    ].join(" | ") + " |"),
     "",
-    "## Decision",
-    `- status: ${statusText(v2Result?.decision.status ?? v2Result?.status ?? "not-run")}`,
-    `- summary: ${v2Result?.decision.summary ?? v2Result?.summary ?? "No verification result yet."}`,
+    "## Decision Policy",
     `- requireAllMustCriteriaCovered: ${verification.decision.requireAllMustCriteriaCovered}`,
     `- failOnMustValidatorFailure: ${verification.decision.failOnMustValidatorFailure}`,
     `- failOnShouldValidatorFailure: ${verification.decision.failOnShouldValidatorFailure}`,
     `- requireEvidenceForAgentScores: ${verification.decision.requireEvidenceForAgentScores}`,
-    v2Result?.decision.repairInstructions ? `- repairInstructions: ${v2Result.decision.repairInstructions}` : "",
-    v2Result?.decision.humanQuestion ? `- humanQuestion: ${v2Result.decision.humanQuestion}` : "",
     ""
-  ].filter(Boolean).join("\n");
+  ].join("\n");
+}
+
+function validatorEvidenceRequirement(validator: FormalLoopContract["verification"]["validators"][number]): string {
+  if (validator.type === "command") return "stdout/stderr";
+  if (validator.type === "score") return `${validator.metric} from ${validator.source.type}`;
+  if (validator.type === "rubric_agent") return validator.evidenceRequired ? "agent score with evidence" : "agent score";
+  return "verification result";
+}
+
+function validatorFailureEffect(
+  validator: FormalLoopContract["verification"]["validators"][number],
+  decision: FormalLoopContract["verification"]["decision"]
+): string {
+  if (validator.severity === "must") {
+    return decision.failOnMustValidatorFailure ? "must failure fails the run" : "must failure records a warning";
+  }
+  return decision.failOnShouldValidatorFailure ? "should failure fails the run" : "should failure warns";
+}
+
+function escapeMarkdownTableCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
 function latestVerificationForRun(state: LoopState, runId: string): VerificationResultRecord | undefined {

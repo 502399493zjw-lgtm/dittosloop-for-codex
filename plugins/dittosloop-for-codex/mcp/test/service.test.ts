@@ -610,7 +610,7 @@ test("normalizes project fields on formal loop creation into the contract bindin
   });
 });
 
-test("renders loop directory files from stored loop state", async () => {
+test("renders workspace loop directory files from stored loop state", async () => {
   const service = await createService();
   const formal = await service.createLoopContract({
     title: "AI 开发工具日报",
@@ -728,9 +728,17 @@ test("renders loop directory files from stored loop state", async () => {
   expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
   const verificationFile = files.find((file) => file.path === "verification.md")?.content ?? "";
   expect(verificationFile).toContain("## Criteria");
-  expect(verificationFile).toContain("## Validators");
-  expect(verificationFile).toContain("## Decision");
-  expect(verificationFile).toContain("包含来源");
+  expect(verificationFile).toContain("## Evaluators");
+  expect(verificationFile).toContain("## Decision Policy");
+  expect(verificationFile).toContain("| `daily-report` | must |");
+  expect(verificationFile).toContain("| `quality-review` | rubric_agent | must |");
+  expect(verificationFile).toContain("- requireAllMustCriteriaCovered: true");
+  expect(verificationFile).not.toContain("包含来源");
+  expect(verificationFile).not.toMatch(/latest status/i);
+  expect(verificationFile).not.toMatch(/latest score/i);
+  expect(verificationFile).not.toMatch(/latest evidence/i);
+  expect(verificationFile).not.toMatch(/latest decision/i);
+  expect(verificationFile).not.toMatch(/status:\\s*(通过|passed|failed|失败|not-run|未运行)/i);
   const statusJson = JSON.parse(files.find((file) => file.path === "status.json")?.content ?? "{}");
   expect(statusJson.latestVerification).toMatchObject({
     version: 2,
