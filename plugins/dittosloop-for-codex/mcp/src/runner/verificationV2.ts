@@ -268,6 +268,8 @@ async function runDeterministicValidator(
       return runScoreValidator(validator, input, validatorResults);
     case "rubric_agent":
       return rubricAgentNeedsHumanResult(validator);
+    case "script":
+      throw new Error(`Script validator ${validator.id} is not executable until the script runtime is implemented.`);
   }
 }
 
