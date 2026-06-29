@@ -27,8 +27,8 @@ Rubric Draft
 
 ## Creation Flow
 
-1. Shape the loop contract: title, goal or intent, manual trigger, verification expectations, and whether it needs a structured workflow body.
-2. Choose a workflow style before writing `body.steps`.
+1. Shape the loop contract: title, goal or intent, manual trigger, verification expectations, and whether it needs `body.steps`, legacy `script.build`, or a runtime script.
+2. Choose a workflow style before writing `body.steps`, a legacy `script.build`, or `workflowKind: "runtime_script"` plus a JavaScript `script`.
 3. Use `create_loop_contract` for every new loop.
 4. After `create_loop_contract` succeeds, call `get_preview_url` so the user can inspect the created loop.
 5. New loops should be formal runtime contracts, even when the workflow is compact.
@@ -46,12 +46,14 @@ Keep the first formal contract small and actionable:
 ```text
 Title: short responsibility name
 Goal: what the loop is responsible for
-Body: ordered phase, task(runtime: codex), compatibility agent, and parallel steps
+Workflow input: ordered `body.steps`, legacy `script.build`, or `workflowKind: "runtime_script"` with a JavaScript `script`
 Session policy: omit it or use sessionPolicy: "new"; reuse-run/reuse-step are not supported yet
 Agent profiles: optional reusable Codex task profiles keyed in `agentProfiles`
 Task binding: optional `agentProfileRef` on each Codex task step
 Required skills: optional `requiredSkills` on a profile; use `allowDegradedProfiles: true` only when degraded launch is acceptable
 Subagent: optional compatibility-only role/model/tools/permissions hints for Codex task sessions
+Runtime script args: optional `args` object for runtime script inputs
+Runtime script limits: optional `limits` object; approval defaults are required for runtime script workflows
 Verification: criteria, validators, decision policy
 Repair policy: whether failed verification should retry, ask the user, or fail
 Stop policy: when the loop should stop

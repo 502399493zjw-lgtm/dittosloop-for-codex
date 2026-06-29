@@ -40,11 +40,12 @@ function sortLoopWorkspaceFiles(files: LoopWorkspaceFile[]): LoopWorkspaceFile[]
   const rootOrder = new Map([
     ["memory.md", 0],
     ["workflow.json", 1],
-    ["verification.md", 2],
-    ["rubrics.md", 2],
-    ["status.json", 3],
-    ["runs.json", 4],
-    ["contract.json", 5]
+    ["runtime.js", 2],
+    ["verification.md", 3],
+    ["rubrics.md", 3],
+    ["status.json", 4],
+    ["runs.json", 5],
+    ["contract.json", 6]
   ]);
 
   return [...files].sort((left, right) => {
@@ -116,6 +117,7 @@ function formalLoopDirectoryFiles(input: {
           latestRunStatus: latestRun?.status ?? null,
           latestAttemptStatus: latestAttempt?.status ?? null,
           latestVerificationStatus: latestVerification?.status ?? null,
+          workflow: input.contract.workflow,
           body: input.contract.body,
           agentProfiles: input.contract.agentProfiles ?? {},
           repairPolicy: input.contract.repairPolicy,
@@ -126,6 +128,16 @@ function formalLoopDirectoryFiles(input: {
         2
       )}\n`
     }),
+    ...(input.contract.workflow.kind === "runtime_script"
+      ? [
+          withSize({
+            path: "runtime.js",
+            kind: "runtime" as const,
+            language: "javascript" as const,
+            content: input.contract.workflow.source
+          })
+        ]
+      : []),
     withSize({
       path: "skill/dittosloop-for-codex-loop.md",
       kind: "skill",
