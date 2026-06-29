@@ -24,7 +24,11 @@ const deniedRuntimeScriptPatterns: DeniedRuntimeScriptPattern[] = [
   { label: "eval", pattern: /\beval\s*\(/ },
   { label: "Function", pattern: /\bFunction\s*\(/ },
   { label: "constructor", pattern: /\bconstructor\b/ },
-  { label: "__proto__", pattern: /__proto__/ }
+  { label: "__proto__", pattern: /__proto__/ },
+  { label: "Date", pattern: /\bDate\b/ },
+  { label: "Math.random", pattern: /\bMath\s*\.\s*random\s*\(/ },
+  { label: "crypto", pattern: /\bcrypto\b/ },
+  { label: "performance", pattern: /\bperformance\b/ }
 ];
 
 export function validateRuntimeScript(source: string): RuntimeScriptValidationResult {

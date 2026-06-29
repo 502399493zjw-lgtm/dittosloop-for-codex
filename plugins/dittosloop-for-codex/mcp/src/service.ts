@@ -1310,7 +1310,7 @@ export class LoopService {
       const runId = this.nextId("run");
       const attemptId = this.nextId("attempt");
       const workflowContextId = this.nextId("workflow");
-      const graphSnapshotId = launchContract ? this.nextId("graph") : undefined;
+      const graphSnapshotId = launchContract && staticWorkflowBody(launchContract) ? this.nextId("graph") : undefined;
       const memoryWindow = loopMemoryWindow(state, loopId);
       const prompt = buildCodexSessionPrompt(loop, goal, launchContract, {
         runId,

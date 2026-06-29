@@ -566,6 +566,29 @@ test("prepares workflow context with immutable graph snapshot and node runs", as
   ]);
 });
 
+test("prepares runtime script workflow context without compiling a static graph", async () => {
+  const service = await createService();
+  const loop = await service.createLoopContract({
+    title: "Runtime script launch",
+    goal: "Start dynamic runtime script orchestration",
+    workflowKind: "runtime_script",
+    script: 'return await agent("hello");',
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Runtime script context exists", severity: "must" }]
+    }
+  });
+
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run runtime script launch" });
+  const detail = await service.getRunDetail(launch.run.id);
+  const context = detail.workflowContexts[0];
+
+  expect(context.contractSnapshot?.workflow).toMatchObject({ kind: "runtime_script" });
+  expect(context.executionGraphSnapshot).toBeUndefined();
+  expect(context.nodeRuns).toBeUndefined();
+  expect(launch.launchRequest.workflowPlan?.steps).toEqual([]);
+});
+
 test("normalizes project fields on formal loop creation into the contract binding and preview loop", async () => {
   const service = await createService();
 

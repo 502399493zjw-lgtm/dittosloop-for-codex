@@ -51,6 +51,23 @@ describe("validateRuntimeScript", () => {
     ]));
   });
 
+  test("rejects nondeterministic globals listed by the runtime script design", () => {
+    const result = validateRuntimeScript([
+      "const started = Date.now();",
+      "const random = Math.random();",
+      "const id = crypto.randomUUID();",
+      "return { started, random, id, now: performance.now() };"
+    ].join("\n"));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.stringMatching(/Date/),
+      expect.stringMatching(/Math\.random/),
+      expect.stringMatching(/crypto/i),
+      expect.stringMatching(/performance/i)
+    ]));
+  });
+
   test("reports every denied pattern present in a script", () => {
     const result = validateRuntimeScript('const fs = require("fs"); eval("process.exit()"); return globalThis;');
 
