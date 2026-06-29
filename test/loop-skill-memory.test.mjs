@@ -96,6 +96,11 @@ test("create loop guidance describes clarification, creation, and preview handof
   assert.match(rubricDraft, /- Validators:/);
   assert.match(rubricDraft, /- Evidence:/);
   assert.match(rubricDraft, /- Failure handling: repair, ask the user, or fail/);
+  assert.match(createLoop, /evaluator-builder subagent/);
+  assert.match(createLoop, /script evaluator/);
+  assert.match(createLoop, /self-check/);
+  assert.match(createLoop, /checksum/);
+  assert.match(createLoop, /verification_result_v1/);
   assert.match(createLoop, /get_preview_url/);
   assert.match(createLoop, /loopId/);
   assert.match(createLoop, /local DittosLoop board URL/);

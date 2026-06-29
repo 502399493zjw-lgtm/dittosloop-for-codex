@@ -20,10 +20,12 @@ Use a user-facing rubric draft instead of raw JSON:
 Rubric Draft
 - Must: the result satisfies the loop's primary goal with evidence.
 - Should: the result follows the user's preferred format and tone.
-- Validators: automated checks, rubric agents, human review, or a mix.
+- Validators: automated commands, script evaluators, rubric agents, human review, or a mix.
 - Evidence: command output, cited sources, artifact links, or reviewer notes.
 - Failure handling: repair, ask the user, or fail the run.
 ```
+
+When the rubric draft needs a custom `script evaluator`, start a visible evaluator-builder subagent before calling `create_loop_contract`. The evaluator-builder subagent must create the evaluator script, create a fixture or dry-run sample, run a self-check, report the script checksum, and confirm that stdout uses the `verification_result_v1` JSON shape. Register the script validator only after the self-check passes; otherwise keep the loop as not created and tell the user what blocked evaluator setup.
 
 ## Creation Flow
 

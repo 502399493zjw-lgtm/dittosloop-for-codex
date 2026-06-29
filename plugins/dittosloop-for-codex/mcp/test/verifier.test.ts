@@ -329,6 +329,38 @@ test("verification v2 script validators require evidence when validator marks it
   });
 });
 
+test("verification v2 script validators cannot pass without required evidence", async () => {
+  const policy = verificationPolicyWithValidators([
+    scriptValidatorFixture()
+  ]);
+  policy.decision.requireEvidenceForScriptResults = true;
+
+  const result = await runVerificationV2({
+    id: "verification_script_no_evidence",
+    runId: "run_1",
+    createdAt: "2026-06-29T00:00:00.000Z",
+    policy,
+    workflowResult: {},
+    contractWorkspacePath: "/loop-workspace",
+    commandExecutor: async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        status: "passed",
+        score: 1,
+        summary: "Looks good."
+      }),
+      stderr: ""
+    })
+  });
+
+  expect(result).toMatchObject({
+    status: "needs_human",
+    decision: {
+      needsHumanValidatorIds: ["release-note-script"]
+    }
+  });
+});
+
 test("verification v2 script validators parse valid long JSON stdout before truncating stored logs", async () => {
   const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
   const longEvidence = "x".repeat(MAX_EVIDENCE_CHARS);
