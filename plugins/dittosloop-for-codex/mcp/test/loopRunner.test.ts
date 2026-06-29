@@ -246,6 +246,79 @@ describe("LoopRunner", () => {
     expect(events.indexOf("validator_done")).toBeLessThan(events.indexOf("verification_decided"));
   });
 
+  test("passes contract workspace path to script validators", async () => {
+    const requests: Array<{ cwd?: string; stdin?: string }> = [];
+    const scriptContract = {
+      ...contract,
+      verification: {
+        version: 2,
+        mode: "after_workflow",
+        criteria: [
+          { id: "quality", label: "Quality", description: "Output is acceptable.", severity: "must" }
+        ],
+        validators: [
+          {
+            id: "script-quality",
+            type: "script",
+            label: "Script quality",
+            criteriaIds: ["quality"],
+            severity: "must",
+            runtime: "node",
+            scriptRef: {
+              path: "evaluators/script-quality/evaluator.mjs",
+              checksum: "sha256:0123456789abcdef",
+              cwd: "loop",
+              timeoutMs: 30000
+            },
+            input: { source: "workflow_result" },
+            output: { schema: "verification_result_v1" },
+            evidenceRequired: true,
+            builder: {
+              kind: "codex_subagent",
+              builtAt: "2026-06-29T00:00:00.000Z",
+              selfCheck: {
+                status: "passed",
+                command: "node",
+                args: ["evaluators/script-quality/evaluator.mjs"],
+                evidence: "fixture passed"
+              }
+            }
+          }
+        ],
+        decision: {
+          requireAllMustCriteriaCovered: true,
+          failOnMustValidatorFailure: true,
+          failOnShouldValidatorFailure: false,
+          requireEvidenceForAgentScores: true,
+          requireEvidenceForScriptResults: true
+        }
+      }
+    } satisfies FormalLoopContract;
+
+    const runner = new LoopRunner({
+      executor: { async run() { return { text: "candidate" }; } },
+      commandExecutor: async (request) => {
+        requests.push(request);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            status: "passed",
+            summary: "Script accepted output.",
+            evidence: ["checked candidate"]
+          }),
+          stderr: ""
+        };
+      },
+      contractWorkspacePath: "/loop-workspace",
+      now: () => "2026-06-29T00:00:00.000Z"
+    });
+
+    const result = await runner.run({ contract: scriptContract, runId: "run_script", attemptId: "attempt_script" });
+
+    expect(result.status).toBe("completed");
+    expect(requests[0]).toMatchObject({ cwd: "/loop-workspace" });
+  });
+
   test("passes workflow launch context to agent executors", async () => {
     const agentRequests: unknown[] = [];
     const runner = new LoopRunner({

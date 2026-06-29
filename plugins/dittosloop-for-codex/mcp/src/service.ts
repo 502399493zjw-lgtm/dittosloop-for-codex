@@ -54,7 +54,7 @@ import type {
 } from "./types.js";
 import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
-import { deleteLoopWorkspaceDirectory, syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
+import { deleteLoopWorkspaceDirectory, loopWorkspacePath, syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
 import { compileExecutionGraph } from "./workflowGraph/compileGraph.js";
 import {
   createInitialNodeRuns,
@@ -535,9 +535,11 @@ export class LoopService {
       return this.executeGraphWorkflowAttempt(run, attempt, workflowContext, contract, input);
     }
     const engineEvents: EngineEvent[] = [];
+    const contractWorkspace = loopWorkspacePath(this.options.store.dataDir, run.loopId);
     const runner = new LoopRunner({
       executor: input.executor ?? this.createWorkflowContextExecutor(run, attempt.id, workflowContext.id),
       verifier: input.verifier,
+      contractWorkspacePath: contractWorkspace,
       now: this.now,
       completedStepOutputs: completedWorkflowStepOutputs(workflowContext)
     });
@@ -976,6 +978,7 @@ export class LoopService {
     const usesV2Verification = usesVerificationV2Runtime(contract.verification);
     const verificationContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
     const engineEvents: EngineEvent[] = [];
+    const contractWorkspace = loopWorkspacePath(this.options.store.dataDir, run.loopId);
     const emitRuntimeEvent = (event: EngineEventInput): void => {
       engineEvents.push(nextEngineEvent(event as Omit<EngineEvent, "runId" | "createdAt" | "sequence">));
     };
@@ -986,6 +989,7 @@ export class LoopService {
       runId: run.id,
       attemptId: attempt.id,
       now: this.now,
+      contractWorkspacePath: contractWorkspace,
       verifier: input.verifier,
       emit: emitRuntimeEvent
     });
@@ -2087,9 +2091,11 @@ export class LoopService {
     let contextAfterWrite: WorkflowContext | undefined;
     let policy: FormalLoopContract["verification"] | undefined;
     let duplicateResultId: string | undefined;
+    let loopId: string | undefined;
 
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
+      loopId = run.loopId;
       const context = findWorkflowContextForValidatorResult(state, runId, input);
       if (input.attemptId && context.attemptId !== input.attemptId) {
         throw new Error(`Workflow context does not belong to attempt: ${context.id}`);
@@ -2191,6 +2197,9 @@ export class LoopService {
     if (!contextAfterWrite?.verification || !policy) {
       throw new Error("Validator result was not recorded");
     }
+    if (!loopId) {
+      throw new Error(`Run not found: ${runId}`);
+    }
 
     if (contextAfterWrite.verification.pendingValidatorIds.length > 0) {
       return pendingVerificationResultV2(
@@ -2210,6 +2219,7 @@ export class LoopService {
       policy,
       workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
       projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
+      contractWorkspacePath: loopWorkspacePath(this.options.store.dataDir, loopId),
       priorValidatorResults: contextAfterWrite.verification.validatorResults
     });
     await this.finalizeV2Verification(runId, contextAfterWrite.id, result);

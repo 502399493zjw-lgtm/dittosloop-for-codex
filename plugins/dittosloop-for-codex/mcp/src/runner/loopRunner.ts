@@ -12,6 +12,7 @@ export interface LoopRunnerOptions {
   executor: Executor;
   verifier?: LoopVerifier;
   commandExecutor?: CommandExecutor;
+  contractWorkspacePath?: string;
   now?: () => string;
   completedStepOutputs?: Record<string, string>;
 }
@@ -74,6 +75,7 @@ export class LoopRunner {
       runId: request.runId,
       attemptId,
       now,
+      contractWorkspacePath: this.options.contractWorkspacePath,
       verifier: this.options.verifier,
       commandExecutor: this.options.commandExecutor,
       emit: emitRuntimeEvent

@@ -3,12 +3,18 @@ import { dirname, join, relative, sep } from "node:path";
 
 import type { LoopWorkspaceFile } from "./types.js";
 
+const PRESERVED_TOP_LEVEL_DIRS = new Set(["evaluators"]);
+
+export function loopWorkspacePath(dataDir: string, loopId: string): string {
+  return join(dataDir, "loops", loopId);
+}
+
 export async function syncLoopWorkspaceDirectory(
   dataDir: string,
   loopId: string,
   files: LoopWorkspaceFile[]
 ): Promise<LoopWorkspaceFile[]> {
-  const loopDir = join(dataDir, "loops", loopId);
+  const loopDir = loopWorkspacePath(dataDir, loopId);
   const desiredPaths = new Set(files.map((file) => file.path));
 
   await mkdir(loopDir, { recursive: true });
@@ -34,7 +40,7 @@ export async function syncLoopWorkspaceDirectory(
 }
 
 export async function deleteLoopWorkspaceDirectory(dataDir: string, loopId: string): Promise<void> {
-  await rm(join(dataDir, "loops", loopId), { recursive: true, force: true });
+  await rm(loopWorkspacePath(dataDir, loopId), { recursive: true, force: true });
 }
 
 function resolveLoopFilePath(loopDir: string, filePath: string): string {
@@ -58,6 +64,10 @@ async function removeStaleFiles(rootDir: string, currentDir: string, desiredPath
   for (const entry of entries) {
     const entryPath = join(currentDir, entry.name);
     if (entry.isDirectory()) {
+      const relativeDir = relative(rootDir, entryPath).split(sep).join("/");
+      if (PRESERVED_TOP_LEVEL_DIRS.has(relativeDir)) {
+        continue;
+      }
       await removeStaleFiles(rootDir, entryPath, desiredPaths);
       const remaining = await readdir(entryPath);
       if (remaining.length === 0) {

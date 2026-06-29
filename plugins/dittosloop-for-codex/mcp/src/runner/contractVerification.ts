@@ -15,6 +15,7 @@ export async function runContractVerification(input: {
   runId: string;
   attemptId: string;
   now: () => string;
+  contractWorkspacePath?: string;
   verifier?: LoopVerifier;
   commandExecutor?: CommandExecutor;
   emit?: (event: EngineEventInput) => void;
@@ -30,6 +31,7 @@ export async function runContractVerification(input: {
       policy: contract.verification,
       workflowResult: result,
       projectPath: contract.projectBinding?.projectPath,
+      contractWorkspacePath: input.contractWorkspacePath,
       commandExecutor: input.commandExecutor,
       emit: (event) => input.emit?.(toEngineVerificationEvent(event, input.attemptId))
     });

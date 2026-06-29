@@ -610,6 +610,106 @@ test("normalizes project fields on formal loop creation into the contract bindin
   });
 });
 
+test("executes loop-owned script evaluators from the loop workspace", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Script verification",
+    goal: "Verify workflow output through a generated script",
+    body: {
+      steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft result." }]
+    },
+    verification: {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "quality", label: "Quality", description: "Output passes script quality checks.", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "script-quality",
+          type: "script",
+          label: "Script quality",
+          criteriaIds: ["quality"],
+          severity: "must",
+          runtime: "node",
+          scriptRef: {
+            path: "evaluators/script-quality/evaluator.mjs",
+            checksum: "sha256:0123456789abcdef",
+            cwd: "loop",
+            timeoutMs: 30000
+          },
+          input: { source: "workflow_result" },
+          output: { schema: "verification_result_v1" },
+          evidenceRequired: true,
+          builder: {
+            kind: "codex_subagent",
+            builtAt: fixedTime,
+            selfCheck: {
+              status: "passed",
+              command: "node",
+              args: ["evaluators/script-quality/evaluator.mjs"],
+              evidence: "fixture passed"
+            }
+          }
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true,
+        requireEvidenceForScriptResults: true
+      }
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run script verification" });
+  const dataDir = (service as any).options.store.dataDir as string;
+  const evaluatorDir = join(dataDir, "loops", formal.id, "evaluators", "script-quality");
+  await mkdir(evaluatorDir, { recursive: true });
+  await writeFile(
+    join(evaluatorDir, "evaluator.mjs"),
+    [
+      "const chunks = [];",
+      "for await (const chunk of process.stdin) chunks.push(chunk);",
+      "const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));",
+      "const payload = JSON.stringify(input.workflowResult);",
+      "const passed = payload.includes('accepted');",
+      "console.log(JSON.stringify({",
+      "  status: passed ? 'passed' : 'failed',",
+      "  summary: passed ? 'accepted' : 'missing accepted marker',",
+      "  evidence: [payload],",
+      "  output: { checked: true }",
+      "}));"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const run = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id,
+    executor: {
+      async run() {
+        return { text: "accepted result" };
+      }
+    }
+  });
+  const detail = await service.getRunDetail(run.id);
+
+  expect(detail.verificationResults).toMatchObject([
+    {
+      version: 2,
+      status: "passed",
+      validatorResults: [
+        {
+          validatorId: "script-quality",
+          type: "script",
+          status: "passed",
+          evidence: "[\"accepted result\"]"
+        }
+      ]
+    }
+  ]);
+});
+
 test("renders workspace loop directory files from stored loop state", async () => {
   const service = await createService();
   const formal = await service.createLoopContract({
