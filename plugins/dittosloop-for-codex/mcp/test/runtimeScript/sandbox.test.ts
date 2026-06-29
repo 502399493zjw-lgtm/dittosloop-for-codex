@@ -102,6 +102,22 @@ describe("runRuntimeScriptInVm", () => {
     });
   });
 
+  test("agent uses explicit key as replay call site", async () => {
+    const bridge = new FakeSubagentBridge([completed("reviewed")]);
+
+    await expect(runRuntimeScriptInVm(createRunInput({
+      source: 'return await agent("review a.ts", { key: "review:a.ts", label: "Review A" });',
+      subagentBridge: bridge
+    }))).resolves.toBe("reviewed");
+
+    expect(bridge.calls).toHaveLength(1);
+    expect(bridge.calls[0]).toMatchObject({
+      prompt: "review a.ts",
+      label: "Review A",
+      callSite: "review:a.ts"
+    });
+  });
+
   test("parallel starts all branches before awaiting results", async () => {
     const bridge = new class implements WorkflowSubagentBridge {
       readonly calls: WorkflowSubagentInput[] = [];

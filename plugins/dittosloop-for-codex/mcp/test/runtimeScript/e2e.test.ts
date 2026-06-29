@@ -138,6 +138,12 @@ function taskRunForSession(detail: RunDetail, sessionId: string) {
   return taskRun!;
 }
 
+function sessionIdForPrompt(requests: CodexSessionRequest[], prompt: string) {
+  const index = requests.findIndex((request) => request.prompt === prompt);
+  expect(index).toBeGreaterThanOrEqual(0);
+  return `session_${index + 1}`;
+}
+
 async function recordWorkerResult(service: LoopService, runId: string, detail: RunDetail, sessionId: string, result: string) {
   const context = workflowContext(detail);
   const taskRun = taskRunForSession(detail, sessionId);
@@ -183,7 +189,10 @@ test("runs runtime script end-to-end through workers, parallel fan-out, verifier
     workflowKind: "runtime_script",
     script: `
       const files = JSON.parse(await agent("Return [\\"a.ts\\",\\"b.ts\\"]"));
-      const reviews = await parallel(files.map((file) => () => agent(\`Review \${file}\`)));
+      const reviews = await parallel(files.map((file) => () => agent(\`Review \${file}\`, {
+        key: \`review:\${file}\`,
+        label: file
+      })));
       const summary = await agent(\`Summarize: \${JSON.stringify(reviews)}\`);
       return { files, reviews, summary };
     `,
@@ -224,10 +233,13 @@ test("runs runtime script end-to-end through workers, parallel fan-out, verifier
   );
   expect(parallelTaskRuns).toHaveLength(2);
   expect(new Set(parallelTaskRuns.map((candidate) => candidate.sessionId)).size).toBe(2);
-  expect(new Set(parallelTaskRuns.map((candidate) => candidate.stepId)).size).toBe(2);
+  expect(parallelTaskRuns.map((candidate) => candidate.stepId)).toEqual(expect.arrayContaining([
+    "runtime:review:a.ts",
+    "runtime:review:b.ts"
+  ]));
 
-  await recordWorkerResult(service, parallelRun.id, parallelDetail, "session_2", "review a.ts");
-  await recordWorkerResult(service, parallelRun.id, parallelDetail, "session_3", "review b.ts");
+  await recordWorkerResult(service, parallelRun.id, parallelDetail, sessionIdForPrompt(requests, "Review a.ts"), "review a.ts");
+  await recordWorkerResult(service, parallelRun.id, parallelDetail, sessionIdForPrompt(requests, "Review b.ts"), "review b.ts");
 
   const summaryRun = await service.executeWorkflowAttempt(firstRun.id, {
     attemptId: launch.attempt.id

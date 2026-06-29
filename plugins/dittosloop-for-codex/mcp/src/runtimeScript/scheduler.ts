@@ -100,8 +100,9 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
       throw new Error(`Runtime script exceeded maxAgentCalls (${input.limits.maxAgentCalls})`);
     }
 
+    const explicitKey = options?.key?.trim();
     const labelOrPromptHash = options?.label?.trim() || hashRuntimeScriptPrompt(prompt);
-    const callSite = `agent:${agentSequence}:${labelOrPromptHash}`;
+    const callSite = explicitKey || `agent:${agentSequence}:${labelOrPromptHash}`;
     const key = runtimeAgentJournalKey({
       contractId: input.contractId,
       scriptHash,
