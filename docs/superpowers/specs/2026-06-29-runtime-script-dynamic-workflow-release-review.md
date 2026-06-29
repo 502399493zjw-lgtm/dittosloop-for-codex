@@ -70,15 +70,13 @@ git status --short
 Results:
 
 - `npm test`
-  - Passed: `26 passed | 1 skipped (files)`, `327 passed | 1 skipped (tests)`.
+  - Passed: `26 passed | 1 skipped (files)`, `334 passed | 1 skipped (tests)`.
 - `npm run typecheck`
   - Passed.
 - `npm run build`
   - Passed. Output included `dist/index.js  1.1mb`.
-  - No tracked diff remained for `plugins/dittosloop-for-codex/mcp/dist/index.js`, so no generated bundle update was required in this commit.
+  - Generated bundle changes are synchronized in `plugins/dittosloop-for-codex/mcp/dist/index.js`.
 - `git diff --check`
   - Passed with no diff formatting errors.
 - `git status --short`
-  - Reported the new review document as an untracked file before commit:
-    - `?? ../docs/superpowers/specs/2026-06-29-runtime-script-dynamic-workflow-release-review.md`
-  - The Task 12 report file is under `.superpowers/sdd/` and remains ignored by repository status, as expected.
+  - Clean after the latest verification commits.
