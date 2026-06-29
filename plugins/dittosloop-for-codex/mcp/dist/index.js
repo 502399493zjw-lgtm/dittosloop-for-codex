@@ -23592,15 +23592,21 @@ function createRuntimeScriptScheduler(input) {
   };
   const parallel3 = async (...args) => {
     const { tasks, options } = normalizeParallelArgs(args);
-    if (tasks.length > input.limits.maxParallelBranches) {
-      throw new Error(`Runtime script exceeded maxParallelBranches (${input.limits.maxParallelBranches})`);
-    }
     emit("runtime_parallel_started", {
       label: options?.label,
       count: tasks.length,
       branches: tasks.length
     });
-    const results = await Promise.all(tasks.map((task2) => task2()));
+    const results = await mapWithConcurrencyLimit(tasks, input.limits.maxParallelBranches, async (task2) => {
+      try {
+        return await task2();
+      } catch (error2) {
+        if (isHandledBranchFailure(error2)) {
+          return null;
+        }
+        throw error2;
+      }
+    });
     emit("runtime_parallel_completed", {
       label: options?.label,
       count: tasks.length,
@@ -23619,15 +23625,20 @@ function createRuntimeScriptScheduler(input) {
       items: items.length,
       stages: stages.length
     });
-    const results = await Promise.all(
-      items.map(async (item, index) => {
+    const results = await mapWithConcurrencyLimit(items, input.limits.maxParallelBranches, async (item, index) => {
+      try {
         let current = item;
         for (const stage of stages) {
           current = await stage(current, index);
         }
         return current;
-      })
-    );
+      } catch (error2) {
+        if (isHandledBranchFailure(error2)) {
+          return null;
+        }
+        throw error2;
+      }
+    });
     emit("runtime_pipeline_completed", {
       label: options?.label,
       count: items.length,
@@ -23716,6 +23727,26 @@ function isRuntimeWorkflowOptions(value) {
 }
 function areFunctions(values) {
   return values.every((value) => typeof value === "function");
+}
+function isHandledBranchFailure(error2) {
+  return typeof error2 === "object" && error2 !== null && error2.status === "failed";
+}
+async function mapWithConcurrencyLimit(items, limit, mapper) {
+  if (limit < 1) {
+    throw new Error(`Runtime script maxParallelBranches must be at least 1 (received ${limit})`);
+  }
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+  const runWorker = async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  };
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
 }
 
 // src/runtimeScript/validateScript.ts
@@ -23989,18 +24020,49 @@ function normalizePipelineArgs(items, args) {
   return { stages, options };
 }
 
+function isHandledBranchFailure(error) {
+  return Boolean(error && typeof error === "object" && error.status === "failed");
+}
+
+async function mapWithConcurrencyLimit(items, limit, mapper) {
+  if (limit < 1) {
+    throw new Error(` + `\`Runtime script maxParallelBranches must be at least 1 (received \${limit})\`);
+  }
+
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+
+  const runWorker = async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
 async function parallel(...args) {
   const { tasks, options } = normalizeParallelArgs(args);
-  if (tasks.length > workerData.limits.maxParallelBranches) {
-    throw new Error(` + `\`Runtime script exceeded maxParallelBranches (\${workerData.limits.maxParallelBranches})\`);
-  }
 
   emit("runtime_parallel_started", {
     label: options?.label,
     count: tasks.length,
     branches: tasks.length
   });
-  const results = await Promise.all(tasks.map((task) => task()));
+  const results = await mapWithConcurrencyLimit(tasks, workerData.limits.maxParallelBranches, async (task) => {
+    try {
+      return await task();
+    } catch (error) {
+      if (isHandledBranchFailure(error)) {
+        return null;
+      }
+      throw error;
+    }
+  });
   emit("runtime_parallel_completed", {
     label: options?.label,
     count: tasks.length,
@@ -24021,15 +24083,20 @@ async function pipeline(items, ...args) {
     items: items.length,
     stages: stages.length
   });
-  const results = await Promise.all(
-    items.map(async (item, index) => {
+  const results = await mapWithConcurrencyLimit(items, workerData.limits.maxParallelBranches, async (item, index) => {
+    try {
       let current = item;
       for (const stage of stages) {
         current = await stage(current, index);
       }
       return current;
-    })
-  );
+    } catch (error) {
+      if (isHandledBranchFailure(error)) {
+        return null;
+      }
+      throw error;
+    }
+  });
   emit("runtime_pipeline_completed", {
     label: options?.label,
     count: items.length,

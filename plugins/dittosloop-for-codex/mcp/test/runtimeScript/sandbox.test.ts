@@ -68,6 +68,10 @@ function completed(output: string): WorkflowSubagentResult {
   return { status: "completed", output };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function createRunInput(overrides: Partial<RuntimeScriptRunInput> = {}): RuntimeScriptRunInput {
   return {
     runId: "run_1",
@@ -196,6 +200,89 @@ describe("runRuntimeScriptInVm", () => {
     });
   });
 
+  test("parallel isolates handled failed agent branches and records the failure", async () => {
+    const bridge = new FakeSubagentBridge([
+      completed("one"),
+      { status: "failed", error: "boom" },
+      completed("two")
+    ]);
+    const journal = new MemoryRuntimeScriptJournal();
+    const events: RuntimeScriptEventInput[] = [];
+
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return await parallel([
+          () => agent("ok", { key: "ok" }),
+          () => agent("fail", { key: "fail" }),
+          () => agent("ok2", { key: "ok2" })
+        ]);
+      `,
+      journal,
+      subagentBridge: bridge,
+      emit: (event) => events.push(event)
+    }));
+
+    expect(result).toEqual(["one", null, "two"]);
+    expect(bridge.calls.map((call) => call.prompt)).toEqual(["ok", "fail", "ok2"]);
+    expect(Array.from(journal.records.values())).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        callSite: "fail",
+        status: "failed",
+        error: "boom"
+      })
+    ]));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "agent:error",
+        data: expect.objectContaining({
+          callSite: "fail",
+          status: "failed",
+          error: "boom"
+        })
+      })
+    ]));
+  });
+
+  test("parallel throttles branch concurrency to maxParallelBranches and preserves order", async () => {
+    const ids = Array.from({ length: 10 }, (_, index) => `item-${index + 1}`);
+    const bridge = new class implements WorkflowSubagentBridge {
+      readonly calls: WorkflowSubagentInput[] = [];
+      inFlight = 0;
+      maxInFlight = 0;
+
+      async runAgent(input: WorkflowSubagentInput): Promise<WorkflowSubagentResult> {
+        this.calls.push(input);
+        this.inFlight += 1;
+        this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+        await sleep(10);
+        this.inFlight -= 1;
+        return completed(`${input.prompt}:done`);
+      }
+    };
+
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return await parallel(
+          args.ids.map((id) => () => agent("Work " + id, { key: "work:" + id }))
+        );
+      `,
+      args: { ids },
+      limits: {
+        timeoutMs: 10_000,
+        maxAgentCalls: 20,
+        maxParallelBranches: 3,
+        maxPipelineItems: 10,
+        maxLogChars: 1_000
+      },
+      subagentBridge: bridge
+    }));
+
+    expect(result).toEqual(ids.map((id) => `Work ${id}:done`));
+    expect(bridge.calls).toHaveLength(10);
+    expect(bridge.maxInFlight).toBe(3);
+    expect(bridge.calls.map((call) => call.prompt)).toEqual(ids.map((id) => `Work ${id}`));
+  });
+
   test("pipeline returns one result per input item", async () => {
     const result = await runRuntimeScriptInVm(createRunInput({
       source: `
@@ -252,6 +339,59 @@ describe("runRuntimeScriptInVm", () => {
       count: 3,
       stages: 1
     });
+  });
+
+  test("pipeline throttles item execution to maxParallelBranches and preserves stage order", async () => {
+    const items = ["a", "b", "c", "d", "e"];
+    const bridge = new class implements WorkflowSubagentBridge {
+      readonly calls: WorkflowSubagentInput[] = [];
+      inFlight = 0;
+      maxInFlight = 0;
+
+      async runAgent(input: WorkflowSubagentInput): Promise<WorkflowSubagentResult> {
+        this.calls.push(input);
+        this.inFlight += 1;
+        this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+        await sleep(10);
+        this.inFlight -= 1;
+        return completed(input.prompt);
+      }
+    };
+
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return await pipeline(
+          args.items,
+          async (item) => agent("extract:" + item, { key: "extract:" + item }),
+          async (previous) => agent("verify:" + previous, { key: "verify:" + previous })
+        );
+      `,
+      args: { items },
+      limits: {
+        timeoutMs: 10_000,
+        maxAgentCalls: 20,
+        maxParallelBranches: 2,
+        maxPipelineItems: 10,
+        maxLogChars: 1_000
+      },
+      subagentBridge: bridge
+    }));
+
+    expect(result).toEqual(items.map((item) => `verify:extract:${item}`));
+    expect(bridge.maxInFlight).toBe(2);
+    expect(bridge.calls).toHaveLength(10);
+    expect(bridge.calls.map((call) => call.prompt)).toEqual([
+      "extract:a",
+      "extract:b",
+      "verify:extract:a",
+      "verify:extract:b",
+      "extract:c",
+      "extract:d",
+      "verify:extract:c",
+      "verify:extract:d",
+      "extract:e",
+      "verify:extract:e"
+    ]);
   });
 
   test("parallel and pipeline events include count", async () => {
@@ -349,24 +489,6 @@ describe("runRuntimeScriptInVm", () => {
     }))).rejects.toThrow(/maxAgentCalls/i);
 
     expect(bridge.calls).toHaveLength(1);
-  });
-
-  test("max parallel branches is enforced", async () => {
-    await expect(runRuntimeScriptInVm(createRunInput({
-      source: `
-        return await parallel([
-          async () => "a",
-          async () => "b"
-        ]);
-      `,
-      limits: {
-        timeoutMs: 10_000,
-        maxAgentCalls: 10,
-        maxParallelBranches: 1,
-        maxPipelineItems: 10,
-        maxLogChars: 1_000
-      }
-    }))).rejects.toThrow(/maxParallelBranches/i);
   });
 
   test("validation failure prevents execution", async () => {

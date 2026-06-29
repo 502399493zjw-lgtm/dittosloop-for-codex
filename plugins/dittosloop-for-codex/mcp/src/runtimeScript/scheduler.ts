@@ -13,18 +13,18 @@ import type {
 
 export interface RuntimeScriptApi {
   agent(prompt: string, options?: RuntimeScriptAgentOptions): Promise<string>;
-  parallel<T>(tasks: Array<() => Promise<T>>, options?: RuntimeWorkflowOptions): Promise<T[]>;
-  parallel<T>(task: () => Promise<T>, ...tasks: Array<() => Promise<T>>): Promise<T[]>;
+  parallel<T>(tasks: Array<() => Promise<T>>, options?: RuntimeWorkflowOptions): Promise<Array<T | null>>;
+  parallel<T>(task: () => Promise<T>, ...tasks: Array<() => Promise<T>>): Promise<Array<T | null>>;
   pipeline<TInput, TOutput>(
     items: TInput[],
     stages: Array<(item: TInput | TOutput, index: number) => Promise<TOutput>>,
     options?: RuntimeWorkflowOptions
-  ): Promise<TOutput[]>;
+  ): Promise<Array<TOutput | null>>;
   pipeline<TInput, TOutput>(
     items: TInput[],
     stage: (item: TInput | TOutput, index: number) => Promise<TOutput>,
     ...stages: Array<(item: TInput | TOutput, index: number) => Promise<TOutput>>
-  ): Promise<TOutput[]>;
+  ): Promise<Array<TOutput | null>>;
   phase(label: string): { done(status?: "ok" | "failed"): void };
   log(message: string): void;
 }
@@ -197,18 +197,24 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
     throw new RuntimeScriptAgentError(result.error ?? "Runtime script sub-agent failed", "failed", result.session);
   };
 
-  const parallel = async <T>(...args: unknown[]): Promise<T[]> => {
+  const parallel = async <T>(...args: unknown[]): Promise<Array<T | null>> => {
     const { tasks, options } = normalizeParallelArgs<T>(args);
-    if (tasks.length > input.limits.maxParallelBranches) {
-      throw new Error(`Runtime script exceeded maxParallelBranches (${input.limits.maxParallelBranches})`);
-    }
 
     emit("runtime_parallel_started", {
       label: options?.label,
       count: tasks.length,
       branches: tasks.length
     });
-    const results = await Promise.all(tasks.map((task) => task()));
+    const results = await mapWithConcurrencyLimit(tasks, input.limits.maxParallelBranches, async (task) => {
+      try {
+        return await task();
+      } catch (error) {
+        if (isHandledBranchFailure(error)) {
+          return null;
+        }
+        throw error;
+      }
+    });
     emit("runtime_parallel_completed", {
       label: options?.label,
       count: tasks.length,
@@ -217,7 +223,7 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
     return results;
   };
 
-  const pipeline = async <TInput, TOutput>(items: TInput[], ...args: unknown[]): Promise<TOutput[]> => {
+  const pipeline = async <TInput, TOutput>(items: TInput[], ...args: unknown[]): Promise<Array<TOutput | null>> => {
     const { stages, options } = normalizePipelineArgs<TInput, TOutput>(items, args);
     if (items.length > input.limits.maxPipelineItems) {
       throw new Error(`Runtime script exceeded maxPipelineItems (${input.limits.maxPipelineItems})`);
@@ -229,15 +235,20 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
       items: items.length,
       stages: stages.length
     });
-    const results = await Promise.all(
-      items.map(async (item, index) => {
+    const results = await mapWithConcurrencyLimit(items, input.limits.maxParallelBranches, async (item, index) => {
+      try {
         let current: TInput | TOutput = item;
         for (const stage of stages) {
           current = await stage(current, index);
         }
         return current as TOutput;
-      })
-    );
+      } catch (error) {
+        if (isHandledBranchFailure(error)) {
+          return null;
+        }
+        throw error;
+      }
+    });
     emit("runtime_pipeline_completed", {
       label: options?.label,
       count: items.length,
@@ -345,4 +356,33 @@ function isRuntimeWorkflowOptions(value: unknown): value is RuntimeWorkflowOptio
 
 function areFunctions(values: unknown[]): boolean {
   return values.every((value) => typeof value === "function");
+}
+
+function isHandledBranchFailure(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { status?: unknown }).status === "failed";
+}
+
+async function mapWithConcurrencyLimit<TInput, TOutput>(
+  items: TInput[],
+  limit: number,
+  mapper: (item: TInput, index: number) => Promise<TOutput>
+): Promise<TOutput[]> {
+  if (limit < 1) {
+    throw new Error(`Runtime script maxParallelBranches must be at least 1 (received ${limit})`);
+  }
+
+  const results = new Array<TOutput>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+
+  const runWorker = async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
 }
