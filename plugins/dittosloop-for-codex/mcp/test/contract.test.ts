@@ -5,7 +5,7 @@ import {
   resolveEffectiveAgentProfile,
   resolveEffectiveProfilesByStep
 } from "../src/contract/agentProfiles.js";
-import { compileContract } from "../src/contract/compileContract.js";
+import { compileContract, recompileFormalContract } from "../src/contract/compileContract.js";
 import { migrateLegacyContract } from "../src/contract/migrateLegacyContract.js";
 import { validateContract } from "../src/contract/validateContract.js";
 
@@ -92,8 +92,28 @@ describe("formal loop contracts", () => {
     expect(contract.body).toBeUndefined();
   });
 
-  test("preserves runtime workflow objects and removes compatibility body on recompile", () => {
-    const contract = compileContract(
+  test("rejects runtime workflow objects as external contract input", () => {
+    expect(() =>
+      compileContract(
+        {
+          id: "loop_runtime_workflow_object",
+          title: "Runtime workflow object",
+          goal: "Reject non-explicit runtime input",
+          workflow: {
+            kind: "runtime_script",
+            language: "javascript",
+            source: "return await agent('Review the latest result');",
+            approval: { required: true }
+          },
+          verification: passingLegacyVerification()
+        } as any,
+        fixedTime
+      )
+    ).toThrow(/workflowKind.*runtime_script.*string script/i);
+  });
+
+  test("preserves stored runtime workflow objects on internal recompile", () => {
+    const contract = recompileFormalContract(
       {
         id: "loop_runtime_recompile",
         title: "Runtime workflow object",

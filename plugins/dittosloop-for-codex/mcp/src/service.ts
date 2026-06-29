@@ -4436,6 +4436,7 @@ function applyContractPatch(
       id: baseContract.id,
       title: patch.title ?? baseContract.title,
       goal: patch.goal ?? baseContract.goal,
+      workflow: undefined,
       body: undefined,
       verification: patch.verification ?? baseContract.verification,
       repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
@@ -4448,6 +4449,57 @@ function applyContractPatch(
       status: patch.status ?? baseContract.status
     };
   }
+
+  if (patch.body !== undefined) {
+    return {
+      ...baseContract,
+      ...patch,
+      id: baseContract.id,
+      title: patch.title ?? baseContract.title,
+      goal: patch.goal ?? baseContract.goal,
+      workflow: undefined,
+      body: patch.body,
+      verification: patch.verification ?? baseContract.verification,
+      repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
+      stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+      budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+      escalation: patch.escalation ?? baseContract.escalation,
+      agentProfiles: patch.agentProfiles ?? baseContract.agentProfiles,
+      projectBinding: patch.projectBinding ?? baseContract.projectBinding,
+      memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
+      trigger: patch.trigger ?? baseContract.trigger,
+      status: patch.status ?? baseContract.status
+    };
+  }
+
+  if (baseContract.workflow.kind === "runtime_script" && patch.workflowKind !== "static_steps") {
+    return {
+      ...baseContract,
+      ...patch,
+      id: baseContract.id,
+      title: patch.title ?? baseContract.title,
+      goal: patch.goal ?? baseContract.goal,
+      workflow: undefined,
+      workflowKind: "runtime_script",
+      script: baseContract.workflow.source,
+      args: patch.args ?? baseContract.workflow.args,
+      limits: patch.limits ?? baseContract.workflow.limits,
+      approval: patch.approval ?? baseContract.workflow.approval,
+      journal: patch.journal ?? baseContract.workflow.journal,
+      body: undefined,
+      verification: patch.verification ?? baseContract.verification,
+      repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
+      stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+      budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+      escalation: patch.escalation ?? baseContract.escalation,
+      agentProfiles: patch.agentProfiles ?? baseContract.agentProfiles,
+      projectBinding: patch.projectBinding ?? baseContract.projectBinding,
+      memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
+      trigger: patch.trigger ?? baseContract.trigger,
+      status: patch.status ?? baseContract.status
+    };
+  }
+
   return {
     ...baseContract,
     ...patch,

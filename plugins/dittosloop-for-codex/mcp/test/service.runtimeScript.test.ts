@@ -139,6 +139,26 @@ test("creates a runtime script loop without body steps", async () => {
   expect(contract.body).toBeUndefined();
 });
 
+test("rejects direct runtime script workflow object input", async () => {
+  const service = await createService();
+
+  await expect(
+    service.createLoopContract({
+      title: "Runtime workflow object",
+      goal: "Reject non-explicit runtime script input",
+      workflow: {
+        kind: "runtime_script",
+        language: "javascript",
+        source: "return 'not explicit';"
+      },
+      verification: {
+        mode: "after_workflow",
+        rubrics: [{ id: "done", label: "Done", requirement: "Runtime script completed", severity: "must" }]
+      }
+    } as any)
+  ).rejects.toThrow(/workflowKind.*runtime_script.*string script/i);
+});
+
 test("executes a runtime script workflow end-to-end with a completed bridge", async () => {
   const { bridge, requests } = createCompletedSessionBridge("bridge says hello");
   const service = await createService(bridge);

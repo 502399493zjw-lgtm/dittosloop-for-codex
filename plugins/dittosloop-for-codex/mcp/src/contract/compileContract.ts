@@ -19,6 +19,10 @@ const defaultDecision = {
 
 const defaultRubricAgentPrompt = "Review the workflow result against the verification criteria.";
 
+interface CompileContractOptions {
+  allowRuntimeWorkflowObject: boolean;
+}
+
 export function migrateVerificationToV2(input: VerificationPolicyInput): VerificationPolicyV2 {
   if ("version" in input && input.version === 2) {
     return normalizeVerificationV2(input);
@@ -75,6 +79,18 @@ function normalizeVerificationV2(policy: VerificationPolicyV2): VerificationPoli
 }
 
 export function compileContract(input: FormalLoopContractInput, now: string = new Date().toISOString()): FormalLoopContract {
+  return compileContractInternal(input, now, { allowRuntimeWorkflowObject: false });
+}
+
+export function recompileFormalContract(input: FormalLoopContract, now: string = new Date().toISOString()): FormalLoopContract {
+  return compileContractInternal(input, now, { allowRuntimeWorkflowObject: true });
+}
+
+function compileContractInternal(
+  input: FormalLoopContractInput,
+  now: string,
+  options: CompileContractOptions
+): FormalLoopContract {
   const { workflowKind, workflow, body, script, args, limits, approval, journal, verification, ...contractInput } = input;
   const normalizedWorkflow = normalizeWorkflowDefinition({
     workflowKind,
@@ -85,7 +101,7 @@ export function compileContract(input: FormalLoopContractInput, now: string = ne
     limits,
     approval,
     journal
-  });
+  }, options);
 
   return {
     ...contractInput,
@@ -124,9 +140,13 @@ export function compileScriptContract(
 function normalizeWorkflowDefinition(input: Pick<
   FormalLoopContractInput,
   "workflowKind" | "workflow" | "body" | "script" | "args" | "limits" | "approval" | "journal"
->): { workflow: WorkflowDefinition; body?: StaticStepsWorkflowDefinition["body"]; budgetUsd?: number } {
+>, options: CompileContractOptions): { workflow: WorkflowDefinition; body?: StaticStepsWorkflowDefinition["body"]; budgetUsd?: number } {
   if (input.body && input.script !== undefined) {
     throw new Error("Loop contract cannot include both body and script");
+  }
+
+  if (input.workflow?.kind === "runtime_script" && !options.allowRuntimeWorkflowObject) {
+    throw new Error('Runtime script workflow objects are internal; use workflowKind: "runtime_script" with a string script');
   }
 
   if (typeof input.script === "string") {

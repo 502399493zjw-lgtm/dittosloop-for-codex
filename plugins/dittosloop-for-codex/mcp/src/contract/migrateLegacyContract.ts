@@ -1,5 +1,5 @@
 import type { LoopContract } from "../types.js";
-import { compileContract } from "./compileContract.js";
+import { compileContract, recompileFormalContract } from "./compileContract.js";
 import type { FormalLoopContract, VerificationCriterion, VerificationValidator } from "./types.js";
 
 type MaybeFormalLoopContract = FormalLoopContract | LoopContract;
@@ -25,7 +25,7 @@ function commandValidatorForCheck(check: string, id: string) {
 
 export function migrateLegacyContract(loop: MaybeFormalLoopContract): FormalLoopContract {
   if (isFormalContract(loop)) {
-    return compileContract(loop, loop.updatedAt);
+    return recompileFormalContract(loop, loop.updatedAt);
   }
 
   const goal = loop.intent || loop.title;

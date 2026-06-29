@@ -21325,6 +21325,9 @@ function normalizeVerificationV2(policy) {
   };
 }
 function compileContract(input, now = (/* @__PURE__ */ new Date()).toISOString()) {
+  return compileContractInternal(input, now, { allowRuntimeWorkflowObject: false });
+}
+function compileContractInternal(input, now, options) {
   const { workflowKind, workflow: workflow2, body, script, args, limits, approval, journal, verification, ...contractInput } = input;
   const normalizedWorkflow = normalizeWorkflowDefinition({
     workflowKind,
@@ -21335,7 +21338,7 @@ function compileContract(input, now = (/* @__PURE__ */ new Date()).toISOString()
     limits,
     approval,
     journal
-  });
+  }, options);
   return {
     ...contractInput,
     workflow: normalizedWorkflow.workflow,
@@ -21350,9 +21353,12 @@ function compileContract(input, now = (/* @__PURE__ */ new Date()).toISOString()
     ...normalizedWorkflow.budgetUsd !== void 0 && contractInput.budgetUsd === void 0 ? { budgetUsd: normalizedWorkflow.budgetUsd } : {}
   };
 }
-function normalizeWorkflowDefinition(input) {
+function normalizeWorkflowDefinition(input, options) {
   if (input.body && input.script !== void 0) {
     throw new Error("Loop contract cannot include both body and script");
+  }
+  if (input.workflow?.kind === "runtime_script" && !options.allowRuntimeWorkflowObject) {
+    throw new Error('Runtime script workflow objects are internal; use workflowKind: "runtime_script" with a string script');
   }
   if (typeof input.script === "string") {
     if (input.workflowKind !== "runtime_script") {
@@ -27665,12 +27671,61 @@ function applyContractPatch(baseContract, patch) {
       id: baseContract.id,
       title: patch.title ?? baseContract.title,
       goal: patch.goal ?? baseContract.goal,
+      workflow: void 0,
       body: void 0,
       verification: patch.verification ?? baseContract.verification,
       repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
       stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
       budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
       escalation: patch.escalation ?? baseContract.escalation,
+      projectBinding: patch.projectBinding ?? baseContract.projectBinding,
+      memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
+      trigger: patch.trigger ?? baseContract.trigger,
+      status: patch.status ?? baseContract.status
+    };
+  }
+  if (patch.body !== void 0) {
+    return {
+      ...baseContract,
+      ...patch,
+      id: baseContract.id,
+      title: patch.title ?? baseContract.title,
+      goal: patch.goal ?? baseContract.goal,
+      workflow: void 0,
+      body: patch.body,
+      verification: patch.verification ?? baseContract.verification,
+      repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
+      stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+      budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+      escalation: patch.escalation ?? baseContract.escalation,
+      agentProfiles: patch.agentProfiles ?? baseContract.agentProfiles,
+      projectBinding: patch.projectBinding ?? baseContract.projectBinding,
+      memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
+      trigger: patch.trigger ?? baseContract.trigger,
+      status: patch.status ?? baseContract.status
+    };
+  }
+  if (baseContract.workflow.kind === "runtime_script" && patch.workflowKind !== "static_steps") {
+    return {
+      ...baseContract,
+      ...patch,
+      id: baseContract.id,
+      title: patch.title ?? baseContract.title,
+      goal: patch.goal ?? baseContract.goal,
+      workflow: void 0,
+      workflowKind: "runtime_script",
+      script: baseContract.workflow.source,
+      args: patch.args ?? baseContract.workflow.args,
+      limits: patch.limits ?? baseContract.workflow.limits,
+      approval: patch.approval ?? baseContract.workflow.approval,
+      journal: patch.journal ?? baseContract.workflow.journal,
+      body: void 0,
+      verification: patch.verification ?? baseContract.verification,
+      repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
+      stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+      budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+      escalation: patch.escalation ?? baseContract.escalation,
+      agentProfiles: patch.agentProfiles ?? baseContract.agentProfiles,
       projectBinding: patch.projectBinding ?? baseContract.projectBinding,
       memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
       trigger: patch.trigger ?? baseContract.trigger,
