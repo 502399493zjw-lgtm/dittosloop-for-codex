@@ -330,9 +330,11 @@ test("verification v2 script validators require evidence when validator marks it
 });
 
 test("verification v2 script validators cannot pass without required evidence", async () => {
-  const policy = verificationPolicyWithValidators([
-    scriptValidatorFixture()
-  ]);
+  const validator = scriptValidatorFixture();
+  if (validator.type !== "script") {
+    throw new Error("expected script validator");
+  }
+  const policy = verificationPolicyWithValidators([{ ...validator, evidenceRequired: false }]);
   policy.decision.requireEvidenceForScriptResults = true;
 
   const result = await runVerificationV2({
@@ -359,6 +361,63 @@ test("verification v2 script validators cannot pass without required evidence", 
       needsHumanValidatorIds: ["release-note-script"]
     }
   });
+});
+
+test("verification v2 script validators surface missing required evidence in visible results", async () => {
+  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+  const validatorDoneResults: Array<{ validatorId: string; status: string; summary: string }> = [];
+
+  const result = await runVerificationV2({
+    id: "verification_script_visible_no_evidence",
+    runId: "run_1",
+    createdAt: "2026-06-29T00:00:00.000Z",
+    policy,
+    workflowResult: {},
+    contractWorkspacePath: "/loop-workspace",
+    commandExecutor: async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        status: "passed",
+        score: 1,
+        summary: "Structured result but no evidence."
+      }),
+      stderr: ""
+    }),
+    emit: (event) => {
+      if (event.type === "validator_done") {
+        validatorDoneResults.push({
+          validatorId: event.result.validatorId,
+          status: event.result.status,
+          summary: event.result.summary
+        });
+      }
+    }
+  });
+
+  expect(result).toMatchObject({
+    status: "needs_human",
+    checks: [
+      {
+        rubricId: "tests-pass",
+        status: "needs_human"
+      }
+    ],
+    validatorResults: [
+      {
+        validatorId: "release-note-script",
+        type: "script",
+        status: "needs_human",
+        summary: "Script validator result requires evidence."
+      }
+    ]
+  });
+  expect(validatorDoneResults).toEqual([
+    {
+      validatorId: "release-note-script",
+      status: "needs_human",
+      summary: "Script validator result requires evidence."
+    }
+  ]);
 });
 
 test("verification v2 script validators parse valid long JSON stdout before truncating stored logs", async () => {

@@ -156,7 +156,10 @@ export interface RecordedRubricAgentResultInput {
 }
 
 export async function runVerificationV2(input: RunVerificationV2Input): Promise<VerificationResultV2> {
-  const validatorResults: ValidatorResult[] = [...(input.priorValidatorResults ?? [])];
+  const validatorResults: ValidatorResult[] = normalizeValidatorResults(
+    input.policy,
+    input.priorValidatorResults ?? []
+  );
 
   for (const validator of input.policy.validators) {
     if (validatorResults.some((result) => result.validatorId === validator.id)) {
@@ -170,7 +173,10 @@ export async function runVerificationV2(input: RunVerificationV2Input): Promise<
       validatorType: validator.type,
       label: validator.label
     });
-    const result = await runDeterministicValidator(validator, input, validatorResults);
+    const result = normalizeValidatorResult(
+      input.policy,
+      await runDeterministicValidator(validator, input, validatorResults)
+    );
     input.emit?.({ type: "validator_done", attemptId: input.attemptId, result });
     validatorResults.push(result);
   }
@@ -197,9 +203,7 @@ export function aggregateVerificationDecision(
   policy: VerificationPolicyV2,
   validatorResults: ValidatorResult[]
 ): AggregatedVerificationDecision {
-  const effectiveResults = validatorResults.map((result) =>
-    enforceScriptPolicy(policy, enforceRubricAgentPolicy(policy, result))
-  );
+  const effectiveResults = normalizeValidatorResults(policy, validatorResults);
   const failures = effectiveResults.filter((result) => result.status === "failed");
   const mustFailures = failures.filter((result) => result.severity === "must");
   const shouldFailures = failures.filter((result) => result.severity === "should");
@@ -662,6 +666,14 @@ function enforceRubricAgentPolicy(policy: VerificationPolicyV2, result: Validato
   }
 
   return result;
+}
+
+function normalizeValidatorResults(policy: VerificationPolicyV2, results: ValidatorResult[]): ValidatorResult[] {
+  return results.map((result) => normalizeValidatorResult(policy, result));
+}
+
+function normalizeValidatorResult(policy: VerificationPolicyV2, result: ValidatorResult): ValidatorResult {
+  return enforceScriptPolicy(policy, enforceRubricAgentPolicy(policy, result));
 }
 
 function enforceScriptPolicy(policy: VerificationPolicyV2, result: ValidatorResult): ValidatorResult {
