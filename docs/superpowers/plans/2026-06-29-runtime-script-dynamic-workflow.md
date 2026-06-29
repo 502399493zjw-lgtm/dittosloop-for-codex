@@ -1136,6 +1136,29 @@ New runtime script workflows use explicit kind plus source string:
 - **Risk:** Verifier sub-agent uses the same session as worker output.
   **Mitigation:** Enforce `allowSelfReview: false` by comparing verifier session ids against worker session ids.
 
+## Reviewer Approval Checklist
+
+The reviewer should explicitly confirm these points before implementation starts:
+
+- [ ] The new dynamic workflow target is the runtime JavaScript model, not `body.steps` and not `script.build`.
+- [ ] Runtime script creation must require `workflowKind: "runtime_script"` plus a string `script`.
+- [ ] Existing static `body.steps` and legacy `script.build` loops must remain compatible.
+- [ ] Approval is required by default before executing runtime script source.
+- [ ] The replay journal key includes script hash, args hash, call site, prompt hash, and options hash.
+- [ ] Runtime `agent()` calls create visible Codex sub-agent sessions and resume without duplicate sessions.
+- [ ] Verification must include the mandatory verifier sub-agent case from `DW-SUBAGENT-003`.
+- [ ] The recommended execution mode is `subagent-driven-development`.
+
+## First Implementation Slice After Approval
+
+Start with the smallest slice that proves the contract split before touching VM execution:
+
+1. Task 1 from this plan: contract types, MCP schema, and compatibility tests.
+2. Task 2 from this plan: runtime script module skeleton and script validation tests.
+3. Stop for review after the first green `npm test -- --run test/contract.test.ts test/mcpServer.test.ts test/runtimeScript/validateScript.test.ts` and `npm run typecheck`.
+
+This slice should not create Codex sessions yet. Its purpose is to prove that the repository can represent runtime scripts separately from static workflows while preserving the existing static surfaces.
+
 ## Review Gate
 
 Implementation must not start until this plan is reviewed and approved. After approval, execute task-by-task with `subagent-driven-development` preferred because the validation path explicitly requires sub-agent behavior and several tasks can be reviewed independently.
