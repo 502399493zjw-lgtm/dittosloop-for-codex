@@ -238,6 +238,15 @@ export interface RuntimeScriptContextState {
   updatedAt: string;
 }
 
+export interface RuntimeScriptTaskRunState {
+  key: string;
+  callSite: string;
+  scriptHash: string;
+  argsHash: string;
+  promptHash: string;
+  optionsHash: string;
+}
+
 export interface LoopWorkspaceFile {
   path: string;
   kind: "memory" | "contract" | "workflow" | "runtime" | "skill" | "rubrics" | "verification" | "status" | "runs";
@@ -305,6 +314,7 @@ export interface WorkflowTaskRun {
   result?: string;
   error?: string;
   idempotencyKey?: string;
+  runtimeScript?: RuntimeScriptTaskRunState;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

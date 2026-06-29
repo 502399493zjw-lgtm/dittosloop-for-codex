@@ -12,6 +12,11 @@ import type {
   CodexSessionRequest,
   CodexSessionResult
 } from "../src/codex/sessionBridge.js";
+import {
+  hashRuntimeScriptArgs,
+  hashRuntimeScriptSource,
+  runtimeAgentJournalKey
+} from "../src/runtimeScript/hash.js";
 
 const tempDirs: string[] = [];
 const fixedTime = "2026-06-29T00:00:00.000Z";
@@ -70,6 +75,42 @@ function createCompletedSessionBridge(resultText: string) {
         threadUrl: "codex://thread/thread_1",
         createdAt: fixedTime
       };
+    }
+  };
+
+  return { bridge, requests };
+}
+
+function createPendingSessionBridge() {
+  const requests: CodexSessionRequest[] = [];
+  const bridge: CodexSessionBridge = {
+    async createSession(request) {
+      requests.push(request);
+      return {
+        sessionId: `session_${requests.length}`,
+        runId: request.runId,
+        attemptId: request.attemptId,
+        workflowContextId: request.workflowContextId,
+        stepId: request.stepId,
+        phaseId: request.phaseId,
+        title: request.title,
+        status: "requested",
+        createdAt: fixedTime,
+        prompt: request.prompt,
+        subagent: request.subagent,
+        agentProfile: request.agentProfile,
+        workflowRuntime: request.workflowRuntime,
+        workflowContractId: request.workflowContractId,
+        workflowPlan: request.workflowPlan,
+        projectId: request.projectId,
+        projectLabel: request.projectLabel,
+        projectPath: request.projectPath
+      } satisfies CodexSessionRef;
+    },
+    async sendMessage() {},
+    async recordResult() {},
+    async readResult(): Promise<CodexSessionResult | undefined> {
+      return undefined;
     }
   };
 
@@ -186,10 +227,126 @@ test("executes a runtime script workflow end-to-end with a completed bridge", as
       sessionId: "session_1"
     }
   ]);
+  expect(detail.run.codexSession?.subagents).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: "session_1",
+        stepId: "agent:1:greeter",
+        status: "completed",
+        prompt: "Say hello from runtime script"
+      })
+    ])
+  );
   expect(
     detail.events
       .map((event) => event.data?.engineEvent)
       .filter((event): event is { type: string; status?: string } => Boolean(event))
       .map((event) => event.type)
   ).toEqual(expect.arrayContaining(["runtime_script_started", "agent:start", "agent:done", "runtime_script_done"]));
+});
+
+test("reuses a completed pending runtime script agent result when the run resumes", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const service = await createService(bridge);
+  const prompt = "Say hello after async completion";
+  const options = { label: "greeter" };
+  const source = `
+    const output = await agent("${prompt}", ${JSON.stringify(options)});
+    return { output };
+  `;
+  const contract = await service.createLoopContract({
+    title: "Runtime script async resume",
+    goal: "Resume a pending runtime script agent",
+    workflowKind: "runtime_script",
+    script: source,
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Runtime script result is acceptable", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(contract.id, { goal: "Run async runtime script execution" });
+
+  const firstRun = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id
+  });
+
+  expect(firstRun.status).toBe("running");
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    workflowContextId: launch.launchRequest.workflowContextId,
+    workflowContractId: contract.id,
+    stepId: "agent:1:greeter",
+    title: "greeter",
+    prompt
+  });
+
+  const idempotencyKey = runtimeAgentJournalKey({
+    contractId: contract.id,
+    scriptHash: hashRuntimeScriptSource(source),
+    argsHash: hashRuntimeScriptArgs({}),
+    callSite: "agent:1:greeter",
+    prompt,
+    options
+  });
+
+  await service.recordSessionResult(firstRun.id, {
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_1",
+    stepId: "agent:1:greeter",
+    idempotencyKey,
+    status: "passed",
+    summary: "async hello",
+    result: "async hello"
+  });
+
+  const verifier = vi.fn(async ({ result }) => ({
+    status: (result as { output: string }).output === "async hello" ? "passed" : "failed",
+    summary: "Verified async hello",
+    checks: [{ rubricId: "done", status: "passed", evidence: "async hello" }]
+  }));
+
+  const resumedRun = await service.executeWorkflowAttempt(firstRun.id, {
+    attemptId: launch.attempt.id,
+    verifier
+  });
+
+  expect(resumedRun.status).toBe("completed");
+  expect(requests).toHaveLength(1);
+  expect(verifier).toHaveBeenCalledWith({
+    contract: expect.objectContaining({ id: contract.id }),
+    result: { output: "async hello" }
+  });
+
+  const detail = await service.getRunDetail(resumedRun.id);
+  expect(detail.run.codexSession?.subagents).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: "session_1",
+        stepId: "agent:1:greeter",
+        status: "completed",
+        prompt
+      })
+    ])
+  );
+  expect(detail.workflowContexts[0].vars.runtimeScript).toMatchObject({
+    status: "completed",
+    result: { output: "async hello" }
+  });
+  const snapshot = await service.getSnapshot();
+  expect(snapshot.runtimeScriptJournals).toMatchObject([
+    {
+      contractId: contract.id,
+      key: idempotencyKey,
+      status: "completed",
+      output: "async hello",
+      sessionId: "session_1"
+    }
+  ]);
+  expect(
+    detail.events
+      .map((event) => event.data?.engineEvent)
+      .filter((event): event is { type: string } => Boolean(event))
+      .map((event) => event.type)
+  ).toEqual(expect.arrayContaining(["agent:cached", "runtime_script_done"]));
 });

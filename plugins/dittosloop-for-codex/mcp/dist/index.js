@@ -23531,7 +23531,9 @@ function createRuntimeScriptScheduler(input) {
         callSite,
         key,
         label: options?.label,
+        result: output,
         status: result.status,
+        session: result.session,
         sessionId: result.session?.sessionId
       });
       return output;
@@ -24750,6 +24752,7 @@ var LoopService = class {
         summary: verification.summary
       });
     }
+    await this.recordCompletedCodexSessions(run.id, engineEvents);
     await this.recordEngineEvents(run.id, engineEvents);
     if (usesV2Verification && isVerificationResultV22(verification)) {
       return this.finalizeV2Verification(run.id, workflowContext.id, verification);
@@ -25148,6 +25151,10 @@ var LoopService = class {
     return this.completeRun(run.id, { status: "failed" });
   }
   createRuntimeScriptSubagentBridge(bridge, run, attempt, workflowContext, contract) {
+    if (contract.workflow.kind !== "runtime_script") {
+      throw new Error(`Expected runtime_script workflow contract: ${contract.id}`);
+    }
+    const runtimeWorkflow = contract.workflow;
     return {
       runAgent: async (input) => {
         if (!bridge) {
@@ -25167,7 +25174,15 @@ var LoopService = class {
             attemptId: attempt.id,
             workflowContextId: workflowContext.id,
             workflowRuntime: "dittosloop-local-workflow",
-            workflowContractId: contract.id
+            workflowContractId: contract.id,
+            runtimeScript: {
+              key: input.idempotencyKey,
+              callSite: input.callSite,
+              scriptHash: hashRuntimeScriptSource(runtimeWorkflow.source),
+              argsHash: hashRuntimeScriptArgs(runtimeWorkflow.args ?? {}),
+              promptHash: hashRuntimeScriptPrompt(input.prompt),
+              optionsHash: hashRuntimeScriptOptions(input.options)
+            }
           },
           {
             attemptId: attempt.id,
@@ -25278,6 +25293,7 @@ ${priorOutput}`;
       prompt: request.prompt,
       subagent: request.subagent,
       agentProfile: request.agentProfile,
+      runtimeScript: request.runtimeScript,
       profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, request.stepId, request.agentProfile)
     }) : void 0;
     const createdSession = await bridge.createSession({
@@ -25687,6 +25703,27 @@ ${priorOutput}`;
       );
       const isWorkflowTaskResult = Boolean(targetContext && hasWorkflowTaskLocator(resultInput));
       const targetContract = targetContext ? targetContext.contractSnapshot ?? state.formalContracts.find((candidate) => candidate.id === (targetContext.contractId ?? run.loopId)) : void 0;
+      const runtimeScriptJournalInput = runtimeScriptJournalInputForSessionResult({
+        run,
+        context: targetContext,
+        contract: targetContract,
+        taskRun: targetTaskRun,
+        input: resultInput
+      });
+      const withRuntimeScriptJournal = (nextState2) => {
+        if (!runtimeScriptJournalInput) {
+          return nextState2;
+        }
+        return {
+          ...nextState2,
+          runtimeScriptJournals: upsertRuntimeScriptJournalRecord(
+            nextState2.runtimeScriptJournals,
+            runtimeScriptJournalInput,
+            timestamp2,
+            () => this.nextId("journal")
+          )
+        };
+      };
       if (resultInput.status === "passed" && targetContext && targetContract) {
         const validationStepId = resultInput.stepId ?? targetTaskRun?.stepId;
         const targetBody = staticWorkflowBody(targetContract);
@@ -25733,9 +25770,12 @@ ${priorOutput}`;
       const shouldWaitForPendingWorkflowSessions = Boolean(
         resultInput.status === "passed" && isWorkflowTaskResult && hasRemainingWorkflowSteps && hasPendingWorkflowSessions
       );
+      const shouldResumeRuntimeScriptWorkflow = Boolean(
+        resultInput.status === "passed" && isWorkflowTaskResult && targetContract?.workflow.kind === "runtime_script" && workflowContextAfterTaskResult && !hasPendingWorkflowSessions
+      );
       const codexSession = {
         ...run.codexSession,
-        status: shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions ? run.codexSession.status === "failed" || run.codexSession.status === "unavailable" ? run.codexSession.status : "started" : resultInput.status === "failed" ? "failed" : resultInput.status === "passed" ? completedCodexSessionStatus(run.codexSession) : run.codexSession.status === "requested" ? "started" : run.codexSession.status,
+        status: shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions || shouldResumeRuntimeScriptWorkflow ? run.codexSession.status === "failed" || run.codexSession.status === "unavailable" ? run.codexSession.status : "started" : resultInput.status === "failed" ? "failed" : resultInput.status === "passed" ? completedCodexSessionStatus(run.codexSession) : run.codexSession.status === "requested" ? "started" : run.codexSession.status,
         subagents: updateCodexSessionSubagentsForResult(
           run.codexSession.subagents,
           resultInput,
@@ -25743,7 +25783,7 @@ ${priorOutput}`;
           isTargeted
         )
       };
-      if ((shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions) && workflowContextAfterTaskResult) {
+      if ((shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions || shouldResumeRuntimeScriptWorkflow) && workflowContextAfterTaskResult) {
         const workflowProgressEvents = shouldWaitForPendingWorkflowSessions && shouldSynthesizeWorkflowEngineEvents ? workflowTaskResultEngineEvents({
           events: state.events,
           run,
@@ -25760,7 +25800,7 @@ ${priorOutput}`;
           updatedAt: timestamp2,
           completedAt: void 0
         };
-        return {
+        return withRuntimeScriptJournal({
           ...state,
           runs: state.runs.map((candidate) => candidate.id === runId ? updatedRun : candidate),
           attempts: targetAttempt ? state.attempts.map(
@@ -25790,7 +25830,7 @@ ${priorOutput}`;
               this.nextId("event"),
               runId,
               "note",
-              shouldContinueThisWorkflow ? "Codex task result recorded; continuing workflow" : "Codex task result recorded; waiting for pending workflow sessions",
+              shouldContinueThisWorkflow ? "Codex task result recorded; continuing workflow" : shouldResumeRuntimeScriptWorkflow ? "Codex task result recorded; runtime script is ready to resume" : "Codex task result recorded; waiting for pending workflow sessions",
               timestamp2,
               {
                 attemptId,
@@ -25804,7 +25844,7 @@ ${priorOutput}`;
               }
             )
           ]
-        };
+        });
       }
       if (targetContract && usesVerificationV2Runtime(targetContract.verification) && resultInput.status === "passed" && isWorkflowTaskResult && workflowContextAfterTaskResult && !hasRemainingWorkflowSteps && !hasPendingWorkflowSessions) {
         shouldContinueWorkflow = true;
@@ -25819,7 +25859,7 @@ ${priorOutput}`;
           updatedAt: timestamp2,
           completedAt: void 0
         };
-        return {
+        return withRuntimeScriptJournal({
           ...state,
           runs: state.runs.map((candidate) => candidate.id === runId ? updatedRun : candidate),
           attempts: targetAttempt ? state.attempts.map(
@@ -25858,7 +25898,7 @@ ${priorOutput}`;
               }
             )
           ]
-        };
+        });
       }
       const verification = {
         id: this.nextId("verification"),
@@ -25987,9 +26027,9 @@ ${priorOutput}`;
         terminalRunStateOverridesForPausedReason(state, run.loopId, resultInput.pausedReason)
       ) : nextState;
       if (runStatus !== "failed") {
-        return terminalState;
+        return withRuntimeScriptJournal(terminalState);
       }
-      return resultInput.pausedReason ? applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp2) : applyFailureStopPolicy(terminalState, run.loopId, timestamp2);
+      return resultInput.pausedReason ? withRuntimeScriptJournal(applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp2)) : withRuntimeScriptJournal(applyFailureStopPolicy(terminalState, run.loopId, timestamp2));
     });
     if (shouldContinueWorkflow && continuationAttemptId) {
       return this.executeWorkflowAttempt(runId, { attemptId: continuationAttemptId });
@@ -26573,7 +26613,9 @@ ${priorOutput}`;
     return rejectedRevision;
   }
   async recordCompletedCodexSessions(runId, engineEvents) {
-    const sessions = engineEvents.filter((event) => event.type === "agent_done").map((event) => event.session).filter(isCompletedCodexSession);
+    const sessions = engineEvents.filter(
+      (event) => event.type === "agent_done" || event.type === "agent:done"
+    ).map((event) => event.session).filter(isCompletedCodexSession);
     if (sessions.length === 0) {
       return (await this.getRunDetail(runId)).run;
     }
@@ -26873,6 +26915,8 @@ ${priorOutput}`;
         prompt: input.prompt,
         subagent: input.subagent,
         agentProfile: input.agentProfile,
+        idempotencyKey: input.runtimeScript?.key,
+        runtimeScript: input.runtimeScript,
         profilePreflight: input.profilePreflight,
         status: "running",
         createdAt: timestamp2,
@@ -27299,6 +27343,48 @@ function isRuntimeScriptContextState(value) {
   }
   const candidate = value;
   return typeof candidate.scriptHash === "string" && typeof candidate.argsHash === "string" && typeof candidate.status === "string" && typeof candidate.updatedAt === "string";
+}
+function runtimeScriptJournalInputForSessionResult(input) {
+  if (!input.context || !input.contract || input.contract.workflow.kind !== "runtime_script") {
+    return void 0;
+  }
+  if (input.input.status === "needs_human") {
+    return void 0;
+  }
+  const runtimeScriptState = isRuntimeScriptContextState(input.context.vars.runtimeScript) ? input.context.vars.runtimeScript : void 0;
+  const runtimeScriptTask = input.taskRun?.runtimeScript;
+  const key = runtimeScriptTask?.key ?? input.input.idempotencyKey ?? input.taskRun?.idempotencyKey;
+  const callSite = runtimeScriptTask?.callSite ?? input.input.stepId ?? input.taskRun?.stepId;
+  if (!key || !callSite) {
+    return void 0;
+  }
+  return {
+    loopId: input.run.loopId,
+    runId: input.run.id,
+    attemptId: input.context.attemptId,
+    workflowContextId: input.context.id,
+    contractId: input.contract.id,
+    scriptHash: runtimeScriptTask?.scriptHash ?? runtimeScriptState?.scriptHash ?? hashRuntimeScriptSource(input.contract.workflow.source),
+    argsHash: runtimeScriptTask?.argsHash ?? runtimeScriptState?.argsHash ?? hashRuntimeScriptArgs(input.contract.workflow.args ?? {}),
+    key,
+    callSite,
+    promptHash: runtimeScriptTask?.promptHash ?? hashRuntimeScriptPrompt(input.taskRun?.prompt ?? ""),
+    optionsHash: runtimeScriptTask?.optionsHash ?? hashRuntimeScriptOptions(input.taskRun?.label ? { label: input.taskRun.label } : {}),
+    status: input.input.status === "failed" ? "failed" : "completed",
+    output: input.input.status === "passed" ? input.input.result ?? input.input.summary : void 0,
+    error: input.input.status === "failed" ? input.input.result ?? input.input.summary : void 0,
+    sessionId: input.input.sessionId ?? input.taskRun?.sessionId
+  };
+}
+function upsertRuntimeScriptJournalRecord(records, input, timestamp2, createId2) {
+  const existing = records.find((record2) => record2.key === input.key);
+  const nextRecord = {
+    ...input,
+    id: existing?.id ?? createId2(),
+    createdAt: existing?.createdAt ?? timestamp2,
+    updatedAt: timestamp2
+  };
+  return existing ? records.map((record2) => record2.key === input.key ? nextRecord : record2) : [...records, nextRecord];
 }
 function createWorkflowVerificationState(timestamp2) {
   return {
@@ -28060,7 +28146,9 @@ function runtimeScriptEventToEngineEvent(event) {
     return {
       type: "agent:done",
       label: stringField(data.label),
-      callSite: stringField(data.callSite) ?? "agent"
+      callSite: stringField(data.callSite) ?? "agent",
+      result: stringField(data.result),
+      session: data.session
     };
   }
   if (event.type === "agent:error") {

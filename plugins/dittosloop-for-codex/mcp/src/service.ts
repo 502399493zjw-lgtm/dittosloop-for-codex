@@ -46,6 +46,7 @@ import type {
   RunEvent,
   RunStatus,
   RuntimeScriptContextState,
+  RuntimeScriptJournalRecord,
   VerificationResult,
   VerificationStatus,
   WorkflowContext,
@@ -58,7 +59,12 @@ import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
 import { deleteLoopWorkspaceDirectory, syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
 import { DEFAULT_RUNTIME_SCRIPT_LIMITS } from "./runtimeScript/defaults.js";
-import { hashRuntimeScriptArgs, hashRuntimeScriptSource } from "./runtimeScript/hash.js";
+import {
+  hashRuntimeScriptArgs,
+  hashRuntimeScriptOptions,
+  hashRuntimeScriptPrompt,
+  hashRuntimeScriptSource
+} from "./runtimeScript/hash.js";
 import { createLoopStoreRuntimeScriptJournal } from "./runtimeScript/journal.js";
 import { runRuntimeScriptInVm } from "./runtimeScript/sandbox.js";
 import type { RuntimeScriptEventInput, WorkflowSubagentBridge } from "./runtimeScript/types.js";
@@ -779,6 +785,7 @@ export class LoopService {
       });
     }
 
+    await this.recordCompletedCodexSessions(run.id, engineEvents);
     await this.recordEngineEvents(run.id, engineEvents);
 
     if (usesV2Verification && isVerificationResultV2(verification)) {
@@ -1280,6 +1287,11 @@ export class LoopService {
     workflowContext: WorkflowContext,
     contract: FormalLoopContract
   ): WorkflowSubagentBridge {
+    if (contract.workflow.kind !== "runtime_script") {
+      throw new Error(`Expected runtime_script workflow contract: ${contract.id}`);
+    }
+    const runtimeWorkflow = contract.workflow;
+
     return {
       runAgent: async (input) => {
         if (!bridge) {
@@ -1299,7 +1311,15 @@ export class LoopService {
             attemptId: attempt.id,
             workflowContextId: workflowContext.id,
             workflowRuntime: "dittosloop-local-workflow",
-            workflowContractId: contract.id
+            workflowContractId: contract.id,
+            runtimeScript: {
+              key: input.idempotencyKey,
+              callSite: input.callSite,
+              scriptHash: hashRuntimeScriptSource(runtimeWorkflow.source),
+              argsHash: hashRuntimeScriptArgs(runtimeWorkflow.args ?? {}),
+              promptHash: hashRuntimeScriptPrompt(input.prompt),
+              optionsHash: hashRuntimeScriptOptions(input.options)
+            }
           },
           {
             attemptId: attempt.id,
@@ -1428,6 +1448,7 @@ export class LoopService {
           prompt: request.prompt,
           subagent: request.subagent,
           agentProfile: request.agentProfile,
+          runtimeScript: request.runtimeScript,
           profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, request.stepId, request.agentProfile)
         })
       : undefined;
@@ -1894,6 +1915,28 @@ export class LoopService {
         ? targetContext.contractSnapshot ??
           state.formalContracts.find((candidate) => candidate.id === (targetContext.contractId ?? run.loopId))
         : undefined;
+      const runtimeScriptJournalInput = runtimeScriptJournalInputForSessionResult({
+        run,
+        context: targetContext,
+        contract: targetContract,
+        taskRun: targetTaskRun,
+        input: resultInput
+      });
+      const withRuntimeScriptJournal = (nextState: LoopState): LoopState => {
+        if (!runtimeScriptJournalInput) {
+          return nextState;
+        }
+
+        return {
+          ...nextState,
+          runtimeScriptJournals: upsertRuntimeScriptJournalRecord(
+            nextState.runtimeScriptJournals,
+            runtimeScriptJournalInput,
+            timestamp,
+            () => this.nextId("journal")
+          )
+        };
+      };
 
       // Enforce the target step's outputSchema (from contractSnapshot, the replay boundary)
       // for passed results BEFORE mutating any state. A non-conforming result is rejected and
@@ -1967,10 +2010,17 @@ export class LoopService {
         hasRemainingWorkflowSteps &&
         hasPendingWorkflowSessions
       );
+      const shouldResumeRuntimeScriptWorkflow = Boolean(
+        resultInput.status === "passed" &&
+        isWorkflowTaskResult &&
+        targetContract?.workflow.kind === "runtime_script" &&
+        workflowContextAfterTaskResult &&
+        !hasPendingWorkflowSessions
+      );
       const codexSession = {
         ...run.codexSession,
         status:
-          shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions
+          shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions || shouldResumeRuntimeScriptWorkflow
             ? run.codexSession.status === "failed" || run.codexSession.status === "unavailable"
               ? run.codexSession.status
               : "started" as const
@@ -1989,7 +2039,10 @@ export class LoopService {
         )
       };
 
-      if ((shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions) && workflowContextAfterTaskResult) {
+      if (
+        (shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions || shouldResumeRuntimeScriptWorkflow) &&
+        workflowContextAfterTaskResult
+      ) {
         const workflowProgressEvents = shouldWaitForPendingWorkflowSessions && shouldSynthesizeWorkflowEngineEvents
           ? workflowTaskResultEngineEvents({
               events: state.events,
@@ -2009,7 +2062,7 @@ export class LoopService {
           completedAt: undefined
         };
 
-        return {
+        return withRuntimeScriptJournal({
           ...state,
           runs: state.runs.map((candidate) => (candidate.id === runId ? updatedRun! : candidate)),
           attempts: targetAttempt
@@ -2045,7 +2098,9 @@ export class LoopService {
               "note",
               shouldContinueThisWorkflow
                 ? "Codex task result recorded; continuing workflow"
-                : "Codex task result recorded; waiting for pending workflow sessions",
+                : shouldResumeRuntimeScriptWorkflow
+                  ? "Codex task result recorded; runtime script is ready to resume"
+                  : "Codex task result recorded; waiting for pending workflow sessions",
               timestamp,
               {
                 attemptId,
@@ -2059,7 +2114,7 @@ export class LoopService {
               }
             )
           ]
-        };
+        });
       }
 
       if (
@@ -2087,7 +2142,7 @@ export class LoopService {
           completedAt: undefined
         };
 
-        return {
+        return withRuntimeScriptJournal({
           ...state,
           runs: state.runs.map((candidate) => (candidate.id === runId ? updatedRun! : candidate)),
           attempts: targetAttempt
@@ -2132,7 +2187,7 @@ export class LoopService {
               }
             )
           ]
-        };
+        });
       }
 
       const verification: VerificationResult = {
@@ -2288,12 +2343,12 @@ export class LoopService {
         : nextState;
 
       if (runStatus !== "failed") {
-        return terminalState;
+        return withRuntimeScriptJournal(terminalState);
       }
 
       return resultInput.pausedReason
-        ? applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp)
-        : applyFailureStopPolicy(terminalState, run.loopId, timestamp);
+        ? withRuntimeScriptJournal(applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp))
+        : withRuntimeScriptJournal(applyFailureStopPolicy(terminalState, run.loopId, timestamp));
     });
 
     if (shouldContinueWorkflow && continuationAttemptId) {
@@ -3002,7 +3057,9 @@ export class LoopService {
 
   private async recordCompletedCodexSessions(runId: string, engineEvents: EngineEvent[]): Promise<LoopRun> {
     const sessions = engineEvents
-      .filter((event): event is Extract<EngineEvent, { type: "agent_done" }> => event.type === "agent_done")
+      .filter((event): event is Extract<EngineEvent, { type: "agent_done" | "agent:done" }> =>
+        event.type === "agent_done" || event.type === "agent:done"
+      )
       .map((event) => event.session)
       .filter(isCompletedCodexSession);
 
@@ -3364,6 +3421,7 @@ export class LoopService {
       prompt?: string;
       subagent?: AgentRequest["subagent"];
       agentProfile?: AgentRequest["agentProfile"];
+      runtimeScript?: AgentRequest["runtimeScript"];
       profilePreflight?: SkillPreflightReport;
     }
   ): Promise<string> {
@@ -3383,6 +3441,8 @@ export class LoopService {
         prompt: input.prompt,
         subagent: input.subagent,
         agentProfile: input.agentProfile,
+        idempotencyKey: input.runtimeScript?.key,
+        runtimeScript: input.runtimeScript,
         profilePreflight: input.profilePreflight,
         status: "running",
         createdAt: timestamp,
@@ -3912,6 +3972,78 @@ function isRuntimeScriptContextState(value: unknown): value is RuntimeScriptCont
     typeof candidate.status === "string" &&
     typeof candidate.updatedAt === "string"
   );
+}
+
+type RuntimeScriptJournalWrite = Omit<RuntimeScriptJournalRecord, "id" | "createdAt" | "updatedAt">;
+
+function runtimeScriptJournalInputForSessionResult(input: {
+  run: LoopRun;
+  context?: WorkflowContext;
+  contract?: FormalLoopContract;
+  taskRun?: WorkflowTaskRun;
+  input: RecordSessionResultInput;
+}): RuntimeScriptJournalWrite | undefined {
+  if (!input.context || !input.contract || input.contract.workflow.kind !== "runtime_script") {
+    return undefined;
+  }
+  if (input.input.status === "needs_human") {
+    return undefined;
+  }
+
+  const runtimeScriptState = isRuntimeScriptContextState(input.context.vars.runtimeScript)
+    ? input.context.vars.runtimeScript
+    : undefined;
+  const runtimeScriptTask = input.taskRun?.runtimeScript;
+  const key = runtimeScriptTask?.key ?? input.input.idempotencyKey ?? input.taskRun?.idempotencyKey;
+  const callSite = runtimeScriptTask?.callSite ?? input.input.stepId ?? input.taskRun?.stepId;
+  if (!key || !callSite) {
+    return undefined;
+  }
+
+  return {
+    loopId: input.run.loopId,
+    runId: input.run.id,
+    attemptId: input.context.attemptId,
+    workflowContextId: input.context.id,
+    contractId: input.contract.id,
+    scriptHash:
+      runtimeScriptTask?.scriptHash ??
+      runtimeScriptState?.scriptHash ??
+      hashRuntimeScriptSource(input.contract.workflow.source),
+    argsHash:
+      runtimeScriptTask?.argsHash ??
+      runtimeScriptState?.argsHash ??
+      hashRuntimeScriptArgs(input.contract.workflow.args ?? {}),
+    key,
+    callSite,
+    promptHash: runtimeScriptTask?.promptHash ?? hashRuntimeScriptPrompt(input.taskRun?.prompt ?? ""),
+    optionsHash:
+      runtimeScriptTask?.optionsHash ??
+      hashRuntimeScriptOptions(input.taskRun?.label ? { label: input.taskRun.label } : {}),
+    status: input.input.status === "failed" ? "failed" : "completed",
+    output: input.input.status === "passed" ? input.input.result ?? input.input.summary : undefined,
+    error: input.input.status === "failed" ? input.input.result ?? input.input.summary : undefined,
+    sessionId: input.input.sessionId ?? input.taskRun?.sessionId
+  };
+}
+
+function upsertRuntimeScriptJournalRecord(
+  records: RuntimeScriptJournalRecord[],
+  input: RuntimeScriptJournalWrite,
+  timestamp: string,
+  createId: () => string
+): RuntimeScriptJournalRecord[] {
+  const existing = records.find((record) => record.key === input.key);
+  const nextRecord: RuntimeScriptJournalRecord = {
+    ...input,
+    id: existing?.id ?? createId(),
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp
+  };
+
+  return existing
+    ? records.map((record) => (record.key === input.key ? nextRecord : record))
+    : [...records, nextRecord];
 }
 
 function createWorkflowVerificationState(timestamp: string): WorkflowVerificationState {
@@ -5026,7 +5158,9 @@ function runtimeScriptEventToEngineEvent(
     return {
       type: "agent:done",
       label: stringField(data.label),
-      callSite: stringField(data.callSite) ?? "agent"
+      callSite: stringField(data.callSite) ?? "agent",
+      result: stringField(data.result),
+      session: data.session
     };
   }
   if (event.type === "agent:error") {

@@ -1,4 +1,5 @@
 import type { CodexSubagentSpec, EffectiveAgentProfile } from "../contract/types.js";
+import type { RuntimeScriptTaskRunState } from "../types.js";
 import type {
   AggregatedVerificationDecision,
   ValidatorResult,
@@ -19,6 +20,7 @@ export interface AgentRequest {
   workflowRuntime?: "dittosloop-local-workflow";
   workflowContractId?: string;
   workflowPlan?: WorkflowExecutionPlan;
+  runtimeScript?: RuntimeScriptTaskRunState;
 }
 
 export interface WorkflowExecutionPlanStep {

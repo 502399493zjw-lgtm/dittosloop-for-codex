@@ -142,7 +142,9 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
         callSite,
         key,
         label: options?.label,
+        result: output,
         status: result.status,
+        session: result.session,
         sessionId: result.session?.sessionId
       });
       return output;
