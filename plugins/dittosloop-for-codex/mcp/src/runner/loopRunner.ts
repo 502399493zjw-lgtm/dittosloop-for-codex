@@ -1,4 +1,4 @@
-import type { FormalLoopContract, Step } from "../contract/types.js";
+import type { ExecutionBody, FormalLoopContract, Step } from "../contract/types.js";
 import { effectiveProfileToSubagent, resolveEffectiveProfilesByStep } from "../contract/agentProfiles.js";
 import { runBody } from "../engine/runBody.js";
 import { runFlow } from "../engine/runFlow.js";
@@ -55,8 +55,9 @@ export class LoopRunner {
       } as EngineEvent);
     };
 
+    const body = requireStaticWorkflowBody(request.contract);
     const flowResult = await runFlow(
-      (api) => runBody(request.contract.body, api, resolveEffectiveProfilesByStep(request.contract)),
+      (api) => runBody(body, api, resolveEffectiveProfilesByStep(request.contract)),
       {
         runId: request.runId,
         executor: this.options.executor,
@@ -115,18 +116,27 @@ export class LoopRunner {
 
 export function buildWorkflowExecutionPlan(contract: FormalLoopContract): WorkflowExecutionPlan {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+  const body = requireStaticWorkflowBody(contract);
 
   return {
     runtime: "dittosloop-local-workflow",
     contractId: contract.id,
     goal: contract.goal,
-    steps: flattenWorkflowSteps(contract.body.steps, effectiveProfilesByStep),
+    steps: flattenWorkflowSteps(body.steps, effectiveProfilesByStep),
     verification: contract.verification,
     repairPolicy: contract.repairPolicy,
     stopPolicy: contract.stopPolicy,
     budgetUsd: contract.budgetUsd,
     escalation: contract.escalation
   };
+}
+
+function requireStaticWorkflowBody(contract: FormalLoopContract): ExecutionBody {
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : undefined);
+  if (!body) {
+    throw new Error("Static workflow execution requires body.steps");
+  }
+  return body;
 }
 
 function flattenWorkflowSteps(

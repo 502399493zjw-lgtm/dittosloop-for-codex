@@ -2,11 +2,12 @@ import { createId, type IdPrefix } from "./id.js";
 import { compileContract } from "./contract/compileContract.js";
 import { effectiveProfileToSubagent, resolveEffectiveProfilesByStep } from "./contract/agentProfiles.js";
 import { runSkillProfilePreflight, type SkillAvailabilityProvider } from "./codex/skillPreflight.js";
-import { evalScriptAst, type ScriptAst } from "./script/evalScript.js";
 import { validateOutputAgainstSchema } from "./script/validateOutput.js";
 import type { CodexSessionBridge, CodexSessionRef } from "./codex/sessionBridge.js";
 import type {
+  CodexSubagentSpec,
   EffectiveAgentProfile,
+  ExecutionBody,
   FormalLoopContract,
   FormalLoopContractInput,
   LegacyVerificationPolicy,
@@ -94,7 +95,6 @@ export interface ReadLoopMemoryInput {
 export type CreateLoopContractInput = Omit<FormalLoopContractInput, "id" | "body"> & {
   id?: string;
   body?: FormalLoopContractInput["body"];
-  script?: ScriptAst;
   codexProjectId?: string;
   projectLabel?: string;
   projectPath?: string;
@@ -193,11 +193,7 @@ export interface WorkflowLaunchPlanStep {
   prompt?: string;
   sessionPolicy?: "new";
   agentProfile?: EffectiveAgentProfile;
-  subagent?: FormalLoopContract["body"]["steps"][number] extends infer TStep
-    ? TStep extends { subagent?: infer TSubagent }
-      ? TSubagent
-      : never
-    : never;
+  subagent?: CodexSubagentSpec;
 }
 
 export interface WorkflowLaunchPlan {
@@ -347,9 +343,8 @@ export class LoopService {
 
   async createLoopContract(input: CreateLoopContractInput): Promise<FormalLoopContract> {
     const timestamp = this.now();
-    const resolvedInput = resolveScriptContractInput(input);
     const contract = compileContractWithVerificationInputKind(
-      normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")),
+      normalizeFormalContractInput(input, input.id ?? this.nextId("loop")),
       timestamp
     );
 
@@ -1106,7 +1101,8 @@ export class LoopService {
       return request.prompt;
     }
     const contract = context.contractSnapshot;
-    const phase = contract ? findPipelinePhase(contract.body.steps, request.phaseId) : undefined;
+    const contractBody = contract ? staticWorkflowBody(contract) : undefined;
+    const phase = contractBody ? findPipelinePhase(contractBody.steps, request.phaseId) : undefined;
     if (!phase) {
       return request.prompt;
     }
@@ -1609,8 +1605,9 @@ export class LoopService {
       // the WorkflowContext is left untouched.
       if (resultInput.status === "passed" && targetContext && targetContract) {
         const validationStepId = resultInput.stepId ?? targetTaskRun?.stepId;
-        const outputSchema = validationStepId
-          ? findStepOutputSchema(targetContract.body.steps, validationStepId)
+        const targetBody = staticWorkflowBody(targetContract);
+        const outputSchema = validationStepId && targetBody
+          ? findStepOutputSchema(targetBody.steps, validationStepId)
           : undefined;
         if (outputSchema && resultInput.result !== undefined) {
           validateOutputAgainstSchema(resultInput.result, outputSchema);
@@ -2567,8 +2564,8 @@ export class LoopService {
     }
 
     const revisionContractInput = input.contract
-      ? resolveScriptContractInput({ ...input.contract, id: loopId })
-      : resolveScriptContractInput(applyContractPatch(baseContract, input.patch ?? {}));
+      ? { ...input.contract, id: loopId }
+      : applyContractPatch(baseContract, input.patch ?? {});
     const normalized = normalizeFormalContractInput(revisionContractInput, loopId);
     const contract = compileContractWithVerificationInputKind(
       {
@@ -3656,10 +3653,10 @@ function hasDefaultLegacyMigrationShape(policy: FormalLoopContract["verification
     validator.type === "rubric_agent" &&
     validator.id === "rubric-agent" &&
     validator.label === "Rubric review" &&
-    validator.scoreScale.min === 0 &&
-    validator.scoreScale.max === 1 &&
-    validator.passScore === 1 &&
-    validator.evidenceRequired === true &&
+    (validator.scoreScale?.min ?? 0) === 0 &&
+    (validator.scoreScale?.max ?? 1) === 1 &&
+    (validator.passScore ?? 1) === 1 &&
+    (validator.evidenceRequired ?? true) === true &&
     validator.severity === "must" &&
     sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id))
   );
@@ -3783,11 +3780,14 @@ function validateWorkflowSessionResultTarget(
 }
 
 function hasRemainingExecutableSteps(contract: FormalLoopContract, context: WorkflowContext): boolean {
+  const body = staticWorkflowBody(contract);
+  if (!body) return false;
+
   const completedSteps = new Set(Object.keys(completedWorkflowStepOutputs(context)));
-  return executableWorkflowStepIds(contract.body.steps).some((stepId) => !completedSteps.has(stepId));
+  return executableWorkflowStepIds(body.steps).some((stepId) => !completedSteps.has(stepId));
 }
 
-function executableWorkflowStepIds(steps: FormalLoopContract["body"]["steps"]): string[] {
+function executableWorkflowStepIds(steps: Step[]): string[] {
   return steps.flatMap((step) => {
     if (step.kind === "agent" || step.kind === "task") {
       return [step.id];
@@ -3795,6 +3795,10 @@ function executableWorkflowStepIds(steps: FormalLoopContract["body"]["steps"]): 
 
     return executableWorkflowStepIds(step.children);
   });
+}
+
+function staticWorkflowBody(contract: FormalLoopContract): ExecutionBody | undefined {
+  return contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : undefined);
 }
 
 function requireLoop(state: LoopState, loopId: string): LoopContract {
@@ -3861,34 +3865,8 @@ function requireWorkflowRevisionSessionContext(
   return { run, attempt };
 }
 
-// If the input carries a `script` (JSON builder-call AST), evaluate it through the
-// pure builders to produce body.steps + folded budget, then drop the script field so
-// the rest of the pipeline sees an ordinary raw-Step[] contract input.
-function resolveScriptContractInput(input: CreateLoopContractInput): CreateLoopContractInput & { body: FormalLoopContractInput["body"] } {
-  const { script, ...rest } = input;
-  if (!script) {
-    if (!rest.body) {
-      throw new Error("Loop contract requires body.steps or a script");
-    }
-    return rest as CreateLoopContractInput & { body: FormalLoopContractInput["body"] };
-  }
-  if (rest.body) {
-    throw new Error("Loop contract cannot include both body and script");
-  }
-  const built = evalScriptAst(script);
-  return {
-    ...rest,
-    body: { steps: built.steps },
-    ...(built.budgetUsd !== undefined && rest.budgetUsd === undefined ? { budgetUsd: built.budgetUsd } : {})
-  } as CreateLoopContractInput & { body: FormalLoopContractInput["body"] };
-}
-
 function normalizeFormalContractInput(input: CreateLoopContractInput, id: string): FormalLoopContractInput {
-  const { codexProjectId, projectLabel, projectPath, projectBinding, script, body, ...contractInput } = input;
-  void script;
-  if (!body) {
-    throw new Error("Loop contract requires body.steps");
-  }
+  const { codexProjectId, projectLabel, projectPath, projectBinding, ...contractInput } = input;
   const normalizedProjectBinding = {
     codexProjectId: projectBinding?.codexProjectId ?? codexProjectId,
     projectLabel: projectBinding?.projectLabel ?? projectLabel,
@@ -3898,7 +3876,6 @@ function normalizeFormalContractInput(input: CreateLoopContractInput, id: string
 
   return {
     ...contractInput,
-    body,
     id,
     ...(hasProjectBinding ? { projectBinding: normalizedProjectBinding } : {})
   };
@@ -3943,9 +3920,9 @@ function applyContractPatch(
   baseContract: FormalLoopContract,
   patch: Partial<CreateLoopContractInput>
 ): CreateLoopContractInput {
-  // A patch may carry a script (builder AST) instead of a body. When it does, defer to
-  // the script and do not inherit the base body so resolveScriptContractInput can compile it.
-  if (patch.script) {
+  // A patch may carry a script instead of a body. When it does, defer to
+  // the compiler and do not inherit the base body.
+  if (patch.script !== undefined) {
     return {
       ...baseContract,
       ...patch,
@@ -4236,7 +4213,12 @@ function codexSessionSubagentsForContract(
     return [{ role: "loop-runner", status, prompt }];
   }
 
-  const agents = flattenWorkflowLaunchSteps(contract.body.steps, resolveEffectiveProfilesByStep(contract))
+  const body = staticWorkflowBody(contract);
+  if (!body) {
+    return [{ role: "runtime-script", status, prompt }];
+  }
+
+  const agents = flattenWorkflowLaunchSteps(body.steps, resolveEffectiveProfilesByStep(contract))
     .filter((step) => step.kind === "agent" || step.kind === "task")
     .map((step) => ({
       stepId: step.id,
@@ -5621,6 +5603,7 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
   workflowPlan: WorkflowLaunchPlan;
 } {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+  const body = staticWorkflowBody(contract);
 
   return {
     workflowRuntime: "dittosloop-local-workflow",
@@ -5629,7 +5612,7 @@ function buildWorkflowLaunch(contract: FormalLoopContract): {
       runtime: "dittosloop-local-workflow",
       contractId: contract.id,
       goal: contract.goal,
-      steps: flattenWorkflowLaunchSteps(contract.body.steps, effectiveProfilesByStep),
+      steps: body ? flattenWorkflowLaunchSteps(body.steps, effectiveProfilesByStep) : [],
       verification: workflowLaunchVerification(contract.verification),
       repairPolicy: contract.repairPolicy,
       stopPolicy: contract.stopPolicy,
@@ -5646,7 +5629,7 @@ function workflowLaunchVerification(
 }
 
 function flattenWorkflowLaunchSteps(
-  steps: FormalLoopContract["body"]["steps"],
+  steps: Step[],
   effectiveProfilesByStep: ReturnType<typeof resolveEffectiveProfilesByStep>,
   phaseId?: string,
   depth = 0
@@ -5693,8 +5676,12 @@ function flattenWorkflowLaunchSteps(
 
 function formatWorkflowSteps(contract: FormalLoopContract): string {
   const lines: string[] = [];
+  const body = staticWorkflowBody(contract);
+  if (!body) {
+    return "- runtime_script workflow: javascript source";
+  }
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
-  const visit = (steps: FormalLoopContract["body"]["steps"], depth: number): void => {
+  const visit = (steps: Step[], depth: number): void => {
     for (const step of steps) {
       const indent = "  ".repeat(depth);
       if (step.kind === "agent" || step.kind === "task") {
@@ -5711,7 +5698,7 @@ function formatWorkflowSteps(contract: FormalLoopContract): string {
     }
   };
 
-  visit(contract.body.steps, 0);
+  visit(body.steps, 0);
   return lines.join("\n");
 }
 

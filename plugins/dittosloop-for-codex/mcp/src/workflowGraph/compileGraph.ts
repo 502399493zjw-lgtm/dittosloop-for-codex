@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { effectiveProfileToSubagent, resolveEffectiveProfilesByStep } from "../contract/agentProfiles.js";
-import type { FormalLoopContract, PhaseStep, Step } from "../contract/types.js";
+import type { ExecutionBody, FormalLoopContract, PhaseStep, Step } from "../contract/types.js";
 import type {
   ExecutionGraphEdge,
   ExecutionGraphNode,
@@ -23,6 +23,7 @@ export interface CompileExecutionGraphInput {
 
 export function compileExecutionGraph(input: CompileExecutionGraphInput): ExecutionGraphSnapshot {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(input.contract);
+  const body = requireStaticWorkflowBody(input.contract);
   const nodes: ExecutionGraphNode[] = [
     {
       nodeId: "root",
@@ -35,7 +36,7 @@ export function compileExecutionGraph(input: CompileExecutionGraphInput): Execut
   const edges: ExecutionGraphEdge[] = [];
   const topLevelNodeIds: string[] = [];
 
-  input.contract.body.steps.forEach((step, index) => {
+  body.steps.forEach((step, index) => {
     const node = appendStepNode({
       step,
       parentNodeId: "root",
@@ -80,6 +81,14 @@ export function compileExecutionGraph(input: CompileExecutionGraphInput): Execut
     nodes,
     edges
   };
+}
+
+function requireStaticWorkflowBody(contract: FormalLoopContract): ExecutionBody {
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : undefined);
+  if (!body) {
+    throw new Error("Execution graph compilation requires body.steps");
+  }
+  return body;
 }
 
 interface AppendStepNodeInput {

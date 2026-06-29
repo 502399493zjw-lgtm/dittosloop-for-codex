@@ -59,7 +59,7 @@ export function migrateLegacyContract(loop: MaybeFormalLoopContract): FormalLoop
 }
 
 function isFormalContract(loop: MaybeFormalLoopContract): loop is FormalLoopContract {
-  return "goal" in loop && "body" in loop && "repairPolicy" in loop && "stopPolicy" in loop;
+  return "goal" in loop && ("workflow" in loop || "body" in loop) && "repairPolicy" in loop && "stopPolicy" in loop;
 }
 
 function migrateLegacyVerificationChecks(checks: string[]): FormalLoopContract["verification"] {
@@ -89,6 +89,7 @@ function migrateLegacyVerificationChecks(checks: string[]): FormalLoopContract["
       type: "rubric_agent" as const,
       label: "Legacy rubric review",
       criteriaIds: criteria.map((criterion) => criterion.id),
+      prompt: "Review the workflow result against the verification criteria.",
       scoreScale: { min: 0, max: 1 },
       passScore: 1,
       evidenceRequired: true,

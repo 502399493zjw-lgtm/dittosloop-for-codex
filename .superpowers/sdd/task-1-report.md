@@ -1,164 +1,56 @@
 # Task 1 Report
 
-## What I implemented
+## Status
 
-- Added formal workflow agent profile contract types in `plugins/dittosloop-for-codex/mcp/src/contract/types.ts`:
-  - `SkillRequirementSource`
-  - `SkillRequirement`
-  - `AgentProfile`
-  - `EffectiveAgentProfile`
-  - `agentProfiles?: Record<string, AgentProfile>` on `FormalLoopContract`
-  - `agentProfileRef?: string` on `AgentStep` and `TaskStep`
-- Added `plugins/dittosloop-for-codex/mcp/src/contract/agentProfiles.ts` with:
-  - `resolveEffectiveAgentProfile`
-  - `resolveEffectiveProfilesByStep`
-  - `effectiveProfileToSubagent`
-- Implemented normalization rules:
-  - `agentProfileRef` resolves declared profiles first
-  - legacy `subagent.ref` can resolve a declared profile when no `agentProfileRef` is present
-  - inline `subagent` values override declared profile defaults
-  - `subagent.tools` maps to `allowedTools`
-  - inline-only subagents normalize into `source: "legacy-inline"` effective profiles
-- Extended contract validation in `plugins/dittosloop-for-codex/mcp/src/contract/validateContract.ts` for:
-  - declared profile shape and key/id consistency
-  - missing `agentProfileRef`
-  - invalid skill requirement ids
-  - invalid skill requirement sources
-  - invalid declared `allowedTools`
-  - invalid declared profile permissions
-  - invalid declared profile `timeoutMs`
-- Updated `applyContractPatch` in `plugins/dittosloop-for-codex/mcp/src/service.ts` to preserve `agentProfiles` across workflow revisions.
-- Added focused contract tests in `plugins/dittosloop-for-codex/mcp/test/contract.test.ts` for the new validation and normalization behavior.
+DONE
 
-## Tests run and exact results
+## Summary of changes
 
-1. `npm --prefix plugins/dittosloop-for-codex/mcp test -- contract.test.ts`
-   - Result: `✓ test/contract.test.ts (12 tests) 4ms`
-   - Summary: `Test Files  1 passed (1)` / `Tests  12 passed (12)`
-2. `npm --prefix plugins/dittosloop-for-codex/mcp run typecheck`
-   - Result: exit code `0`
+- Added `static_steps` and `runtime_script` workflow contract types, with optional `FormalLoopContract.body` for runtime script contracts.
+- Normalized contract compilation so static `body.steps` and legacy `script.build` remain static workflows, while string `script` requires `workflowKind: "runtime_script"` and defaults approval to `{ required: true }`.
+- Added runtime script validation for JavaScript language, non-empty source, a 100,000 character source limit, positive integer limits, approval policy, journal shape, and no `body.steps`.
+- Extended rubric-agent validators with required `prompt`, optional score controls, verifier `subagent`, and `allowSelfReview`, with compiler defaults for older v2 and legacy migrations.
+- Updated `create_loop_contract` schema guardrails for static/runtime compatibility errors.
+- Added focused contract and MCP schema tests for the required static, legacy script, runtime script, rejection, and rubric-agent cases.
+- Added minimal static-workflow compatibility guards in service/runner/graph/profile helpers so existing static execution paths typecheck with runtime contracts that do not have `body.steps`.
 
-## TDD Evidence
+## Tests
 
-### RED
-
-Command:
-
-```bash
-npm --prefix plugins/dittosloop-for-codex/mcp test -- contract.test.ts
-```
-
-Relevant failing output:
-
-```text
-FAIL  test/contract.test.ts [ test/contract.test.ts ]
-Error: Cannot find module '../src/contract/agentProfiles.js'
-Caused by: ... Does the file exist?
-Test Files  1 failed (1)
-Tests  no tests
-```
-
-Why this failure was expected:
-
-- The new tests imported `resolveEffectiveAgentProfile` from `agentProfiles.ts` and exercised `agentProfiles` / `agentProfileRef` before any production implementation existed, so the suite failed on the missing Task 1 contract surface.
-
-### GREEN
-
-Command:
-
-```bash
-npm --prefix plugins/dittosloop-for-codex/mcp test -- contract.test.ts
-```
-
-Relevant passing output:
-
-```text
-✓ test/contract.test.ts (12 tests) 4ms
-Test Files  1 passed (1)
-Tests  12 passed (12)
-```
+- Baseline before edits:
+  - `npm test -- --run test/contract.test.ts test/mcpServer.test.ts`
+  - Passed: 2 files, 52 tests.
+- RED after adding tests:
+  - `npm test -- --run test/contract.test.ts test/mcpServer.test.ts`
+  - Failed as expected: 8 failed, 53 passed; missing runtime workflow normalization/schema behavior.
+- GREEN after implementation:
+  - `npm test -- --run test/contract.test.ts test/mcpServer.test.ts`
+  - Passed: 2 files, 61 tests.
+- First typecheck after implementation:
+  - `npm run typecheck`
+  - Failed as expected on optional static `body` call sites in `agentProfiles.ts`, `loopRunner.ts`, `service.ts`, and `compileGraph.ts`.
+- Final verification:
+  - `npm test -- --run test/contract.test.ts test/mcpServer.test.ts`
+  - Passed: 2 files, 62 tests.
+  - `npm run typecheck`
+  - Passed.
 
 ## Files changed
 
-- `plugins/dittosloop-for-codex/mcp/src/contract/types.ts`
-- `plugins/dittosloop-for-codex/mcp/src/contract/agentProfiles.ts`
-- `plugins/dittosloop-for-codex/mcp/src/contract/validateContract.ts`
-- `plugins/dittosloop-for-codex/mcp/src/service.ts`
-- `plugins/dittosloop-for-codex/mcp/test/contract.test.ts`
-
-## Self-review findings
-
-- Confirmed the implementation stayed inside Task 1 ownership and did not modify MCP schemas, preview, session propagation, workspace-file generation, or installed skill docs.
-- Confirmed the new validation errors are actionable and mention the relevant contract field path.
-- Confirmed `EffectiveAgentProfile` requires `requiredSkills` and `advisorySkills` arrays via `Omit<...>` narrowing.
-- Confirmed `agentProfiles` survive contract patch application in `service.ts`.
-
-## Any concerns
-
-- No blocking concerns. The new helper exports are currently exercised from tests and are ready for later tasks that will wire them into runtime/session behavior.
-
----
-
-## Fix Report: Review follow-up for Task 1
-
-### What I fixed
-
-- Updated `resolveEffectiveAgentProfile` so `agentProfileRef` only resolves to a declared profile and returns `undefined` when the referenced profile is missing, even if inline `subagent` values are present.
-- Hardened `validateContract` so each `agentProfiles` entry is checked as a non-null object before field access, producing an actionable error like `agentProfiles.<id> must be an object`.
-- Added focused regression tests for both behaviors in `contract.test.ts`.
-
-### RED command/output and why expected
-
-Command:
-
-```bash
-npm --prefix plugins/dittosloop-for-codex/mcp test -- contract.test.ts
-```
-
-Relevant failing output:
-
-```text
-× formal loop contracts > does not synthesize a declared effective profile when agentProfileRef is missing but inline subagent exists
-  → expected { id: 'missing-profile', … } to be undefined
-× formal loop contracts > reports malformed agentProfiles entries as actionable validation errors
-  → expected [Function] to throw error matching /agentProfiles\.broken must be an object/i but got 'Cannot read properties of null (reading 'id')'
-Test Files  1 failed (1)
-Tests  2 failed | 12 passed (14)
-```
-
-Why this was expected:
-
-- The existing resolver still treated inline `subagent` values as a fallback when `agentProfileRef` was present but unresolved.
-- The existing validator dereferenced `profile.id` without first confirming the profile entry was a non-null object.
-
-### GREEN command/output
-
-Commands:
-
-```bash
-npm --prefix plugins/dittosloop-for-codex/mcp test -- contract.test.ts
-npm --prefix plugins/dittosloop-for-codex/mcp run typecheck
-```
-
-Relevant passing output:
-
-```text
-✓ test/contract.test.ts (14 tests)
-Test Files  1 passed (1)
-Tests  14 passed (14)
-```
-
-```text
-> tsc -p tsconfig.json --noEmit
-```
-
-### Files changed
-
-- `plugins/dittosloop-for-codex/mcp/src/contract/agentProfiles.ts`
-- `plugins/dittosloop-for-codex/mcp/src/contract/validateContract.ts`
-- `plugins/dittosloop-for-codex/mcp/test/contract.test.ts`
 - `.superpowers/sdd/task-1-report.md`
+- `plugins/dittosloop-for-codex/mcp/src/contract/agentProfiles.ts`
+- `plugins/dittosloop-for-codex/mcp/src/contract/compileContract.ts`
+- `plugins/dittosloop-for-codex/mcp/src/contract/migrateLegacyContract.ts`
+- `plugins/dittosloop-for-codex/mcp/src/contract/types.ts`
+- `plugins/dittosloop-for-codex/mcp/src/contract/validateContract.ts`
+- `plugins/dittosloop-for-codex/mcp/src/mcpServer.ts`
+- `plugins/dittosloop-for-codex/mcp/src/runner/loopRunner.ts`
+- `plugins/dittosloop-for-codex/mcp/src/runner/verificationV2.ts`
+- `plugins/dittosloop-for-codex/mcp/src/service.ts`
+- `plugins/dittosloop-for-codex/mcp/src/workflowGraph/compileGraph.ts`
+- `plugins/dittosloop-for-codex/mcp/test/contract.test.ts`
+- `plugins/dittosloop-for-codex/mcp/test/mcpServer.test.ts`
 
-### Any concerns
+## Concerns or follow-ups
 
-- No additional concerns in this fix scope.
+- Runtime VM execution, journal behavior, service execution, and preview events were intentionally not implemented in this slice.
+- Untracked `plugins/dittosloop-for-codex/mcp/src/runtimeScript/` and `plugins/dittosloop-for-codex/mcp/test/runtimeScript/` files were present in the worktree and left uncommitted as unrelated work.
