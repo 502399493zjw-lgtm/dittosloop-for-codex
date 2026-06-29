@@ -167,39 +167,7 @@ test("verification v2 does not auto-pass rubric agents or unloaded artifacts", a
 });
 
 test("verification v2 script validators emit failed results instead of crashing", async () => {
-  const policy = verificationPolicyWithValidators([
-    {
-      id: "script-check",
-      type: "script",
-      label: "Script check",
-      criteriaIds: ["tests-pass"],
-      severity: "must",
-      runtime: "node",
-      scriptRef: {
-        path: "scripts/check.mjs",
-        checksum: "sha256:test",
-        args: ["--flag"],
-        timeoutMs: 1000
-      },
-      input: {
-        source: "workflow_result"
-      },
-      output: {
-        schema: "verification_result_v1"
-      },
-      evidenceRequired: true,
-      builder: {
-        kind: "codex_subagent",
-        builtAt: "2026-06-26T00:00:00.000Z",
-        selfCheck: {
-          status: "passed",
-          command: "node",
-          args: ["--check"],
-          evidence: "ok"
-        }
-      }
-    }
-  ]);
+  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
   const events: string[] = [];
 
   const result = await runVerificationV2({
@@ -209,6 +177,12 @@ test("verification v2 script validators emit failed results instead of crashing"
     createdAt: "2026-06-26T00:00:00.000Z",
     policy,
     workflowResult: {},
+    contractWorkspacePath: "/loop-workspace",
+    commandExecutor: async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "script boom"
+    }),
     emit: (event) => {
       events.push(event.type);
     }
@@ -218,16 +192,106 @@ test("verification v2 script validators emit failed results instead of crashing"
     status: "failed",
     validatorResults: [
       {
-        validatorId: "script-check",
+        validatorId: "release-note-script",
         type: "script",
         status: "failed",
         criteriaIds: ["tests-pass"]
       }
     ]
   });
-  expect(result.validatorResults[0]?.summary).toContain("not yet implemented");
-  expect(result.validatorResults[0]?.evidence).toContain("not executed");
+  expect(result.validatorResults[0]?.summary).toContain("failed to execute");
+  expect(result.validatorResults[0]?.evidence).toContain("stderr:");
   expect(events).toEqual(["validator_started", "validator_done", "verification_decided"]);
+});
+
+test("verification v2 script validators parse structured JSON results", async () => {
+  const requests: Array<{ command: string; args: string[]; cwd?: string; stdin?: string }> = [];
+  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+
+  const result = await runVerificationV2({
+    id: "verification_script",
+    runId: "run_1",
+    attemptId: "attempt_1",
+    createdAt: "2026-06-29T00:00:00.000Z",
+    policy,
+    workflowResult: { releaseNotes: "All changes covered." },
+    contractWorkspacePath: "/loop-workspace",
+    commandExecutor: async (request) => {
+      requests.push(request);
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          status: "passed",
+          score: 0.92,
+          summary: "Release notes cover all changes.",
+          evidence: ["Matched 8 of 8 commits."],
+          criteriaResults: [
+            {
+              criterionId: "tests-pass",
+              status: "passed",
+              score: 0.92,
+              evidence: "Every user-facing change is represented."
+            }
+          ],
+          output: { matchedCommits: 8, totalCommits: 8 }
+        }),
+        stderr: ""
+      };
+    }
+  });
+
+  expect(requests[0]).toMatchObject({
+    command: "node",
+    args: ["evaluators/release-note-script/evaluator.mjs"],
+    cwd: "/loop-workspace"
+  });
+  expect(JSON.parse(requests[0].stdin ?? "{}")).toMatchObject({
+    validatorId: "release-note-script",
+    workflowResult: { releaseNotes: "All changes covered." }
+  });
+  expect(result).toMatchObject({
+    status: "passed",
+    validatorResults: [
+      {
+        validatorId: "release-note-script",
+        type: "script",
+        status: "passed",
+        score: 0.92,
+        evidence: "Matched 8 of 8 commits."
+      }
+    ]
+  });
+});
+
+test("verification v2 script validators fail on invalid JSON output", async () => {
+  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+
+  const result = await runVerificationV2({
+    id: "verification_script_invalid",
+    runId: "run_1",
+    createdAt: "2026-06-29T00:00:00.000Z",
+    policy,
+    workflowResult: {},
+    contractWorkspacePath: "/loop-workspace",
+    commandExecutor: async () => ({
+      exitCode: 0,
+      stdout: "not-json",
+      stderr: "warning"
+    })
+  });
+
+  expect(result).toMatchObject({
+    status: "failed",
+    validatorResults: [
+      {
+        validatorId: "release-note-script",
+        type: "script",
+        status: "failed",
+        summary: "Script validator release-note-script did not return valid verification_result_v1 JSON."
+      }
+    ]
+  });
+  expect(result.validatorResults[0]?.evidence).toContain("stdout:");
 });
 
 test("verification v2 uncovered must criteria fail aggregation", () => {
@@ -344,6 +408,37 @@ function verificationPolicyWithValidators(validators: VerificationPolicyV2["vali
       failOnMustValidatorFailure: true,
       failOnShouldValidatorFailure: false,
       requireEvidenceForAgentScores: true
+    }
+  };
+}
+
+function scriptValidatorFixture(): VerificationPolicyV2["validators"][number] {
+  return {
+    id: "release-note-script",
+    type: "script",
+    label: "Release note script",
+    criteriaIds: ["tests-pass"],
+    severity: "must",
+    runtime: "node",
+    scriptRef: {
+      path: "evaluators/release-note-script/evaluator.mjs",
+      checksum: "sha256:0123456789abcdef",
+      cwd: "loop",
+      args: [],
+      timeoutMs: 30000
+    },
+    input: { source: "workflow_result" },
+    output: { schema: "verification_result_v1" },
+    evidenceRequired: true,
+    builder: {
+      kind: "codex_subagent",
+      builtAt: "2026-06-29T00:00:00.000Z",
+      selfCheck: {
+        status: "passed",
+        command: "node",
+        args: ["evaluators/release-note-script/evaluator.mjs"],
+        evidence: "fixture passed"
+      }
     }
   };
 }

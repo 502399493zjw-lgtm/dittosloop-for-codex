@@ -18,6 +18,7 @@ export interface CommandExecutionRequest {
   args: string[];
   cwd?: string;
   timeoutMs?: number;
+  stdin?: string;
 }
 
 export interface CommandExecutionResult {
@@ -69,6 +70,15 @@ export interface RubricAgentValidatorResult extends ValidatorResultBase {
 
 export interface ScriptValidatorResult extends ValidatorResultBase {
   type: "script";
+  runtime: VerificationScriptValidator["runtime"];
+  scriptPath: string;
+  cwd?: string;
+  exitCode?: number | null;
+  stdout?: string;
+  stderr?: string;
+  timedOut?: boolean;
+  score?: number;
+  output?: unknown;
 }
 
 export type ValidatorResult =
@@ -275,7 +285,7 @@ async function runDeterministicValidator(
     case "rubric_agent":
       return rubricAgentNeedsHumanResult(validator);
     case "script":
-      return unsupportedScriptValidatorResult(validator);
+      return runScriptValidator(validator, input);
   }
 }
 
@@ -378,17 +388,175 @@ function rubricAgentNeedsHumanResult(validator: VerificationRubricAgentValidator
   };
 }
 
-function unsupportedScriptValidatorResult(validator: VerificationScriptValidator): ScriptValidatorResult {
+async function runScriptValidator(
+  validator: VerificationScriptValidator,
+  input: RunVerificationV2Input
+): Promise<ScriptValidatorResult> {
+  const executor = input.commandExecutor ?? defaultCommandExecutor;
+  const cwd = resolveScriptCwd(validator, input);
+  const execution = await executor({
+    command: scriptRuntimeCommand(validator.runtime),
+    args: [validator.scriptRef.path, ...(validator.scriptRef.args ?? [])],
+    cwd,
+    timeoutMs: validator.scriptRef.timeoutMs,
+    stdin: JSON.stringify(scriptValidatorInputEnvelope(validator, input))
+  });
+  const stdout = truncateEvidence(execution.stdout);
+  const stderr = truncateEvidence(execution.stderr);
+  const error = execution.error ? truncateEvidence(execution.error) : undefined;
+
+  if (execution.exitCode !== 0 || execution.timedOut || error) {
+    return {
+      validatorId: validator.id,
+      type: "script",
+      label: validator.label,
+      severity: validator.severity,
+      criteriaIds: validator.criteriaIds,
+      status: "failed",
+      summary: `Script validator ${validator.id} failed to execute.`,
+      evidence: commandEvidence(stdout, stderr, error),
+      runtime: validator.runtime,
+      scriptPath: validator.scriptRef.path,
+      cwd,
+      exitCode: execution.exitCode,
+      stdout,
+      stderr,
+      timedOut: execution.timedOut
+    };
+  }
+
+  const parsed = parseScriptVerificationJson(stdout);
+  if (!parsed.ok) {
+    return {
+      validatorId: validator.id,
+      type: "script",
+      label: validator.label,
+      severity: validator.severity,
+      criteriaIds: validator.criteriaIds,
+      status: "failed",
+      summary: `Script validator ${validator.id} did not return valid verification_result_v1 JSON.`,
+      evidence: commandEvidence(stdout, stderr, parsed.error),
+      runtime: validator.runtime,
+      scriptPath: validator.scriptRef.path,
+      cwd,
+      exitCode: execution.exitCode,
+      stdout,
+      stderr
+    };
+  }
+
   return {
     validatorId: validator.id,
     type: "script",
     label: validator.label,
     severity: validator.severity,
     criteriaIds: validator.criteriaIds,
-    status: "failed",
-    summary: `Script validator ${validator.id} execution is not yet implemented.`,
-    evidence: "Script validator was not executed because the script runtime is not yet implemented."
+    status: parsed.value.status,
+    summary: parsed.value.summary,
+    evidence: parsed.value.evidence,
+    runtime: validator.runtime,
+    scriptPath: validator.scriptRef.path,
+    cwd,
+    exitCode: execution.exitCode,
+    stdout,
+    stderr,
+    score: parsed.value.score,
+    output: parsed.value.output
   };
+}
+
+function scriptRuntimeCommand(runtime: VerificationScriptValidator["runtime"]): string {
+  return runtime === "python" ? "python3" : "node";
+}
+
+function scriptValidatorInputEnvelope(
+  validator: VerificationScriptValidator,
+  input: RunVerificationV2Input
+): Record<string, unknown> {
+  return {
+    validatorId: validator.id,
+    criteriaIds: validator.criteriaIds,
+    source: validator.input.source,
+    workflowResult: input.workflowResult,
+    runId: input.runId,
+    attemptId: input.attemptId,
+    projectPath: input.projectPath,
+    contractWorkspacePath: input.contractWorkspacePath
+  };
+}
+
+function parseScriptVerificationJson(
+  stdout: string
+):
+  | {
+      ok: true;
+      value: {
+        status: VerificationDecisionStatus;
+        summary: string;
+        evidence?: string;
+        score?: number;
+        output?: unknown;
+      };
+    }
+  | { ok: false; error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return { ok: false, error: "JSON output must be an object." };
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const status = record.status;
+  if (status !== "passed" && status !== "failed" && status !== "needs_human") {
+    return { ok: false, error: "JSON output status must be passed, failed, or needs_human." };
+  }
+
+  const summary = record.summary;
+  if (typeof summary !== "string" || !summary.trim()) {
+    return { ok: false, error: "JSON output summary must be a non-empty string." };
+  }
+
+  const score = record.score;
+  if (score !== undefined && (typeof score !== "number" || !Number.isFinite(score))) {
+    return { ok: false, error: "JSON output score must be a finite number when provided." };
+  }
+
+  const evidence = normalizeScriptEvidence(record.evidence);
+  if (record.evidence !== undefined && evidence === undefined) {
+    return { ok: false, error: "JSON output evidence must be a string or array of strings." };
+  }
+
+  return {
+    ok: true,
+    value: {
+      status,
+      summary,
+      evidence,
+      score,
+      output: record.output
+    }
+  };
+}
+
+function normalizeScriptEvidence(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    return value.join("\n");
+  }
+  return undefined;
 }
 
 function readScoreSource(
@@ -558,12 +726,23 @@ function resolveCommandCwd(validator: VerificationCommandValidator, input: RunVe
   return input.projectPath ? path.resolve(input.projectPath, cwd.relativeToProject) : cwd.relativeToProject;
 }
 
+function resolveScriptCwd(validator: VerificationScriptValidator, input: RunVerificationV2Input): string | undefined {
+  const cwd = validator.scriptRef.cwd;
+  if (!cwd || cwd === "loop" || cwd === "contract") {
+    return input.contractWorkspacePath;
+  }
+  if (cwd === "project") {
+    return input.projectPath;
+  }
+  return input.projectPath ? path.resolve(input.projectPath, cwd.relativeToProject) : cwd.relativeToProject;
+}
+
 async function defaultCommandExecutor(request: CommandExecutionRequest): Promise<CommandExecutionResult> {
   return new Promise((resolve) => {
     const child = spawn(request.command, request.args, {
       cwd: request.cwd,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"]
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -580,6 +759,12 @@ async function defaultCommandExecutor(request: CommandExecutionRequest): Promise
 
     child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+    if (request.stdin !== undefined) {
+      child.stdin.end(request.stdin);
+    } else {
+      child.stdin.end();
+    }
 
     child.on("error", (error) => {
       if (settled) {
