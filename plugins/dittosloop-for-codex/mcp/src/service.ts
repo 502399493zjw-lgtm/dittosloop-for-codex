@@ -2733,7 +2733,7 @@ export class LoopService {
             !isVerificationTaskStepId(taskRun.stepId, input.validatorId)
         )
       ) {
-        throw new Error("Validator result session cannot self-review a workflow task session");
+        throw new Error("Validator result session cannot be a workflow task session");
       }
 
       const verification = context.verification ?? createWorkflowVerificationState(timestamp);

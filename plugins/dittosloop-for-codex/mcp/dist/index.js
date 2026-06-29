@@ -26328,7 +26328,7 @@ ${priorOutput}`;
       if (input.sessionId && !validator.allowSelfReview && context.taskRuns.some(
         (taskRun) => taskRun.sessionId === input.sessionId && !isVerificationTaskStepId(taskRun.stepId, input.validatorId)
       )) {
-        throw new Error("Validator result session cannot self-review a workflow task session");
+        throw new Error("Validator result session cannot be a workflow task session");
       }
       const verification = context.verification ?? createWorkflowVerificationState(timestamp2);
       if (verification.idempotencyKeys.includes(idempotencyKey)) {
