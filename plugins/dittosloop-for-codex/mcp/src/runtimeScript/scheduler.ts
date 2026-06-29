@@ -13,15 +13,25 @@ import type {
 
 export interface RuntimeScriptApi {
   agent(prompt: string, options?: RuntimeScriptAgentOptions): Promise<string>;
-  parallel<T>(tasks: Array<() => Promise<T>>, options?: { label?: string }): Promise<T[]>;
+  parallel<T>(tasks: Array<() => Promise<T>>, options?: RuntimeWorkflowOptions): Promise<T[]>;
+  parallel<T>(task: () => Promise<T>, ...tasks: Array<() => Promise<T>>): Promise<T[]>;
   pipeline<TInput, TOutput>(
     items: TInput[],
     stages: Array<(item: TInput | TOutput, index: number) => Promise<TOutput>>,
-    options?: { label?: string }
+    options?: RuntimeWorkflowOptions
+  ): Promise<TOutput[]>;
+  pipeline<TInput, TOutput>(
+    items: TInput[],
+    stage: (item: TInput | TOutput, index: number) => Promise<TOutput>,
+    ...stages: Array<(item: TInput | TOutput, index: number) => Promise<TOutput>>
   ): Promise<TOutput[]>;
   phase(label: string): { done(status?: "ok" | "failed"): void };
   log(message: string): void;
 }
+
+type RuntimeWorkflowOptions = { label?: string };
+type RuntimeParallelTask<T> = () => Promise<T>;
+type RuntimePipelineStage<TInput, TOutput> = (item: TInput | TOutput, index: number) => Promise<TOutput>;
 
 export class RuntimeScriptAgentError extends Error {
   readonly status: "failed" | "needs_human";
@@ -186,10 +196,8 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
     throw new RuntimeScriptAgentError(result.error ?? "Runtime script sub-agent failed", "failed", result.session);
   };
 
-  const parallel = async <T>(tasks: Array<() => Promise<T>>, options?: { label?: string }): Promise<T[]> => {
-    if (!Array.isArray(tasks)) {
-      throw new Error("Runtime script parallel() expects an array of branch functions");
-    }
+  const parallel = async <T>(...args: unknown[]): Promise<T[]> => {
+    const { tasks, options } = normalizeParallelArgs<T>(args);
     if (tasks.length > input.limits.maxParallelBranches) {
       throw new Error(`Runtime script exceeded maxParallelBranches (${input.limits.maxParallelBranches})`);
     }
@@ -208,17 +216,8 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
     return results;
   };
 
-  const pipeline = async <TInput, TOutput>(
-    items: TInput[],
-    stages: Array<(item: TInput | TOutput, index: number) => Promise<TOutput>>,
-    options?: { label?: string }
-  ): Promise<TOutput[]> => {
-    if (!Array.isArray(items)) {
-      throw new Error("Runtime script pipeline() expects an array of input items");
-    }
-    if (!Array.isArray(stages)) {
-      throw new Error("Runtime script pipeline() expects an array of stage functions");
-    }
+  const pipeline = async <TInput, TOutput>(items: TInput[], ...args: unknown[]): Promise<TOutput[]> => {
+    const { stages, options } = normalizePipelineArgs<TInput, TOutput>(items, args);
     if (items.length > input.limits.maxPipelineItems) {
       throw new Error(`Runtime script exceeded maxPipelineItems (${input.limits.maxPipelineItems})`);
     }
@@ -272,4 +271,77 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
     phase,
     log
   };
+}
+
+function normalizeParallelArgs<T>(args: unknown[]): { tasks: RuntimeParallelTask<T>[]; options?: RuntimeWorkflowOptions } {
+  const [first, second, ...rest] = args;
+  if (Array.isArray(first)) {
+    if (!areFunctions(first)) {
+      throw new Error("Runtime script parallel() expects branch functions");
+    }
+    const options = normalizeOptions(second, rest, "parallel");
+    return { tasks: first as RuntimeParallelTask<T>[], options };
+  }
+
+  const options = tryTakeTrailingOptions(args);
+  const taskArgs = options ? args.slice(0, -1) : args;
+  if (taskArgs.length === 0 || !areFunctions(taskArgs)) {
+    throw new Error("Runtime script parallel() expects branch functions");
+  }
+  return { tasks: taskArgs as RuntimeParallelTask<T>[], options };
+}
+
+function normalizePipelineArgs<TInput, TOutput>(
+  items: TInput[],
+  args: unknown[]
+): { stages: RuntimePipelineStage<TInput, TOutput>[]; options?: RuntimeWorkflowOptions } {
+  if (!Array.isArray(items)) {
+    throw new Error("Runtime script pipeline() expects an array of input items");
+  }
+
+  const [first, second, ...rest] = args;
+  if (Array.isArray(first)) {
+    if (!areFunctions(first)) {
+      throw new Error("Runtime script pipeline() expects stage functions");
+    }
+    const options = normalizeOptions(second, rest, "pipeline");
+    return { stages: first as RuntimePipelineStage<TInput, TOutput>[], options };
+  }
+
+  const options = tryTakeTrailingOptions(args);
+  const stageArgs = options ? args.slice(0, -1) : args;
+  if (stageArgs.length === 0 || !areFunctions(stageArgs)) {
+    throw new Error("Runtime script pipeline() expects stage functions");
+  }
+  return { stages: stageArgs as RuntimePipelineStage<TInput, TOutput>[], options };
+}
+
+function normalizeOptions(
+  candidate: unknown,
+  remaining: unknown[],
+  helperName: "parallel" | "pipeline"
+): RuntimeWorkflowOptions | undefined {
+  if (remaining.length > 0) {
+    throw new Error(`Runtime script ${helperName}() received too many arguments`);
+  }
+  if (candidate === undefined) {
+    return undefined;
+  }
+  if (!isRuntimeWorkflowOptions(candidate)) {
+    throw new Error(`Runtime script ${helperName}() options must be an object`);
+  }
+  return candidate;
+}
+
+function tryTakeTrailingOptions(args: unknown[]): RuntimeWorkflowOptions | undefined {
+  const last = args.at(-1);
+  return isRuntimeWorkflowOptions(last) ? last : undefined;
+}
+
+function isRuntimeWorkflowOptions(value: unknown): value is RuntimeWorkflowOptions {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function areFunctions(values: unknown[]): boolean {
+  return values.every((value) => typeof value === "function");
 }

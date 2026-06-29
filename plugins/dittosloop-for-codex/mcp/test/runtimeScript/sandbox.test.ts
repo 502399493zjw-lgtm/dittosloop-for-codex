@@ -147,6 +147,39 @@ describe("runRuntimeScriptInVm", () => {
     expect(result).toEqual(["first", "second", "third"]);
   });
 
+  test("parallel accepts varargs branch functions", async () => {
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return await parallel(
+          async () => "first",
+          async () => "second",
+          async () => "third"
+        );
+      `
+    }));
+
+    expect(result).toEqual(["first", "second", "third"]);
+  });
+
+  test("parallel keeps array form with options object", async () => {
+    const events: RuntimeScriptEventInput[] = [];
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return await parallel([
+          async () => "alpha",
+          async () => "beta"
+        ], { label: "branches" });
+      `,
+      emit: (event) => events.push(event)
+    }));
+
+    expect(result).toEqual(["alpha", "beta"]);
+    expect(events.find((event) => event.type === "runtime_parallel_started")?.data).toMatchObject({
+      label: "branches",
+      count: 2
+    });
+  });
+
   test("pipeline returns one result per input item", async () => {
     const result = await runRuntimeScriptInVm(createRunInput({
       source: `
@@ -162,6 +195,47 @@ describe("runRuntimeScriptInVm", () => {
     }));
 
     expect(result).toEqual(["a-extract-verify", "b-extract-verify", "c-extract-verify"]);
+  });
+
+  test("pipeline accepts varargs stage functions", async () => {
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return await pipeline(
+          args.items,
+          async (item) => item + "-extract",
+          async (item) => item + "-verify"
+        );
+      `,
+      args: { items: ["a", "b", "c"] }
+    }));
+
+    expect(result).toEqual(["a-extract-verify", "b-extract-verify", "c-extract-verify"]);
+    expect(Array.isArray(result)).toBe(true);
+    expect((result as string[])).toHaveLength(3);
+  });
+
+  test("pipeline keeps array form with options object", async () => {
+    const events: RuntimeScriptEventInput[] = [];
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return await pipeline(
+          args.items,
+          [
+            async (item) => item + "-done"
+          ],
+          { label: "items" }
+        );
+      `,
+      args: { items: ["a", "b", "c"] },
+      emit: (event) => events.push(event)
+    }));
+
+    expect(result).toEqual(["a-done", "b-done", "c-done"]);
+    expect(events.find((event) => event.type === "runtime_pipeline_started")?.data).toMatchObject({
+      label: "items",
+      count: 3,
+      stages: 1
+    });
   });
 
   test("parallel and pipeline events include count", async () => {
