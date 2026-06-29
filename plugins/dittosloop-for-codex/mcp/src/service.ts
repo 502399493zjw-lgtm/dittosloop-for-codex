@@ -535,7 +535,7 @@ export class LoopService {
       return this.executeGraphWorkflowAttempt(run, attempt, workflowContext, contract, input);
     }
     const engineEvents: EngineEvent[] = [];
-    const contractWorkspace = loopWorkspacePath(this.options.store.dataDir, run.loopId);
+    const contractWorkspace = await this.syncLoopWorkspace(run.loopId);
     const runner = new LoopRunner({
       executor: input.executor ?? this.createWorkflowContextExecutor(run, attempt.id, workflowContext.id),
       verifier: input.verifier,
@@ -978,7 +978,7 @@ export class LoopService {
     const usesV2Verification = usesVerificationV2Runtime(contract.verification);
     const verificationContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
     const engineEvents: EngineEvent[] = [];
-    const contractWorkspace = loopWorkspacePath(this.options.store.dataDir, run.loopId);
+    const contractWorkspace = await this.syncLoopWorkspace(run.loopId);
     const emitRuntimeEvent = (event: EngineEventInput): void => {
       engineEvents.push(nextEngineEvent(event as Omit<EngineEvent, "runId" | "createdAt" | "sequence">));
     };
@@ -2219,7 +2219,7 @@ export class LoopService {
       policy,
       workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
       projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
-      contractWorkspacePath: loopWorkspacePath(this.options.store.dataDir, loopId),
+      contractWorkspacePath: await this.syncLoopWorkspace(loopId),
       priorValidatorResults: contextAfterWrite.verification.validatorResults
     });
     await this.finalizeV2Verification(runId, contextAfterWrite.id, result);
@@ -2543,6 +2543,17 @@ export class LoopService {
       loopId,
       loopWorkspaceFiles(legacyCompatibleWorkspaceState(state), loopId)
     );
+  }
+
+  private async syncLoopWorkspace(loopId: string): Promise<string> {
+    const state = await this.options.store.readState();
+    await syncLoopWorkspaceDirectory(
+      this.options.store.dataDir,
+      loopId,
+      loopWorkspaceFiles(legacyCompatibleWorkspaceState(state), loopId)
+    );
+
+    return loopWorkspacePath(this.options.store.dataDir, loopId);
   }
 
   async getSnapshot(): Promise<Snapshot> {
