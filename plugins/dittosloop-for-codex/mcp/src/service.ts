@@ -2724,6 +2724,17 @@ export class LoopService {
       if (validator.type !== input.result.type) {
         throw new Error(`Validator result type does not match validator: ${input.validatorId}`);
       }
+      const verification = context.verification ?? createWorkflowVerificationState(timestamp);
+      const launchedVerifierTaskRun = context.taskRuns.find((taskRun) =>
+        isVerificationTaskStepId(taskRun.stepId, input.validatorId)
+      );
+      const requiresVerifierSessionIdentity = Boolean(
+        launchedVerifierTaskRun ||
+        (validator.subagent && verification.pendingValidatorIds.includes(input.validatorId))
+      );
+      if (requiresVerifierSessionIdentity && !input.sessionId) {
+        throw new Error("Validator result sessionId is required for verifier session writeback");
+      }
       if (
         input.sessionId &&
         !validator.allowSelfReview &&
@@ -2735,8 +2746,14 @@ export class LoopService {
       ) {
         throw new Error("Validator result session cannot be a workflow task session");
       }
+      if (
+        input.sessionId &&
+        launchedVerifierTaskRun &&
+        launchedVerifierTaskRun.sessionId !== input.sessionId
+      ) {
+        throw new Error("Validator result session must match the launched verifier session");
+      }
 
-      const verification = context.verification ?? createWorkflowVerificationState(timestamp);
       if (verification.idempotencyKeys.includes(idempotencyKey)) {
         duplicateResultId = verification.resultId;
         contextAfterWrite = context;

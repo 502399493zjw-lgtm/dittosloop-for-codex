@@ -235,6 +235,12 @@ describe("verification subagent workflow", () => {
       })
     ]));
 
+    const reenteredRun = await service.executeWorkflowAttempt(resumedRun.id, {
+      attemptId: launch.attempt.id
+    });
+    expect(reenteredRun.status).toBe("running");
+    expect(requests).toHaveLength(2);
+
     const verification = await service.recordValidatorResult(resumedRun.id, {
       workflowContextId: launch.launchRequest.workflowContextId,
       attemptId: launch.attempt.id,
@@ -265,6 +271,20 @@ describe("verification subagent workflow", () => {
 
     const detailAfterVerification = await service.getRunDetail(resumedRun.id);
     expect(detailAfterVerification.run.status).toBe("completed");
+    expect(detailAfterVerification.run.codexSession?.subagents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: "session_2",
+        stepId: "verification:quality-review",
+        status: "completed"
+      })
+    ]));
+    expect(detailAfterVerification.workflowContexts[0].taskRuns).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stepId: "verification:quality-review",
+        sessionId: "session_2",
+        status: "completed"
+      })
+    ]));
     expect(detailAfterVerification.verificationResults).toEqual([
       expect.objectContaining({
         version: 2,
@@ -278,6 +298,72 @@ describe("verification subagent workflow", () => {
         ]
       })
     ]);
+  });
+
+  test("verifier writeback requires the launched verifier session identity", async () => {
+    const { bridge } = createMutableSessionBridge();
+    const service = await createService(bridge);
+    const { launch } = await createRuntimeScriptRun(service);
+
+    const firstRun = await service.executeWorkflowAttempt(launch.run.id, {
+      attemptId: launch.attempt.id
+    });
+    await service.recordSessionResult(firstRun.id, {
+      attemptId: launch.attempt.id,
+      workflowContextId: launch.launchRequest.workflowContextId,
+      sessionId: "session_1",
+      stepId: "runtime:agent:1:draft-worker",
+      idempotencyKey: "runtime-worker:session_1",
+      status: "passed",
+      summary: "Worker produced candidate",
+      result: "candidate"
+    });
+    await service.executeWorkflowAttempt(firstRun.id, {
+      attemptId: launch.attempt.id
+    });
+
+    await expect(service.recordValidatorResult(firstRun.id, {
+      workflowContextId: launch.launchRequest.workflowContextId,
+      attemptId: launch.attempt.id,
+      validatorId: "quality-review",
+      idempotencyKey: "verification:missing-session",
+      result: {
+        type: "rubric_agent",
+        status: "passed",
+        evidence: "Missing verifier session identity should be rejected.",
+        criteriaResults: [
+          {
+            criterionId: "quality",
+            status: "passed",
+            score: 1,
+            maxScore: 1,
+            evidence: "Missing verifier session identity should be rejected."
+          }
+        ]
+      }
+    })).rejects.toThrow(/sessionId.*required|verifier session/i);
+
+    await expect(service.recordValidatorResult(firstRun.id, {
+      workflowContextId: launch.launchRequest.workflowContextId,
+      attemptId: launch.attempt.id,
+      sessionId: "session_999",
+      validatorId: "quality-review",
+      idempotencyKey: "verification:wrong-session",
+      result: {
+        type: "rubric_agent",
+        status: "passed",
+        evidence: "Wrong verifier session identity should be rejected.",
+        criteriaResults: [
+          {
+            criterionId: "quality",
+            status: "passed",
+            score: 1,
+            maxScore: 1,
+            evidence: "Wrong verifier session identity should be rejected."
+          }
+        ]
+      }
+    })).rejects.toThrow(/verifier session/i);
   });
 
   test("default allowSelfReview=false rejects validator writeback that reuses the worker session", async () => {

@@ -60,6 +60,18 @@
 - `cd plugins/dittosloop-for-codex/mcp && npm run build`
 - `git diff --check`
 
+## Reviewer follow-up fix
+
+- Reviewer found that launched verifier subagent validators could still accept `recordValidatorResult()` without `sessionId`, which let the run finalize while leaving the verifier task/session incomplete.
+- Fixed `recordValidatorResult()` so verifier-backed validators now require verifier session identity when a verifier task has been launched or the context is actively waiting on a subagent-backed validator.
+- Added strict matching to the launched verifier task run at `stepId: verification:${validatorId}`; missing or mismatched `sessionId` now rejects.
+- Preserved the old external-writeback path for validators without `subagent`, so Task 7 style manual verifier writeback still works without mandatory `sessionId`.
+- Added regression coverage for:
+  - missing verifier `sessionId`
+  - mismatched verifier `sessionId`
+  - execute re-entry while waiting for verifier not creating duplicate verifier sessions
+  - verifier task run and Codex subagent entry becoming `completed` after writeback
+
 Observed results:
 
 - `test/runtimeScript/verificationSubagent.test.ts test/runtimeScript/approval.test.ts test/service.runtimeScript.test.ts test/service.test.ts test/mcpServer.test.ts`: 146 tests passed.
