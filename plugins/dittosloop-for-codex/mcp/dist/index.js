@@ -24526,10 +24526,10 @@ var LoopService = class {
     if (existingContext?.status === "failed") {
       throw new Error(`Workflow context already failed: ${existingContext.id}`);
     }
-    if (existingContext && hasOpenWorkflowSessions(existingContext)) {
+    const activeContract = existingContext?.contractSnapshot ?? requireFormalContract(initialState, run.loopId);
+    if (existingContext && hasOpenWorkflowSessions(existingContext) && activeContract.workflow.kind !== "runtime_script") {
       return run;
     }
-    const activeContract = existingContext?.contractSnapshot ?? requireFormalContract(initialState, run.loopId);
     const workflowContext = await this.prepareWorkflowContext(run.id, attempt.id, activeContract);
     const contract = workflowContext.contractSnapshot ?? activeContract;
     const usesV2Verification = usesVerificationV2Runtime(contract.verification);
@@ -25166,17 +25166,16 @@ var LoopService = class {
         if (!bridge) {
           throw new Error("No workflow executor or Codex session bridge is configured.");
         }
-        const agentProfile = input.options?.agentProfile;
-        const result = await this.runCodexSessionStep(
+        const result = await this.runRuntimeScriptCodexSessionStep(
           bridge,
           run,
           {
             prompt: input.prompt,
             label: input.label ?? input.options?.label,
-            stepId: input.callSite,
+            stepId: runtimeScriptStepId(input.callSite),
             phaseId: input.options?.phaseId,
-            subagent: input.options?.subagent ?? effectiveProfileToSubagent(agentProfile),
-            agentProfile,
+            subagent: input.options?.subagent ?? effectiveProfileToSubagent(input.options?.agentProfile),
+            agentProfile: input.options?.agentProfile,
             attemptId: attempt.id,
             workflowContextId: workflowContext.id,
             workflowRuntime: "dittosloop-local-workflow",
@@ -25189,10 +25188,6 @@ var LoopService = class {
               promptHash: hashRuntimeScriptPrompt(input.prompt),
               optionsHash: hashRuntimeScriptOptions(input.options)
             }
-          },
-          {
-            attemptId: attempt.id,
-            workflowContextId: workflowContext.id
           }
         );
         return {
@@ -25288,6 +25283,133 @@ var LoopService = class {
 
 [pipeline] Prior step (${prevStepId}) output:
 ${priorOutput}`;
+  }
+  async runRuntimeScriptCodexSessionStep(bridge, run, request) {
+    if (!request.workflowContextId || !request.attemptId) {
+      throw new Error("Runtime script Codex sessions require workflow context and attempt ids");
+    }
+    if (!request.runtimeScript?.key) {
+      throw new Error("Runtime script Codex sessions require an idempotency key");
+    }
+    const existingTaskRun = await this.findWorkflowTaskRunByIdempotencyKey(
+      request.workflowContextId,
+      request.runtimeScript.key
+    );
+    if (existingTaskRun?.status === "completed") {
+      return {
+        text: existingTaskRun.result ?? "",
+        data: {
+          session: this.codexSessionRefFromWorkflowTask(run, existingTaskRun, request, "completed")
+        }
+      };
+    }
+    if (existingTaskRun?.status === "failed") {
+      throw new Error(existingTaskRun.error ?? `Codex session failed: ${existingTaskRun.sessionId ?? existingTaskRun.id}`);
+    }
+    if (existingTaskRun) {
+      if (!existingTaskRun.sessionId) {
+        throw new Error(`Runtime script Codex task has no session id: ${existingTaskRun.id}`);
+      }
+      const session2 = this.codexSessionRefFromWorkflowTask(run, existingTaskRun, request, "started");
+      const result2 = await bridge.readResult(existingTaskRun.sessionId);
+      return this.resolveRuntimeScriptCodexSessionResult(request.workflowContextId, existingTaskRun.id, session2, result2);
+    }
+    const taskRunId = await this.markWorkflowTaskRunning(request.workflowContextId, {
+      attemptId: request.attemptId,
+      runId: run.id,
+      stepId: request.stepId,
+      phaseId: request.phaseId,
+      label: request.label,
+      prompt: request.prompt,
+      subagent: request.subagent,
+      agentProfile: request.agentProfile,
+      idempotencyKey: request.runtimeScript.key,
+      runtimeScript: request.runtimeScript,
+      profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, request.stepId, request.agentProfile)
+    });
+    const createdSession = await bridge.createSession({
+      runId: run.id,
+      attemptId: request.attemptId,
+      workflowContextId: request.workflowContextId,
+      stepId: request.stepId,
+      phaseId: request.phaseId,
+      title: request.label ?? request.stepId ?? "Codex workflow step",
+      prompt: request.prompt,
+      subagent: request.subagent,
+      agentProfile: request.agentProfile,
+      workflowRuntime: request.workflowRuntime,
+      workflowContractId: request.workflowContractId,
+      workflowPlan: request.workflowPlan,
+      projectId: run.codexProjectId,
+      projectLabel: run.projectLabel,
+      projectPath: run.projectPath
+    });
+    const session = {
+      ...createdSession,
+      subagent: createdSession.subagent ?? request.subagent,
+      agentProfile: createdSession.agentProfile ?? request.agentProfile
+    };
+    await this.attachWorkflowTaskSession(request.workflowContextId, taskRunId, session);
+    const result = await bridge.readResult(session.sessionId);
+    return this.resolveRuntimeScriptCodexSessionResult(request.workflowContextId, taskRunId, session, result);
+  }
+  async findWorkflowTaskRunByIdempotencyKey(workflowContextId, idempotencyKey) {
+    const state = await this.options.store.readState();
+    const context = findWorkflowContextById(state, workflowContextId);
+    return context?.taskRuns.find((taskRun) => taskRun.idempotencyKey === idempotencyKey);
+  }
+  codexSessionRefFromWorkflowTask(run, taskRun, request, status) {
+    if (!taskRun.sessionId) {
+      return void 0;
+    }
+    return {
+      sessionId: taskRun.sessionId,
+      runId: taskRun.runId,
+      attemptId: taskRun.attemptId,
+      workflowContextId: request.workflowContextId,
+      stepId: taskRun.stepId,
+      phaseId: taskRun.phaseId,
+      title: taskRun.label ?? request.label ?? taskRun.stepId,
+      status,
+      createdAt: taskRun.createdAt,
+      prompt: taskRun.prompt ?? request.prompt,
+      subagent: taskRun.subagent ?? request.subagent,
+      agentProfile: taskRun.agentProfile ?? request.agentProfile,
+      workflowRuntime: request.workflowRuntime,
+      workflowContractId: request.workflowContractId,
+      workflowPlan: request.workflowPlan,
+      projectId: run.codexProjectId,
+      projectLabel: run.projectLabel,
+      projectPath: run.projectPath
+    };
+  }
+  async resolveRuntimeScriptCodexSessionResult(workflowContextId, taskRunId, session, result) {
+    if (!session) {
+      throw new Error(`Runtime script Codex task has no session: ${taskRunId}`);
+    }
+    if (!result) {
+      await this.suspendWorkflowTaskForSession(workflowContextId, taskRunId, session);
+      throw new CodexSessionPendingError(session);
+    }
+    const sessionWithResult = {
+      ...session,
+      status: result.status,
+      threadId: result.threadId,
+      threadTitle: result.threadTitle,
+      threadUrl: result.threadUrl
+    };
+    if (result.status === "failed") {
+      const message = result.text || `Codex session failed: ${session.sessionId}`;
+      await this.failWorkflowTask(workflowContextId, taskRunId, message);
+      throw new Error(message);
+    }
+    await this.completeWorkflowTask(workflowContextId, taskRunId, result.text);
+    return {
+      text: result.text,
+      data: {
+        session: sessionWithResult
+      }
+    };
   }
   async runCodexSessionStep(bridge, run, request, workflowContext) {
     const taskRunId = workflowContext ? await this.markWorkflowTaskRunning(workflowContext.workflowContextId, {
@@ -26921,7 +27043,7 @@ ${priorOutput}`;
         prompt: input.prompt,
         subagent: input.subagent,
         agentProfile: input.agentProfile,
-        idempotencyKey: input.runtimeScript?.key,
+        idempotencyKey: input.idempotencyKey ?? input.runtimeScript?.key,
         runtimeScript: input.runtimeScript,
         profilePreflight: input.profilePreflight,
         status: "running",
@@ -27313,6 +27435,9 @@ function createRuntimeScriptContextState(contract, timestamp2) {
     status: "not_started",
     updatedAt: timestamp2
   };
+}
+function runtimeScriptStepId(callSite) {
+  return callSite.startsWith("runtime:") ? callSite : `runtime:${callSite}`;
 }
 function ensureRuntimeScriptContextStateValue(context, contract, timestamp2) {
   const baseState = createRuntimeScriptContextState(contract, timestamp2);

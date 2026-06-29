@@ -251,7 +251,7 @@ test("executes a runtime script workflow end-to-end with a completed bridge", as
     expect.arrayContaining([
       expect.objectContaining({
         sessionId: "session_1",
-        stepId: "agent:1:greeter",
+        stepId: "runtime:agent:1:greeter",
         status: "completed",
         prompt: "Say hello from runtime script"
       })
@@ -295,7 +295,7 @@ test("reuses a completed pending runtime script agent result when the run resume
   expect(requests[0]).toMatchObject({
     workflowContextId: launch.launchRequest.workflowContextId,
     workflowContractId: contract.id,
-    stepId: "agent:1:greeter",
+    stepId: "runtime:agent:1:greeter",
     title: "greeter",
     prompt
   });
@@ -313,7 +313,7 @@ test("reuses a completed pending runtime script agent result when the run resume
     attemptId: launch.attempt.id,
     workflowContextId: launch.launchRequest.workflowContextId,
     sessionId: "session_1",
-    stepId: "agent:1:greeter",
+    stepId: "runtime:agent:1:greeter",
     idempotencyKey,
     status: "passed",
     summary: "async hello",
@@ -343,7 +343,7 @@ test("reuses a completed pending runtime script agent result when the run resume
     expect.arrayContaining([
       expect.objectContaining({
         sessionId: "session_1",
-        stepId: "agent:1:greeter",
+        stepId: "runtime:agent:1:greeter",
         status: "completed",
         prompt
       })
