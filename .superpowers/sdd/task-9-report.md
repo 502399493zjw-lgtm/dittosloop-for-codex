@@ -74,7 +74,7 @@
 
 Observed results:
 
-- `test/runtimeScript/verificationSubagent.test.ts test/runtimeScript/approval.test.ts test/service.runtimeScript.test.ts test/service.test.ts test/mcpServer.test.ts`: 146 tests passed.
+- `test/runtimeScript/verificationSubagent.test.ts test/runtimeScript/approval.test.ts test/service.runtimeScript.test.ts test/service.test.ts test/mcpServer.test.ts`: 147 tests passed.
 - `DITTOSLOOP_RUNTIME_SCRIPT_LIVE=1 test/runtimeScript/verificationSubagent.live.test.ts`: 1 test passed.
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
