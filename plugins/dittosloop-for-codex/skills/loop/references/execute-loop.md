@@ -41,4 +41,4 @@ When a task result is recorded, the runtime updates the targeted node run and ma
 
 Workflow tasks may call `read_loop_memory` while working. They should return durable observations in task results rather than deciding long-term memory writes themselves.
 
-The generated `runtime/dittosloop-for-codex-loop.md` guide is runtime output for that loop session. Do not describe it as an installed skill.
+The generated `skill/dittosloop-for-codex-loop.md` guide is runtime output for that loop session. Do not describe it as an installed skill.

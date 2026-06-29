@@ -54,4 +54,4 @@ Read this when exact MCP tool purpose, required fields, or call caveats matter.
 - Set `repair: true` on `record_verification` or call `mark_run_repairing` when failed verification needs repair work.
 - Use `complete_run` only after verification is recorded or the blocker is explicit.
 - Use `get_preview_url` and open that URL in Codex's in-app browser when the user wants the visual loop view.
-- The generated per-loop guide path is `runtime/dittosloop-for-codex-loop.md`; treat it as runtime output, not an installed skill.
+- The generated per-loop guide path is `skill/dittosloop-for-codex-loop.md`; treat it as runtime output, not an installed skill.
