@@ -166,6 +166,70 @@ test("verification v2 does not auto-pass rubric agents or unloaded artifacts", a
   });
 });
 
+test("verification v2 script validators emit failed results instead of crashing", async () => {
+  const policy = verificationPolicyWithValidators([
+    {
+      id: "script-check",
+      type: "script",
+      label: "Script check",
+      criteriaIds: ["tests-pass"],
+      severity: "must",
+      runtime: "node",
+      scriptRef: {
+        path: "scripts/check.mjs",
+        checksum: "sha256:test",
+        args: ["--flag"],
+        timeoutMs: 1000
+      },
+      input: {
+        source: "workflow_result"
+      },
+      output: {
+        schema: "verification_result_v1"
+      },
+      evidenceRequired: true,
+      builder: {
+        kind: "codex_subagent",
+        builtAt: "2026-06-26T00:00:00.000Z",
+        selfCheck: {
+          status: "passed",
+          command: "node",
+          args: ["--check"],
+          evidence: "ok"
+        }
+      }
+    }
+  ]);
+  const events: string[] = [];
+
+  const result = await runVerificationV2({
+    id: "verification_1",
+    runId: "run_1",
+    attemptId: "attempt_1",
+    createdAt: "2026-06-26T00:00:00.000Z",
+    policy,
+    workflowResult: {},
+    emit: (event) => {
+      events.push(event.type);
+    }
+  });
+
+  expect(result).toMatchObject({
+    status: "failed",
+    validatorResults: [
+      {
+        validatorId: "script-check",
+        type: "script",
+        status: "failed",
+        criteriaIds: ["tests-pass"]
+      }
+    ]
+  });
+  expect(result.validatorResults[0]?.summary).toContain("not yet implemented");
+  expect(result.validatorResults[0]?.evidence).toContain("not executed");
+  expect(events).toEqual(["validator_started", "validator_done", "verification_decided"]);
+});
+
 test("verification v2 uncovered must criteria fail aggregation", () => {
   const policy = verificationPolicyWithValidators([]);
   const decision = aggregateVerificationDecision(policy, []);

@@ -5,6 +5,7 @@ import type {
   ScoreValidator,
   VerificationCommandValidator,
   VerificationPolicyV2,
+  VerificationScriptValidator,
   VerificationRubricAgentValidator,
   VerificationValidator
 } from "../contract/types.js";
@@ -66,10 +67,15 @@ export interface RubricAgentValidatorResult extends ValidatorResultBase {
   output?: unknown;
 }
 
+export interface ScriptValidatorResult extends ValidatorResultBase {
+  type: "script";
+}
+
 export type ValidatorResult =
   | CommandValidatorResult
   | ScoreValidatorResult
-  | RubricAgentValidatorResult;
+  | RubricAgentValidatorResult
+  | ScriptValidatorResult;
 
 export interface AggregatedVerificationDecision {
   status: VerificationDecisionStatus;
@@ -269,7 +275,7 @@ async function runDeterministicValidator(
     case "rubric_agent":
       return rubricAgentNeedsHumanResult(validator);
     case "script":
-      throw new Error(`Script validator ${validator.id} is not executable until the script runtime is implemented.`);
+      return unsupportedScriptValidatorResult(validator);
   }
 }
 
@@ -369,6 +375,19 @@ function rubricAgentNeedsHumanResult(validator: VerificationRubricAgentValidator
     criteriaIds: validator.criteriaIds,
     status: "needs_human",
     summary: "Rubric agent validator requires an explicit recorded result."
+  };
+}
+
+function unsupportedScriptValidatorResult(validator: VerificationScriptValidator): ScriptValidatorResult {
+  return {
+    validatorId: validator.id,
+    type: "script",
+    label: validator.label,
+    severity: validator.severity,
+    criteriaIds: validator.criteriaIds,
+    status: "failed",
+    summary: `Script validator ${validator.id} execution is not yet implemented.`,
+    evidence: "Script validator was not executed because the script runtime is not yet implemented."
   };
 }
 
