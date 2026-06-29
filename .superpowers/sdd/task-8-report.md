@@ -54,3 +54,33 @@ Observed results:
 
 - The approval request is persisted as a human request on the run, but there is not yet a dedicated "approval resolved" helper; the current flow expects approval to happen through `approve_runtime_script`, after which re-running `execute_workflow_attempt` continues normally.
 - Static workflow behavior is covered by the focused regression in this task, but I did not run the broader MCP or service suites beyond the commands required by the brief.
+
+## Follow-up Fix: MCP Tool Surface Test
+
+- Main-controller revalidation exposed one missed MCP assertion:
+  - `npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts`
+  - `test/mcpServer.test.ts > registers the DittosLoop tool surface`
+  - The registered tool list did not include the newly added `approve_runtime_script` entry.
+- Updated `plugins/dittosloop-for-codex/mcp/test/mcpServer.test.ts` to:
+  - include `approve_runtime_script` in the exact registered tool order;
+  - assert that `client.listTools()` exposes the new tool with `loopId` and `approvedBy` input schema properties.
+
+### Follow-up Verification
+
+Commands run:
+
+```bash
+cd plugins/dittosloop-for-codex/mcp
+npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts
+npm run typecheck
+npm run build
+cd ../..
+git diff --check
+```
+
+Observed results:
+
+- `test/runtimeScript/approval.test.ts test/mcpServer.test.ts`: 36 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed; `dist/index.js` content was unchanged.
+- `git diff --check`: passed with no whitespace errors.

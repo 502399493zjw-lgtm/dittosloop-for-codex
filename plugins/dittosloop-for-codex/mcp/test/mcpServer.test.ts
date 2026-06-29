@@ -1306,6 +1306,7 @@ test("exposes structured schemas for refined tools through MCP listTools", async
     const { tools } = await client.listTools();
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
     const createLoopContract = byName.get("create_loop_contract");
+    const approveRuntimeScript = byName.get("approve_runtime_script");
     const proposeWorkflowRevision = byName.get("propose_workflow_revision");
 
     expect(createLoopContract?.inputSchema.properties).toMatchObject({
@@ -1316,6 +1317,11 @@ test("exposes structured schemas for refined tools through MCP listTools", async
       agentProfiles: expect.any(Object)
     });
     expect(JSON.stringify(createLoopContract?.inputSchema)).toContain("agentProfileRef");
+
+    expect(approveRuntimeScript?.inputSchema.properties).toMatchObject({
+      loopId: expect.any(Object),
+      approvedBy: expect.any(Object)
+    });
 
     expect(proposeWorkflowRevision?.inputSchema.properties).toMatchObject({
       loopId: expect.any(Object),
@@ -1346,6 +1352,7 @@ test("registers the DittosLoop tool surface", () => {
     "list_loops",
     "pause_loop",
     "resume_loop",
+    "approve_runtime_script",
     "start_codex_session",
     "execute_workflow_attempt",
     "propose_workflow_revision",
