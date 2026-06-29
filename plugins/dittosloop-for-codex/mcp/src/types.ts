@@ -208,6 +208,27 @@ export interface ArtifactRef {
   createdAt: string;
 }
 
+export interface RuntimeScriptJournalRecord {
+  id: string;
+  loopId: string;
+  runId: string;
+  attemptId: string;
+  workflowContextId: string;
+  contractId: string;
+  scriptHash: string;
+  argsHash: string;
+  key: string;
+  callSite: string;
+  promptHash: string;
+  optionsHash: string;
+  status: "completed" | "failed";
+  output?: string;
+  error?: string;
+  sessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LoopWorkspaceFile {
   path: string;
   kind: "memory" | "contract" | "workflow" | "runtime" | "skill" | "rubrics" | "verification" | "status" | "runs";
@@ -329,6 +350,7 @@ export interface LoopState {
   memoryCommits: MemoryCommit[];
   loopMemories: LoopMemory[];
   artifacts: ArtifactRef[];
+  runtimeScriptJournals: RuntimeScriptJournalRecord[];
 }
 
 export interface RunDetail {
