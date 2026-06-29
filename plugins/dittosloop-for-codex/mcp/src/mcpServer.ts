@@ -343,6 +343,11 @@ const resumeLoopSchema = z.object({
   loopId: z.string().min(1)
 });
 
+const approveRuntimeScriptSchema = z.object({
+  loopId: z.string().min(1),
+  approvedBy: z.string().min(1)
+});
+
 const executeWorkflowAttemptSchema = z.object({
   runId: z.string().min(1),
   attemptId: z.string().min(1).optional()
@@ -541,6 +546,12 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     resume_loop: async (input) => {
       const args = resumeLoopSchema.parse(input);
       return toToolResult(await service.resumeLoop(args.loopId));
+    },
+    approve_runtime_script: async (input) => {
+      const args = approveRuntimeScriptSchema.parse(input);
+      return toToolResult(await service.approveRuntimeScript(args.loopId, {
+        approvedBy: args.approvedBy
+      }));
     },
     start_codex_session: async (input) => {
       const args = startCodexSessionSchema.parse(input);
@@ -828,6 +839,12 @@ const toolDefinitions = [
     title: "Resume loop",
     description: "Resume a paused local Dittos loop and clear its consecutive failure stop state.",
     schema: resumeLoopSchema
+  },
+  {
+    name: "approve_runtime_script",
+    title: "Approve runtime script",
+    description: "Approve the active runtime_script contract so execution can enter the VM.",
+    schema: approveRuntimeScriptSchema
   },
   {
     name: "start_codex_session",

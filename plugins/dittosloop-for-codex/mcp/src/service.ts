@@ -332,6 +332,10 @@ export interface PauseLoopInput {
   reason?: LoopPausedReason;
 }
 
+export interface ApproveRuntimeScriptInput {
+  approvedBy: string;
+}
+
 export interface LoopStatusUpdate {
   loop: LoopContract;
   state: LoopOperationalState;
@@ -458,6 +462,52 @@ export class LoopService {
     });
 
     return update!;
+  }
+
+  async approveRuntimeScript(loopId: string, input: ApproveRuntimeScriptInput): Promise<FormalLoopContract> {
+    const timestamp = this.now();
+    let approvedContract: FormalLoopContract | undefined;
+
+    await this.options.store.updateState((state) => {
+      const contract = requireFormalContract(state, loopId);
+      if (contract.workflow.kind !== "runtime_script") {
+        throw new Error(`Runtime script approval is only available for runtime_script workflows: ${loopId}`);
+      }
+
+      approvedContract = {
+        ...contract,
+        updatedAt: timestamp,
+        workflow: {
+          ...contract.workflow,
+          approval: {
+            ...contract.workflow.approval,
+            required: true,
+            approvedAt: timestamp,
+            approvedBy: input.approvedBy
+          }
+        }
+      };
+
+      return {
+        ...state,
+        formalContracts: state.formalContracts.map((candidate) => candidate.id === loopId ? approvedContract! : candidate),
+        loops: state.loops.map((loop) => loop.id === loopId ? formalContractToLoop(approvedContract!) : loop),
+        workflowContexts: state.workflowContexts.map((context) =>
+          context.loopId === loopId &&
+          context.contractSnapshot?.workflow.kind === "runtime_script" &&
+          context.status !== "completed" &&
+          context.status !== "failed"
+            ? {
+                ...context,
+                contractSnapshot: approvedContract,
+                updatedAt: timestamp
+              }
+            : context
+        )
+      };
+    });
+
+    return approvedContract!;
   }
 
   async deleteLoop(loopId: string): Promise<LoopContract> {
@@ -640,6 +690,11 @@ export class LoopService {
     }
 
     validateRuntimeScriptApprovalPolicy(contract);
+    if (runtimeScriptApprovalRequired(contract) && !runtimeScriptApprovalGranted(contract)) {
+      await this.markWorkflowContextWaitingForHuman(workflowContext.id);
+      await this.ensureRuntimeScriptApprovalRequest(run.id, contract.id);
+      return (await this.getRunDetail(run.id)).run;
+    }
 
     let sequence = latestEngineEventSequence((await this.getRunDetail(run.id)).events);
     const nextEngineEvent = (event: EngineEventInput): EngineEvent => ({
@@ -3806,6 +3861,28 @@ export class LoopService {
     });
   }
 
+  private async markWorkflowContextWaitingForHuman(workflowContextId: string): Promise<void> {
+    const timestamp = this.now();
+
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+          ...context,
+          status: "suspended",
+          cursor: {
+            ...context.cursor,
+            state: "waiting_for_human"
+          },
+          updatedAt: timestamp,
+          completedAt: undefined
+        })
+      };
+    });
+  }
+
   private async completeWorkflowTask(
     workflowContextId: string,
     taskRunId: string,
@@ -3992,6 +4069,17 @@ export class LoopService {
         })
       };
     });
+  }
+
+  private async ensureRuntimeScriptApprovalRequest(runId: string, contractId: string): Promise<void> {
+    const question = runtimeScriptApprovalQuestion(contractId);
+    const state = await this.options.store.readState();
+    const existing = state.humanRequests.find((request) => request.runId === runId && request.status === "open" && request.question === question);
+    if (existing) {
+      return;
+    }
+
+    await this.recordHumanRequest(runId, { question });
   }
 }
 
@@ -5394,6 +5482,22 @@ function validateRuntimeScriptApprovalPolicy(contract: FormalLoopContract): void
   if (!contract.workflow.approval || typeof contract.workflow.approval.required !== "boolean") {
     throw new Error(`Runtime script workflow approval policy is invalid for contract: ${contract.id}`);
   }
+}
+
+function runtimeScriptApprovalRequired(contract: FormalLoopContract): boolean {
+  return contract.workflow.kind === "runtime_script" && contract.workflow.approval?.required === true;
+}
+
+function runtimeScriptApprovalGranted(contract: FormalLoopContract): boolean {
+  return contract.workflow.kind === "runtime_script" &&
+    typeof contract.workflow.approval?.approvedAt === "string" &&
+    contract.workflow.approval.approvedAt.length > 0 &&
+    typeof contract.workflow.approval?.approvedBy === "string" &&
+    contract.workflow.approval.approvedBy.length > 0;
+}
+
+function runtimeScriptApprovalQuestion(contractId: string): string {
+  return `Runtime script approval required for ${contractId}. Review the active script, then call approve_runtime_script with loopId and approvedBy before executing.`;
 }
 
 function runtimeScriptEventToEngineEvent(

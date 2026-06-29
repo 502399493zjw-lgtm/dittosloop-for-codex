@@ -24480,6 +24480,42 @@ var LoopService = class {
     });
     return update;
   }
+  async approveRuntimeScript(loopId, input) {
+    const timestamp2 = this.now();
+    let approvedContract;
+    await this.options.store.updateState((state) => {
+      const contract = requireFormalContract(state, loopId);
+      if (contract.workflow.kind !== "runtime_script") {
+        throw new Error(`Runtime script approval is only available for runtime_script workflows: ${loopId}`);
+      }
+      approvedContract = {
+        ...contract,
+        updatedAt: timestamp2,
+        workflow: {
+          ...contract.workflow,
+          approval: {
+            ...contract.workflow.approval,
+            required: true,
+            approvedAt: timestamp2,
+            approvedBy: input.approvedBy
+          }
+        }
+      };
+      return {
+        ...state,
+        formalContracts: state.formalContracts.map((candidate) => candidate.id === loopId ? approvedContract : candidate),
+        loops: state.loops.map((loop) => loop.id === loopId ? formalContractToLoop(approvedContract) : loop),
+        workflowContexts: state.workflowContexts.map(
+          (context) => context.loopId === loopId && context.contractSnapshot?.workflow.kind === "runtime_script" && context.status !== "completed" && context.status !== "failed" ? {
+            ...context,
+            contractSnapshot: approvedContract,
+            updatedAt: timestamp2
+          } : context
+        )
+      };
+    });
+    return approvedContract;
+  }
   async deleteLoop(loopId) {
     let deletedLoop;
     await this.options.store.updateState((state) => {
@@ -24626,6 +24662,11 @@ var LoopService = class {
       throw new Error(`Expected runtime_script workflow contract: ${contract.id}`);
     }
     validateRuntimeScriptApprovalPolicy(contract);
+    if (runtimeScriptApprovalRequired(contract) && !runtimeScriptApprovalGranted(contract)) {
+      await this.markWorkflowContextWaitingForHuman(workflowContext.id);
+      await this.ensureRuntimeScriptApprovalRequest(run.id, contract.id);
+      return (await this.getRunDetail(run.id)).run;
+    }
     let sequence = latestEngineEventSequence((await this.getRunDetail(run.id)).events);
     const nextEngineEvent = (event) => ({
       ...event,
@@ -27225,6 +27266,25 @@ ${priorOutput}`;
       };
     });
   }
+  async markWorkflowContextWaitingForHuman(workflowContextId) {
+    const timestamp2 = this.now();
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+          ...context,
+          status: "suspended",
+          cursor: {
+            ...context.cursor,
+            state: "waiting_for_human"
+          },
+          updatedAt: timestamp2,
+          completedAt: void 0
+        })
+      };
+    });
+  }
   async completeWorkflowTask(workflowContextId, taskRunId, result) {
     const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
@@ -27383,6 +27443,15 @@ ${priorOutput}`;
         })
       };
     });
+  }
+  async ensureRuntimeScriptApprovalRequest(runId, contractId) {
+    const question = runtimeScriptApprovalQuestion(contractId);
+    const state = await this.options.store.readState();
+    const existing = state.humanRequests.find((request) => request.runId === runId && request.status === "open" && request.question === question);
+    if (existing) {
+      return;
+    }
+    await this.recordHumanRequest(runId, { question });
   }
 };
 function createWorkflowContext(input) {
@@ -28346,6 +28415,15 @@ function validateRuntimeScriptApprovalPolicy(contract) {
   if (!contract.workflow.approval || typeof contract.workflow.approval.required !== "boolean") {
     throw new Error(`Runtime script workflow approval policy is invalid for contract: ${contract.id}`);
   }
+}
+function runtimeScriptApprovalRequired(contract) {
+  return contract.workflow.kind === "runtime_script" && contract.workflow.approval?.required === true;
+}
+function runtimeScriptApprovalGranted(contract) {
+  return contract.workflow.kind === "runtime_script" && typeof contract.workflow.approval?.approvedAt === "string" && contract.workflow.approval.approvedAt.length > 0 && typeof contract.workflow.approval?.approvedBy === "string" && contract.workflow.approval.approvedBy.length > 0;
+}
+function runtimeScriptApprovalQuestion(contractId) {
+  return `Runtime script approval required for ${contractId}. Review the active script, then call approve_runtime_script with loopId and approvedBy before executing.`;
 }
 function runtimeScriptEventToEngineEvent(event) {
   const data = event.data ?? {};
@@ -29593,6 +29671,10 @@ var pauseLoopSchema = external_exports.object({
 var resumeLoopSchema = external_exports.object({
   loopId: external_exports.string().min(1)
 });
+var approveRuntimeScriptSchema = external_exports.object({
+  loopId: external_exports.string().min(1),
+  approvedBy: external_exports.string().min(1)
+});
 var executeWorkflowAttemptSchema = external_exports.object({
   runId: external_exports.string().min(1),
   attemptId: external_exports.string().min(1).optional()
@@ -29765,6 +29847,12 @@ function createToolHandlers(service) {
     resume_loop: async (input) => {
       const args = resumeLoopSchema.parse(input);
       return toToolResult(await service.resumeLoop(args.loopId));
+    },
+    approve_runtime_script: async (input) => {
+      const args = approveRuntimeScriptSchema.parse(input);
+      return toToolResult(await service.approveRuntimeScript(args.loopId, {
+        approvedBy: args.approvedBy
+      }));
     },
     start_codex_session: async (input) => {
       const args = startCodexSessionSchema.parse(input);
@@ -30025,6 +30113,12 @@ var toolDefinitions = [
     title: "Resume loop",
     description: "Resume a paused local Dittos loop and clear its consecutive failure stop state.",
     schema: resumeLoopSchema
+  },
+  {
+    name: "approve_runtime_script",
+    title: "Approve runtime script",
+    description: "Approve the active runtime_script contract so execution can enter the VM.",
+    schema: approveRuntimeScriptSchema
   },
   {
     name: "start_codex_session",
