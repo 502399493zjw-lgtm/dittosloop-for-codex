@@ -229,6 +229,15 @@ export interface RuntimeScriptJournalRecord {
   updatedAt: string;
 }
 
+export interface RuntimeScriptContextState {
+  scriptHash: string;
+  argsHash: string;
+  status: "not_started" | "running" | "waiting_for_session" | "completed" | "failed";
+  result?: unknown;
+  error?: string;
+  updatedAt: string;
+}
+
 export interface LoopWorkspaceFile {
   path: string;
   kind: "memory" | "contract" | "workflow" | "runtime" | "skill" | "rubrics" | "verification" | "status" | "runs";

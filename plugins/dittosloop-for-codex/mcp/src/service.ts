@@ -45,6 +45,7 @@ import type {
   MemoryCommit,
   RunEvent,
   RunStatus,
+  RuntimeScriptContextState,
   VerificationResult,
   VerificationStatus,
   WorkflowContext,
@@ -56,6 +57,11 @@ import type {
 import type { LoopStore } from "./store.js";
 import { loopWorkspaceFiles } from "./workspaceFiles.js";
 import { deleteLoopWorkspaceDirectory, syncLoopWorkspaceDirectory } from "./workspaceDirectory.js";
+import { DEFAULT_RUNTIME_SCRIPT_LIMITS } from "./runtimeScript/defaults.js";
+import { hashRuntimeScriptArgs, hashRuntimeScriptSource } from "./runtimeScript/hash.js";
+import { createLoopStoreRuntimeScriptJournal } from "./runtimeScript/journal.js";
+import { runRuntimeScriptInVm } from "./runtimeScript/sandbox.js";
+import type { RuntimeScriptEventInput, WorkflowSubagentBridge } from "./runtimeScript/types.js";
 import { compileExecutionGraph } from "./workflowGraph/compileGraph.js";
 import {
   createInitialNodeRuns,
@@ -511,6 +517,9 @@ export class LoopService {
     const usesV2Verification = usesVerificationV2Runtime(contract.verification);
     const usesExternalV2Verification = usesExternalV2ValidatorWriteback(contract.verification);
     const runnerContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
+    if (contract.workflow.kind === "runtime_script") {
+      return this.executeRuntimeScriptWorkflowAttempt(run, attempt, workflowContext, contract, input);
+    }
     const attemptNumber = Math.max(1, attemptsForRun.findIndex((candidate) => candidate.id === attempt.id) + 1);
     if (
       usesExternalV2Verification &&
@@ -611,6 +620,211 @@ export class LoopService {
     });
     finalRun = await this.completeRun(runId, { status: "failed" });
     return finalRun;
+  }
+
+  private async executeRuntimeScriptWorkflowAttempt(
+    run: LoopRun,
+    attempt: RunAttempt,
+    workflowContext: WorkflowContext,
+    contract: FormalLoopContract,
+    input: ExecuteWorkflowAttemptInput
+  ): Promise<LoopRun> {
+    if (contract.workflow.kind !== "runtime_script") {
+      throw new Error(`Expected runtime_script workflow contract: ${contract.id}`);
+    }
+
+    validateRuntimeScriptApprovalPolicy(contract);
+
+    let sequence = latestEngineEventSequence((await this.getRunDetail(run.id)).events);
+    const nextEngineEvent = (event: EngineEventInput): EngineEvent => ({
+      ...event,
+      runId: run.id,
+      createdAt: this.now(),
+      sequence: ++sequence
+    } as EngineEvent);
+    const engineEvents: EngineEvent[] = [];
+    const emitRuntimeEvent = (event: RuntimeScriptEventInput): void => {
+      const engineEvent = runtimeScriptEventToEngineEvent(event);
+      if (engineEvent) {
+        engineEvents.push(nextEngineEvent(engineEvent));
+      }
+    };
+    const emitEngineEvent = (event: EngineEventInput): void => {
+      engineEvents.push(nextEngineEvent(event));
+    };
+
+    await this.updateRuntimeScriptContextState(workflowContext.id, {
+      status: "running",
+      result: undefined,
+      error: undefined
+    });
+    emitEngineEvent({
+      type: "runtime_script_started",
+      contractId: contract.id
+    });
+
+    let runtimeResult: unknown;
+    try {
+      runtimeResult = await runRuntimeScriptInVm({
+        loopId: run.loopId,
+        runId: run.id,
+        attemptId: attempt.id,
+        workflowContextId: workflowContext.id,
+        contractId: contract.id,
+        source: contract.workflow.source,
+        args: contract.workflow.args ?? {},
+        limits: {
+          ...DEFAULT_RUNTIME_SCRIPT_LIMITS,
+          ...(contract.workflow.limits ?? {})
+        },
+        journal: createLoopStoreRuntimeScriptJournal(this.options.store),
+        subagentBridge: this.createRuntimeScriptSubagentBridge(this.options.sessionBridge, run, attempt, workflowContext, contract),
+        emit: emitRuntimeEvent,
+        now: this.now
+      });
+    } catch (error) {
+      const pendingSession = pendingCodexSessionFromError(error);
+      if (pendingSession) {
+        await this.updateRuntimeScriptContextState(workflowContext.id, {
+          status: "waiting_for_session",
+          error: undefined
+        });
+        await this.recordEngineEvents(run.id, engineEvents);
+        await this.suspendWorkflowContextForSession(workflowContext.id, pendingSession);
+        return this.markRunWaitingForCodexSession(run.id, pendingSession);
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      emitEngineEvent({
+        type: "runtime_script_done",
+        contractId: contract.id,
+        status: "failed",
+        error: message
+      });
+      await this.updateRuntimeScriptContextState(workflowContext.id, {
+        status: "failed",
+        error: message
+      });
+      await this.recordEngineEvents(run.id, engineEvents);
+      await this.failWorkflowContext(workflowContext.id, message);
+      await this.completeAttempt(attempt.id, {
+        status: "failed",
+        summary: message
+      });
+      await this.completeRun(run.id, { status: "failed" });
+      throw error;
+    }
+
+    emitEngineEvent({
+      type: "runtime_script_done",
+      contractId: contract.id,
+      status: "completed",
+      result: runtimeResult
+    });
+    await this.updateRuntimeScriptContextState(workflowContext.id, {
+      status: "completed",
+      result: runtimeResult,
+      error: undefined
+    });
+
+    const usesV2Verification = usesVerificationV2Runtime(contract.verification);
+    const verificationContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
+    emitEngineEvent({
+      type: "verification_started",
+      attemptId: attempt.id
+    });
+    const verification = await runContractVerification({
+      contract: verificationContract,
+      result: runtimeResult,
+      runId: run.id,
+      attemptId: attempt.id,
+      now: this.now,
+      verifier: input.verifier,
+      emit: emitEngineEvent
+    });
+    emitEngineEvent({
+      type: "verification_done",
+      attemptId: attempt.id,
+      decision: verification
+    });
+
+    const attemptNumber = Math.max(
+      1,
+      (await this.getRunDetail(run.id)).attempts.findIndex((candidate) => candidate.id === attempt.id) + 1
+    );
+    const shouldRepairRun = shouldRepair(verification, contract.repairPolicy, attemptNumber);
+    const finalStatus = verification.status === "passed"
+      ? "completed"
+      : verification.status === "needs_human"
+        ? "waiting_for_human"
+        : "failed";
+
+    if (shouldRepairRun) {
+      emitEngineEvent({
+        type: "repair_started",
+        attemptId: attempt.id,
+        reason: verification.repairInstructions ?? verification.summary
+      });
+    } else {
+      if (verification.status === "needs_human") {
+        emitEngineEvent({
+          type: "human_request",
+          question: verification.humanQuestion ?? verification.summary
+        });
+      }
+      emitEngineEvent({
+        type: "run_done",
+        status: finalStatus,
+        summary: verification.summary
+      });
+    }
+
+    await this.recordEngineEvents(run.id, engineEvents);
+
+    if (usesV2Verification && isVerificationResultV2(verification)) {
+      return this.finalizeV2Verification(run.id, workflowContext.id, verification);
+    }
+
+    await this.recordVerification(run.id, {
+      attemptId: attempt.id,
+      status: verificationDecisionToResultStatus(verification.status),
+      summary: verification.summary,
+      checks: verificationDecisionChecksToResults(verificationContract, verification),
+      repair: shouldRepairRun
+    });
+
+    if (shouldRepairRun) {
+      await this.markWorkflowContextRepairing(workflowContext.id, verification.repairInstructions ?? verification.summary);
+      return (await this.getRunDetail(run.id)).run;
+    }
+
+    if (verification.status === "passed") {
+      await this.completeWorkflowContext(workflowContext.id);
+      await this.completeAttempt(attempt.id, {
+        status: "completed",
+        summary: verification.summary
+      });
+      return this.completeRun(run.id, { status: "completed" });
+    }
+
+    if (verification.status === "needs_human") {
+      await this.completeWorkflowContext(workflowContext.id);
+      await this.completeAttempt(attempt.id, {
+        status: "completed",
+        summary: verification.summary
+      });
+      await this.recordHumanRequest(run.id, {
+        question: verification.humanQuestion ?? verification.summary
+      });
+      return (await this.getRunDetail(run.id)).run;
+    }
+
+    await this.failWorkflowContext(workflowContext.id, verification.summary);
+    await this.completeAttempt(attempt.id, {
+      status: "failed",
+      summary: verification.summary
+    });
+    return this.completeRun(run.id, { status: "failed" });
   }
 
   private async executeGraphWorkflowAttempt(
@@ -1057,6 +1271,87 @@ export class LoopService {
       summary: verification.summary
     });
     return this.completeRun(run.id, { status: "failed" });
+  }
+
+  private createRuntimeScriptSubagentBridge(
+    bridge: CodexSessionBridge | undefined,
+    run: LoopRun,
+    attempt: RunAttempt,
+    workflowContext: WorkflowContext,
+    contract: FormalLoopContract
+  ): WorkflowSubagentBridge {
+    return {
+      runAgent: async (input) => {
+        if (!bridge) {
+          throw new Error("No workflow executor or Codex session bridge is configured.");
+        }
+        const agentProfile = input.options?.agentProfile;
+        const result = await this.runCodexSessionStep(
+          bridge,
+          run,
+          {
+            prompt: input.prompt,
+            label: input.label ?? input.options?.label,
+            stepId: input.callSite,
+            phaseId: input.options?.phaseId,
+            subagent: input.options?.subagent ?? effectiveProfileToSubagent(agentProfile),
+            agentProfile,
+            attemptId: attempt.id,
+            workflowContextId: workflowContext.id,
+            workflowRuntime: "dittosloop-local-workflow",
+            workflowContractId: contract.id
+          },
+          {
+            attemptId: attempt.id,
+            workflowContextId: workflowContext.id
+          }
+        );
+
+        return {
+          status: "completed",
+          output: result.text,
+          session: result.data?.session as CodexSessionRef | undefined
+        };
+      }
+    };
+  }
+
+  private async updateRuntimeScriptContextState(
+    workflowContextId: string,
+    patch: Partial<RuntimeScriptContextState>
+  ): Promise<WorkflowContext> {
+    const timestamp = this.now();
+    let updatedContext: WorkflowContext | undefined;
+
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      const contract = context.contractSnapshot;
+      if (!contract || contract.workflow.kind !== "runtime_script") {
+        updatedContext = context;
+        return state;
+      }
+
+      const runtimeScript = {
+        ...ensureRuntimeScriptContextStateValue(context, contract, timestamp),
+        ...patch,
+        updatedAt: timestamp
+      };
+      updatedContext = {
+        ...context,
+        vars: {
+          ...context.vars,
+          runtimeScript
+        },
+        updatedAt: timestamp
+      };
+
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, updatedContext)
+      };
+    });
+
+    return updatedContext!;
   }
 
   private createWorkflowContextExecutor(run: LoopRun, attemptId: string, workflowContextId: string): Executor {
@@ -3017,7 +3312,7 @@ export class LoopService {
       const existingContext = state.workflowContexts.find(
         (context) => context.runId === runId && context.attemptId === attemptId
       );
-      const existingContextWithGraph = existingContext
+      const existingPreparedContext = existingContext
         ? ensureWorkflowContextGraphState(existingContext, contract, {
             graphSnapshotId: existingContext.executionGraphSnapshot ? existingContext.executionGraphSnapshot.snapshotId : this.nextId("graph"),
             timestamp
@@ -3025,7 +3320,7 @@ export class LoopService {
         : undefined;
       preparedContext = existingContext
         ? {
-            ...existingContextWithGraph!,
+            ...existingPreparedContext!,
             status: "running",
             cursor: {
               ...existingContext.cursor,
@@ -3481,7 +3776,7 @@ function createWorkflowContext(input: {
   graphSnapshotId?: string;
   timestamp: string;
 }): WorkflowContext {
-  const baseContext: WorkflowContext = {
+  const baseContext = withRuntimeScriptContextState({
     id: input.id,
     runId: input.run.id,
     loopId: input.run.loopId,
@@ -3498,7 +3793,7 @@ function createWorkflowContext(input: {
     idempotencyKeys: [],
     createdAt: input.timestamp,
     updatedAt: input.timestamp
-  };
+  }, input.contract, input.timestamp);
 
   return input.contract && input.graphSnapshotId
     ? ensureWorkflowContextGraphState(baseContext, input.contract, {
@@ -3516,6 +3811,14 @@ function ensureWorkflowContextGraphState(
     timestamp: string;
   }
 ): WorkflowContext {
+  if (contract.workflow.kind === "runtime_script") {
+    return withRuntimeScriptContextState({
+      ...context,
+      contractId: context.contractId ?? contract.id,
+      contractSnapshot: context.contractSnapshot ?? contract
+    }, contract, input.timestamp);
+  }
+
   if (context.executionGraphSnapshot && context.nodeRuns) {
     return context;
   }
@@ -3537,6 +3840,78 @@ function ensureWorkflowContextGraphState(
     executionGraphSnapshot: snapshot,
     nodeRuns: createInitialNodeRuns(snapshot, input.timestamp)
   };
+}
+
+function createRuntimeScriptContextState(
+  contract: FormalLoopContract,
+  timestamp: string
+): RuntimeScriptContextState | undefined {
+  if (contract.workflow.kind !== "runtime_script") {
+    return undefined;
+  }
+
+  return {
+    scriptHash: hashRuntimeScriptSource(contract.workflow.source),
+    argsHash: hashRuntimeScriptArgs(contract.workflow.args ?? {}),
+    status: "not_started",
+    updatedAt: timestamp
+  };
+}
+
+function ensureRuntimeScriptContextStateValue(
+  context: WorkflowContext,
+  contract: FormalLoopContract,
+  timestamp: string
+): RuntimeScriptContextState {
+  const baseState = createRuntimeScriptContextState(contract, timestamp);
+  if (!baseState) {
+    throw new Error(`Expected runtime_script workflow contract: ${contract.id}`);
+  }
+
+  const existing = context.vars.runtimeScript;
+  if (!isRuntimeScriptContextState(existing)) {
+    return baseState;
+  }
+
+  return {
+    ...existing,
+    scriptHash: baseState.scriptHash,
+    argsHash: baseState.argsHash
+  };
+}
+
+function withRuntimeScriptContextState(
+  context: WorkflowContext,
+  contract: FormalLoopContract | undefined,
+  timestamp: string
+): WorkflowContext {
+  if (!contract || contract.workflow.kind !== "runtime_script") {
+    return context;
+  }
+
+  return {
+    ...context,
+    contractId: context.contractId ?? contract.id,
+    contractSnapshot: context.contractSnapshot ?? contract,
+    vars: {
+      ...context.vars,
+      runtimeScript: ensureRuntimeScriptContextStateValue(context, contract, timestamp)
+    }
+  };
+}
+
+function isRuntimeScriptContextState(value: unknown): value is RuntimeScriptContextState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<RuntimeScriptContextState>;
+  return (
+    typeof candidate.scriptHash === "string" &&
+    typeof candidate.argsHash === "string" &&
+    typeof candidate.status === "string" &&
+    typeof candidate.updatedAt === "string"
+  );
 }
 
 function createWorkflowVerificationState(timestamp: string): WorkflowVerificationState {
@@ -4624,7 +4999,142 @@ function repairReasonForV2Result(result: VerificationResultV2): string {
   ].join("; ") + ` ${result.decision.repairInstructions ?? result.summary}`;
 }
 
+function validateRuntimeScriptApprovalPolicy(contract: FormalLoopContract): void {
+  if (contract.workflow.kind !== "runtime_script") {
+    return;
+  }
+
+  if (!contract.workflow.approval || typeof contract.workflow.approval.required !== "boolean") {
+    throw new Error(`Runtime script workflow approval policy is invalid for contract: ${contract.id}`);
+  }
+}
+
+function runtimeScriptEventToEngineEvent(
+  event: RuntimeScriptEventInput
+): EngineEventInput | undefined {
+  const data = event.data ?? {};
+
+  if (event.type === "agent:start") {
+    return {
+      type: "agent:start",
+      label: stringField(data.label),
+      prompt: stringField(data.prompt) ?? "",
+      callSite: stringField(data.callSite) ?? "agent"
+    };
+  }
+  if (event.type === "agent:done") {
+    return {
+      type: "agent:done",
+      label: stringField(data.label),
+      callSite: stringField(data.callSite) ?? "agent"
+    };
+  }
+  if (event.type === "agent:error") {
+    return {
+      type: "agent:error",
+      label: stringField(data.label),
+      callSite: stringField(data.callSite) ?? "agent",
+      error: stringField(data.error) ?? "Runtime script sub-agent failed"
+    };
+  }
+  if (event.type === "agent:cached") {
+    return {
+      type: "agent:cached",
+      label: stringField(data.label),
+      callSite: stringField(data.callSite) ?? "agent"
+    };
+  }
+  if (event.type === "runtime_parallel_started") {
+    return {
+      type: "runtime_parallel_started",
+      label: stringField(data.label),
+      count: numberField(data.count) ?? 0
+    };
+  }
+  if (event.type === "runtime_parallel_completed") {
+    return {
+      type: "runtime_parallel_completed",
+      label: stringField(data.label),
+      count: numberField(data.count) ?? 0
+    };
+  }
+  if (event.type === "runtime_pipeline_started") {
+    return {
+      type: "runtime_pipeline_started",
+      label: stringField(data.label),
+      count: numberField(data.count) ?? 0
+    };
+  }
+  if (event.type === "runtime_pipeline_completed") {
+    return {
+      type: "runtime_pipeline_completed",
+      label: stringField(data.label),
+      count: numberField(data.count) ?? 0
+    };
+  }
+  if (event.type === "runtime_phase_started") {
+    return {
+      type: "runtime_phase_started",
+      label: stringField(data.label) ?? "phase"
+    };
+  }
+  if (event.type === "runtime_phase_done") {
+    return {
+      type: "runtime_phase_done",
+      label: stringField(data.label) ?? "phase",
+      status: stringField(data.status) === "failed" ? "failed" : "ok"
+    };
+  }
+  if (event.type === "runtime_log") {
+    return {
+      type: "runtime_log",
+      message: stringField(data.message) ?? ""
+    };
+  }
+
+  return undefined;
+}
+
 function engineEventToMessage(event: EngineEvent): string {
+  if (event.type === "runtime_script_started") {
+    return `运行时脚本开始：${event.contractId}`;
+  }
+  if (event.type === "runtime_script_done") {
+    return `运行时脚本完成：${event.status}`;
+  }
+  if (event.type === "agent:start") {
+    return `脚本 Agent 开始：${event.label ?? event.callSite}`;
+  }
+  if (event.type === "agent:done") {
+    return `脚本 Agent 完成：${event.label ?? event.callSite}`;
+  }
+  if (event.type === "agent:error") {
+    return `脚本 Agent 失败：${event.label ?? event.callSite}`;
+  }
+  if (event.type === "agent:cached") {
+    return `脚本 Agent 复用缓存：${event.label ?? event.callSite}`;
+  }
+  if (event.type === "runtime_parallel_started") {
+    return `脚本并行开始：${event.label ?? event.count}`;
+  }
+  if (event.type === "runtime_parallel_completed") {
+    return `脚本并行完成：${event.label ?? event.count}`;
+  }
+  if (event.type === "runtime_pipeline_started") {
+    return `脚本流水线开始：${event.label ?? event.count}`;
+  }
+  if (event.type === "runtime_pipeline_completed") {
+    return `脚本流水线完成：${event.label ?? event.count}`;
+  }
+  if (event.type === "runtime_phase_started") {
+    return `脚本阶段开始：${event.label}`;
+  }
+  if (event.type === "runtime_phase_done") {
+    return `脚本阶段完成：${event.label}`;
+  }
+  if (event.type === "runtime_log") {
+    return event.message;
+  }
   if (event.type === "agent_started") {
     return `Agent 开始：${event.label ?? event.stepId ?? event.nodeId ?? "agent"}`;
   }
@@ -4686,6 +5196,41 @@ class CodexSessionPendingError extends Error {
 
 function isCodexSessionPendingError(error: unknown): error is CodexSessionPendingError {
   return error instanceof CodexSessionPendingError;
+}
+
+function pendingCodexSessionFromError(error: unknown): CodexSessionRef | undefined {
+  if (error instanceof CodexSessionPendingError) {
+    return error.session;
+  }
+  if (!(error instanceof Error) || error.name !== "CodexSessionPendingError") {
+    return undefined;
+  }
+
+  const session = (error as Error & { session?: unknown }).session;
+  return isCodexSessionRef(session) ? session : undefined;
+}
+
+function isCodexSessionRef(value: unknown): value is CodexSessionRef {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<CodexSessionRef>;
+  return (
+    typeof candidate.sessionId === "string" &&
+    typeof candidate.runId === "string" &&
+    typeof candidate.title === "string" &&
+    typeof candidate.status === "string" &&
+    typeof candidate.createdAt === "string"
+  );
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function isPendingSessionFailureEvent(event: EngineEvent): boolean {

@@ -1,22 +1,34 @@
-# Task 6 Report: Workspace Files And Preview Rendering
+# Task 6 Report
 
-## Changes
+- Status: DONE_WITH_CONCERNS
+- Commits: `feat: wire runtime script service execution` (HEAD on `codex/runtime-script-workflow-spec`)
 
-- Updated formal v2 workspace rendering to emit `verification.md` with Criteria, Validators, and Decision sections.
-- Preserved legacy workspace compatibility: v1/legacy contracts still emit `rubrics.md`, and legacy-like verification checks with `name`/`output` or `rubricId`/`evidence` still render without throwing.
-- Expanded `status.json` `latestVerification` summaries for v2 results with `version`, `status`, `decision`, validator status, score, max score, threshold, exit code, and evidence excerpts.
-- Added preview timeline support for v2 engine events: `validator_started`, `validator_done`, and `verification_decided`.
-- Added fallback preview rendering for persisted `VerificationResultV2` records when no engine verification events are present.
-- Fixed the v2 workspace typecheck issues around `verification.rubrics` and legacy `check.name` access.
+## Red test evidence
 
-## Tests
+- Command: `cd plugins/dittosloop-for-codex/mcp && npm test -- --run test/service.runtimeScript.test.ts`
+- Expected failing symptom before implementation: `Error: Execution graph compilation requires body.steps`
 
-- Added Task 6 failing tests first for v2 workspace files/status output, legacy fallback rendering, v2 validator lifecycle preview events, and persisted v2 fallback timeline evidence.
-- `npm --prefix plugins/dittosloop-for-codex/mcp test -- service.test.ts previewServer.test.ts`
-  - Passed: 2 test files, 116 tests.
-- `npm --prefix plugins/dittosloop-for-codex/mcp run typecheck`
-  - Passed.
+## Verification commands and results
 
-## Known Risks
+- `cd plugins/dittosloop-for-codex/mcp && npm test -- --run test/service.runtimeScript.test.ts`
+  - Passed
+- `cd plugins/dittosloop-for-codex/mcp && npm test -- --run test/service.runtimeScript.test.ts test/service.test.ts`
+  - Passed (`102` tests)
+- `cd plugins/dittosloop-for-codex/mcp && npm run typecheck`
+  - Passed
+- `cd plugins/dittosloop-for-codex/mcp && npm run build`
+  - Passed and refreshed `dist/index.js`
 
-- `verification.md` uses the existing `LoopWorkspaceFile.kind` value `rubrics` internally because adding a new public workspace file kind would require editing Task 6 scope-external type definitions. The visible workspace path and content are v2-specific.
+## Files changed
+
+- `plugins/dittosloop-for-codex/mcp/src/service.ts`
+- `plugins/dittosloop-for-codex/mcp/src/types.ts`
+- `plugins/dittosloop-for-codex/mcp/test/service.runtimeScript.test.ts`
+- `plugins/dittosloop-for-codex/mcp/dist/index.js`
+- `.superpowers/sdd/task-6-report.md`
+
+## Notes/concerns
+
+- Task 6 now executes `runtime_script` contracts end to end, stores runtime-script context state, avoids graph snapshot compilation, records runtime-script engine events, and verifies against the script result.
+- The service-backed runtime-script bridge is intentionally minimal for this task: it reuses the existing session bridge/task-run path but does not yet add dedicated idempotent replay or richer resume bookkeeping beyond surfacing pending Codex sessions. Those stronger semantics remain for Task 7.
+- Approval policy validation is currently structural at execution time; this task does not add a separate manual-approval gate before runtime-script execution.
