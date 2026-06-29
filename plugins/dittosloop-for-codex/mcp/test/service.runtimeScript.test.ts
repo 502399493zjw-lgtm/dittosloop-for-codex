@@ -38,6 +38,24 @@ async function createService(sessionBridge?: CodexSessionBridge) {
   });
 }
 
+async function createServiceWithSequentialIds(sessionBridge?: CodexSessionBridge) {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-runtime-script-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+
+  return new LoopService({
+    store: new LoopStore(dir),
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge
+  });
+}
+
 function createCompletedSessionBridge(resultText: string) {
   const requests: CodexSessionRequest[] = [];
   const bridge: CodexSessionBridge = {
@@ -369,4 +387,145 @@ test("reuses a completed pending runtime script agent result when the run resume
       .filter((event): event is { type: string } => Boolean(event))
       .map((event) => event.type)
   ).toEqual(expect.arrayContaining(["agent:cached", "runtime_script_done"]));
+});
+
+test("runtime script v2 rubric agent verification waits for validator writeback after worker completion", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  const service = await createServiceWithSequentialIds(bridge);
+  const prompt = "Draft the runtime script answer";
+  const options = { label: "draft-worker" };
+  const source = `
+    const output = await agent(${JSON.stringify(prompt)}, ${JSON.stringify(options)});
+    return { output };
+  `;
+  const contract = await service.createLoopContract({
+    title: "Runtime script rubric validation",
+    goal: "Wait for rubric validator writeback",
+    workflowKind: "runtime_script",
+    script: source,
+    verification: {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        {
+          id: "quality",
+          label: "Quality",
+          description: "The runtime script output is complete.",
+          severity: "must"
+        }
+      ],
+      validators: [
+        {
+          id: "rubric-agent",
+          type: "rubric_agent",
+          label: "Rubric agent review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must"
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true
+      }
+    }
+  });
+  expect(contract.verification).toMatchObject({
+    version: 2,
+    validators: [expect.objectContaining({ id: "rubric-agent", type: "rubric_agent" })]
+  });
+  const launch = await service.startCodexSessionRun(contract.id, { goal: "Run runtime script validator workflow" });
+
+  const firstRun = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id
+  });
+
+  expect(firstRun.status).toBe("running");
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    workflowContextId: launch.launchRequest.workflowContextId,
+    workflowContractId: contract.id,
+    stepId: "runtime:agent:1:draft-worker",
+    title: "draft-worker",
+    prompt
+  });
+
+  const idempotencyKey = runtimeAgentJournalKey({
+    contractId: contract.id,
+    scriptHash: hashRuntimeScriptSource(source),
+    argsHash: hashRuntimeScriptArgs({}),
+    callSite: "agent:1:draft-worker",
+    prompt,
+    options
+  });
+
+  await service.recordSessionResult(firstRun.id, {
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_1",
+    stepId: "runtime:agent:1:draft-worker",
+    idempotencyKey,
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "candidate"
+  });
+
+  const resumedRun = await service.executeWorkflowAttempt(firstRun.id, {
+    attemptId: launch.attempt.id
+  });
+
+  expect(resumedRun.status).toBe("running");
+  const detail = await service.getRunDetail(resumedRun.id);
+  expect(detail.verificationResults).toEqual([]);
+  expect(detail.workflowContexts[0].verification).toMatchObject({
+    status: "waiting_for_validator",
+    pendingValidatorIds: ["rubric-agent"],
+    validatorResults: []
+  });
+  expect(detail.workflowContexts[0].vars.runtimeScript).toMatchObject({
+    status: "completed",
+    result: { output: "candidate" }
+  });
+  expect(detail.workflowContexts[0].executionGraphSnapshot).toBeUndefined();
+  expect(detail.workflowContexts[0].nodeRuns).toBeUndefined();
+
+  const workerWriteback = {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    validatorId: "rubric-agent",
+    idempotencyKey: "validator-rubric-agent-worker",
+    result: {
+      type: "rubric_agent" as const,
+      status: "passed" as const,
+      evidence: "Worker self-approval should not count.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed" as const, score: 1, maxScore: 1, evidence: "Self-approved." }
+      ]
+    }
+  };
+
+  await expect(service.recordValidatorResult(launch.run.id, workerWriteback)).rejects.toThrow(
+    "Validator result session cannot be a workflow task session"
+  );
+
+  const verification = await service.recordValidatorResult(launch.run.id, {
+    ...workerWriteback,
+    sessionId: "verifier-session",
+    idempotencyKey: "validator-rubric-agent-verifier",
+    result: {
+      ...workerWriteback.result,
+      evidence: "Independent verifier approved the candidate."
+    }
+  });
+
+  expect(verification).toMatchObject({ version: 2, status: "passed" });
+  await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: { status: "completed" },
+    verificationResults: [expect.objectContaining({ version: 2, status: "passed" })]
+  });
 });

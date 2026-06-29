@@ -24714,6 +24714,18 @@ var LoopService = class {
       error: void 0
     });
     const usesV2Verification = usesVerificationV2Runtime(contract.verification);
+    const runtimeScriptCompletionContext = runtimeScriptContextWithResult(
+      workflowContext,
+      contract,
+      runtimeResult,
+      this.now()
+    );
+    if (usesExternalV2ValidatorWriteback(contract.verification) && pendingRubricAgentValidatorIds(contract.verification, runtimeScriptCompletionContext).length > 0) {
+      await this.recordCompletedCodexSessions(run.id, engineEvents);
+      await this.recordEngineEvents(run.id, engineEvents);
+      await this.startPendingRubricAgentValidators(run, runtimeScriptCompletionContext, contract.verification);
+      return (await this.getRunDetail(run.id)).run;
+    }
     const verificationContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
     emitEngineEvent({
       type: "verification_started",
@@ -26339,7 +26351,7 @@ ${priorOutput}`;
       attemptId: contextAfterWrite.attemptId,
       createdAt: timestamp2,
       policy,
-      workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
+      workflowResult: completedWorkflowVerificationInput(contextAfterWrite),
       projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
       priorValidatorResults: contextAfterWrite.verification.validatorResults
     });
@@ -27538,12 +27550,35 @@ function workflowVerificationAcceptsValidatorWriteback(context, verification) {
   return (verification.status === "running" || verification.status === "waiting_for_validator") && workflowContextHasCompletedVerifiableWork(context);
 }
 function workflowContextHasCompletedVerifiableWork(context) {
-  return Object.values(context.steps).some((step) => step.status === "completed" && step.output !== void 0) || context.taskRuns.some((taskRun) => taskRun.status === "completed" && taskRun.result !== void 0);
+  const runtimeScriptState = isRuntimeScriptContextState(context.vars.runtimeScript) ? context.vars.runtimeScript : void 0;
+  return runtimeScriptState?.status === "completed" && runtimeScriptState.result !== void 0 || Object.values(context.steps).some((step) => step.status === "completed" && step.output !== void 0) || context.taskRuns.some((taskRun) => taskRun.status === "completed" && taskRun.result !== void 0);
+}
+function completedWorkflowVerificationInput(context) {
+  const runtimeScriptState = isRuntimeScriptContextState(context.vars.runtimeScript) ? context.vars.runtimeScript : void 0;
+  if (runtimeScriptState?.status === "completed" && runtimeScriptState.result !== void 0) {
+    return runtimeScriptState.result;
+  }
+  return completedWorkflowStepOutputs(context);
 }
 function completedWorkflowStepOutputs(context) {
   return Object.fromEntries(
     Object.entries(context.steps).filter(([, step]) => step.status === "completed" && step.output !== void 0).map(([stepId, step]) => [stepId, step.output])
   );
+}
+function runtimeScriptContextWithResult(context, contract, result, timestamp2) {
+  return {
+    ...withRuntimeScriptContextState(context, contract, timestamp2),
+    vars: {
+      ...context.vars,
+      runtimeScript: {
+        ...ensureRuntimeScriptContextStateValue(context, contract, timestamp2),
+        status: "completed",
+        result,
+        error: void 0,
+        updatedAt: timestamp2
+      }
+    }
+  };
 }
 function pendingRubricAgentValidatorIds(policy, context) {
   const recordedValidatorIds = new Set(
