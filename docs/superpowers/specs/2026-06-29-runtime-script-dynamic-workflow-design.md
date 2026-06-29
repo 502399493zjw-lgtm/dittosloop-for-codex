@@ -1,6 +1,6 @@
 # Runtime Script Dynamic Workflow Design
 
-Review status: draft for user review.
+Review status: approved in thread on 2026-06-29 after user confirmation.
 
 ## Status
 

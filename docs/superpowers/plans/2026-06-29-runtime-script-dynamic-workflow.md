@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Review status: draft for user review.
+Review status: approved in thread on 2026-06-29 after user confirmation.
 
 **Goal:** Build OpenClaw-style runtime script dynamic workflows in DittosLoop For Codex, where JavaScript workflow source runs as the orchestration program, calls visible Codex sub-agents through `agent()`, supports `parallel()` and `pipeline()`, resumes through a replay journal, and remains compatible with existing `body.steps` and `script.build` static workflows.
 
@@ -106,7 +106,7 @@ New runtime script workflows use explicit kind plus source string:
 
 ## Implementation Tasks
 
-### 1. Contract Types and Compatibility Guardrails
+### Task 1: Contract Types and Compatibility Guardrails
 
 - [ ] Update `plugins/dittosloop-for-codex/mcp/src/contract/types.ts` with a workflow union that can represent static steps and runtime scripts.
 
@@ -282,7 +282,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 2. Runtime Script Module Skeleton
+### Task 2: Runtime Script Module Skeleton
 
 - [ ] Add `plugins/dittosloop-for-codex/mcp/src/runtimeScript/types.ts`.
 
@@ -403,7 +403,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 3. Replay Journal
+### Task 3: Replay Journal
 
 - [ ] Add `plugins/dittosloop-for-codex/mcp/src/runtimeScript/hash.ts`.
 
@@ -506,7 +506,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 4. Runtime Scheduler and Sandbox
+### Task 4: Runtime Scheduler and Sandbox
 
 - [ ] Add `plugins/dittosloop-for-codex/mcp/src/runtimeScript/scheduler.ts`.
 
@@ -616,7 +616,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 5. Engine Events and Preview Visibility
+### Task 5: Engine Events and Preview Visibility
 
 - [ ] Extend `plugins/dittosloop-for-codex/mcp/src/engine/types.ts` with runtime script events.
 
@@ -663,7 +663,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 6. Service Execution Branch
+### Task 6: Service Execution Branch
 
 - [ ] Update `plugins/dittosloop-for-codex/mcp/src/service.ts` normalization.
 
@@ -798,7 +798,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 7. Service-Backed Sub-Agent Bridge and Resume Semantics
+### Task 7: Service-Backed Sub-Agent Bridge and Resume Semantics
 
 - [ ] Add `plugins/dittosloop-for-codex/mcp/src/runtimeScript/serviceSubagentBridge.ts`.
 
@@ -857,7 +857,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 8. Approval Gate
+### Task 8: Approval Gate
 
 - [ ] Add approval checks before VM execution.
 
@@ -898,7 +898,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 9. Verification Sub-Agent Support
+### Task 9: Verification Sub-Agent Support
 
 - [ ] Update verification v2 types and schemas.
 
@@ -971,7 +971,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 10. Workspace Files and Plugin Skill Documentation
+### Task 10: Workspace Files and Plugin Skill Documentation
 
 - [ ] Update workspace rendering.
 
@@ -1006,7 +1006,7 @@ New runtime script workflows use explicit kind plus source string:
   npm run typecheck
   ```
 
-### 11. End-to-End Acceptance Scenarios
+### Task 11: End-to-End Acceptance Scenarios
 
 - [ ] Add an end-to-end runtime script test in `plugins/dittosloop-for-codex/mcp/test/runtimeScript/e2e.test.ts`.
 
@@ -1066,7 +1066,7 @@ New runtime script workflows use explicit kind plus source string:
   git diff --check
   ```
 
-### 12. Release-Ready Review Package
+### Task 12: Release-Ready Review Package
 
 - [ ] Confirm generated bundle is updated.
 
