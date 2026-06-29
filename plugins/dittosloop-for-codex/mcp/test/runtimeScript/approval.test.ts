@@ -124,6 +124,34 @@ test("approval tool persists approval and allows runtime script execution", asyn
   expect(detail.events.map((event) => event.message)).toEqual(
     expect.arrayContaining(["运行时脚本开始：loop_1", "运行时脚本完成：completed"])
   );
+  expect(detail.humanRequests.filter((request) => request.runId === run.id && request.status === "open")).toEqual([]);
+  expect(detail.humanRequests).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        runId: run.id,
+        status: "resolved",
+        response: expect.stringContaining("Approved by user")
+      })
+    ])
+  );
+});
+
+test("approval requests are deduped while runtime script remains blocked", async () => {
+  const service = await createService();
+  const contract = await service.createLoopContract({
+    title: "Deduped approval request",
+    goal: "Keep one approval request open",
+    workflowKind: "runtime_script",
+    script: "return { summary: 'executed' };",
+    verification: runtimeVerification()
+  });
+  const launch = await service.startCodexSessionRun(contract.id, { goal: "Run after approval" });
+
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.humanRequests.filter((request) => request.runId === launch.run.id && request.status === "open")).toHaveLength(1);
 });
 
 test("approval state is persisted on the active runtime script contract", async () => {

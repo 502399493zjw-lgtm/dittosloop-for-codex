@@ -24483,6 +24483,8 @@ var LoopService = class {
   async approveRuntimeScript(loopId, input) {
     const timestamp2 = this.now();
     let approvedContract;
+    const approvalQuestion = runtimeScriptApprovalQuestion(loopId);
+    const approvalResponse = `Approved by ${input.approvedBy} at ${timestamp2}.`;
     await this.options.store.updateState((state) => {
       const contract = requireFormalContract(state, loopId);
       if (contract.workflow.kind !== "runtime_script") {
@@ -24501,6 +24503,11 @@ var LoopService = class {
           }
         }
       };
+      const nonterminalRuntimeScriptRunIds = new Set(
+        state.workflowContexts.filter(
+          (context) => context.loopId === loopId && context.contractSnapshot?.workflow.kind === "runtime_script" && context.status !== "completed" && context.status !== "failed"
+        ).map((context) => context.runId)
+      );
       return {
         ...state,
         formalContracts: state.formalContracts.map((candidate) => candidate.id === loopId ? approvedContract : candidate),
@@ -24511,6 +24518,14 @@ var LoopService = class {
             contractSnapshot: approvedContract,
             updatedAt: timestamp2
           } : context
+        ),
+        humanRequests: state.humanRequests.map(
+          (request) => request.status === "open" && request.question === approvalQuestion && nonterminalRuntimeScriptRunIds.has(request.runId) ? {
+            ...request,
+            status: "resolved",
+            response: approvalResponse,
+            resolvedAt: timestamp2
+          } : request
         )
       };
     });
@@ -24664,7 +24679,7 @@ var LoopService = class {
     validateRuntimeScriptApprovalPolicy(contract);
     if (runtimeScriptApprovalRequired(contract) && !runtimeScriptApprovalGranted(contract)) {
       await this.markWorkflowContextWaitingForHuman(workflowContext.id);
-      await this.ensureRuntimeScriptApprovalRequest(run.id, contract.id);
+      await this.ensureRuntimeScriptApprovalRequest(run.id, contract.id, workflowContext.id, attempt.id);
       return (await this.getRunDetail(run.id)).run;
     }
     let sequence = latestEngineEventSequence((await this.getRunDetail(run.id)).events);
@@ -26438,6 +26453,11 @@ ${priorOutput}`;
     const request = {
       id: this.nextId("human"),
       runId,
+      attemptId: input.attemptId,
+      workflowContextId: input.workflowContextId,
+      taskRunId: input.taskRunId,
+      sessionId: input.sessionId,
+      stepId: input.stepId,
       question: input.question,
       status: "open",
       createdAt: timestamp2
@@ -27444,14 +27464,18 @@ ${priorOutput}`;
       };
     });
   }
-  async ensureRuntimeScriptApprovalRequest(runId, contractId) {
+  async ensureRuntimeScriptApprovalRequest(runId, contractId, workflowContextId, attemptId) {
     const question = runtimeScriptApprovalQuestion(contractId);
     const state = await this.options.store.readState();
     const existing = state.humanRequests.find((request) => request.runId === runId && request.status === "open" && request.question === question);
     if (existing) {
       return;
     }
-    await this.recordHumanRequest(runId, { question });
+    await this.recordHumanRequest(runId, {
+      question,
+      attemptId,
+      workflowContextId
+    });
   }
 };
 function createWorkflowContext(input) {

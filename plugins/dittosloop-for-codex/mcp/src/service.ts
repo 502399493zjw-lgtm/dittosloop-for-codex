@@ -300,6 +300,11 @@ export interface RecordVerificationInput {
 
 export interface RecordHumanRequestInput {
   question: string;
+  attemptId?: string;
+  workflowContextId?: string;
+  taskRunId?: string;
+  sessionId?: string;
+  stepId?: string;
 }
 
 export interface ResolveHumanRequestInput {
@@ -467,6 +472,8 @@ export class LoopService {
   async approveRuntimeScript(loopId: string, input: ApproveRuntimeScriptInput): Promise<FormalLoopContract> {
     const timestamp = this.now();
     let approvedContract: FormalLoopContract | undefined;
+    const approvalQuestion = runtimeScriptApprovalQuestion(loopId);
+    const approvalResponse = `Approved by ${input.approvedBy} at ${timestamp}.`;
 
     await this.options.store.updateState((state) => {
       const contract = requireFormalContract(state, loopId);
@@ -488,6 +495,18 @@ export class LoopService {
         }
       };
 
+      const nonterminalRuntimeScriptRunIds = new Set(
+        state.workflowContexts
+          .filter(
+            (context) =>
+              context.loopId === loopId &&
+              context.contractSnapshot?.workflow.kind === "runtime_script" &&
+              context.status !== "completed" &&
+              context.status !== "failed"
+          )
+          .map((context) => context.runId)
+      );
+
       return {
         ...state,
         formalContracts: state.formalContracts.map((candidate) => candidate.id === loopId ? approvedContract! : candidate),
@@ -503,6 +522,18 @@ export class LoopService {
                 updatedAt: timestamp
               }
             : context
+        ),
+        humanRequests: state.humanRequests.map((request) =>
+          request.status === "open" &&
+          request.question === approvalQuestion &&
+          nonterminalRuntimeScriptRunIds.has(request.runId)
+            ? {
+                ...request,
+                status: "resolved",
+                response: approvalResponse,
+                resolvedAt: timestamp
+              }
+            : request
         )
       };
     });
@@ -692,7 +723,7 @@ export class LoopService {
     validateRuntimeScriptApprovalPolicy(contract);
     if (runtimeScriptApprovalRequired(contract) && !runtimeScriptApprovalGranted(contract)) {
       await this.markWorkflowContextWaitingForHuman(workflowContext.id);
-      await this.ensureRuntimeScriptApprovalRequest(run.id, contract.id);
+      await this.ensureRuntimeScriptApprovalRequest(run.id, contract.id, workflowContext.id, attempt.id);
       return (await this.getRunDetail(run.id)).run;
     }
 
@@ -2833,6 +2864,11 @@ export class LoopService {
     const request: HumanRequest = {
       id: this.nextId("human"),
       runId,
+      attemptId: input.attemptId,
+      workflowContextId: input.workflowContextId,
+      taskRunId: input.taskRunId,
+      sessionId: input.sessionId,
+      stepId: input.stepId,
       question: input.question,
       status: "open",
       createdAt: timestamp
@@ -4071,7 +4107,12 @@ export class LoopService {
     });
   }
 
-  private async ensureRuntimeScriptApprovalRequest(runId: string, contractId: string): Promise<void> {
+  private async ensureRuntimeScriptApprovalRequest(
+    runId: string,
+    contractId: string,
+    workflowContextId: string,
+    attemptId: string
+  ): Promise<void> {
     const question = runtimeScriptApprovalQuestion(contractId);
     const state = await this.options.store.readState();
     const existing = state.humanRequests.find((request) => request.runId === runId && request.status === "open" && request.question === question);
@@ -4079,7 +4120,11 @@ export class LoopService {
       return;
     }
 
-    await this.recordHumanRequest(runId, { question });
+    await this.recordHumanRequest(runId, {
+      question,
+      attemptId,
+      workflowContextId
+    });
   }
 }
 

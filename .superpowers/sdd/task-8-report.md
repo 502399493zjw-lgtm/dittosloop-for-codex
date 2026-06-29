@@ -115,3 +115,35 @@ Observed results:
 - `npm run typecheck`: passed.
 - `npm run build`: passed; `dist/index.js` content was unchanged.
 - `git diff --check`: passed with no whitespace errors.
+
+## Follow-up Fix: Resolve Runtime Script Approval Requests
+
+- Reviewer follow-up exposed one important cleanup gap and one missing regression around the new approval gate:
+  - `approveRuntimeScript()` persisted approval but left the open runtime-script approval `humanRequest` unresolved, so a successful rerun could still show a stale open approval request.
+  - The runtime-script approval request dedupe path existed, but there was no regression test proving repeated blocked executions do not create duplicates.
+- Updated `plugins/dittosloop-for-codex/mcp/src/service.ts` to:
+  - persist approval requests with `attemptId` and `workflowContextId` when `executeWorkflowAttempt()` blocks on runtime-script approval;
+  - resolve matching open approval requests for nonterminal runtime-script runs on the approved loop as part of `approveRuntimeScript()`, recording a concrete approval response and `resolvedAt` timestamp.
+- Updated `plugins/dittosloop-for-codex/mcp/test/runtimeScript/approval.test.ts` to add:
+  - a stale-request regression proving `block -> approve -> rerun -> complete` leaves no open approval request for that run;
+  - a dedupe regression proving repeated blocked `executeWorkflowAttempt()` calls still leave exactly one open approval request.
+
+### Follow-up Verification
+
+Commands run:
+
+```bash
+cd plugins/dittosloop-for-codex/mcp
+npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts test/service.test.ts
+npm run typecheck
+npm run build
+cd ../..
+git diff --check
+```
+
+Observed results:
+
+- `test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts test/service.test.ts`: 142 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed and refreshed `dist/index.js`.
+- `git diff --check`: passed with no whitespace errors.
