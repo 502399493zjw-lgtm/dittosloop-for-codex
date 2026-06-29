@@ -99,6 +99,7 @@ async function createRuntimeScriptRun(
       rubrics: [{ id: "done", label: "Done", requirement: "Runtime script completed", severity: "must" }]
     }
   });
+  await service.approveRuntimeScript(contract.id, { approvedBy: "test" });
   const launch = await service.startCodexSessionRun(contract.id, { goal: "Run runtime script" });
 
   return { contract, launch, source };
