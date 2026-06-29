@@ -173,6 +173,7 @@ function passedVerifierResult(summary: string, evidence: string) {
 }
 
 test("runs runtime script end-to-end through workers, parallel fan-out, verifier, and replay cache hits", async () => {
+  const verifierEvidence = "The summary included both file reviews.";
   const dir = await createTempDir();
   const { bridge, requests } = createMutableSessionBridge();
   const service = await createService(dir, bridge);
@@ -271,7 +272,7 @@ test("runs runtime script end-to-end through workers, parallel fan-out, verifier
     idempotencyKey: `verification:${launch.run.id}:${launch.attempt.id}:quality-review`,
     result: passedVerifierResult(
       "Verifier approved the runtime summary.",
-      "The summary included both file reviews."
+      verifierEvidence
     )
   });
 
@@ -286,6 +287,12 @@ test("runs runtime script end-to-end through workers, parallel fan-out, verifier
   expect(workflowTimeline?.items.some((item) => item.kind === "agent")).toBe(true);
   expect(workflowTimeline?.items.some((item) => item.kind === "parallel")).toBe(true);
   expect(verificationTimeline?.items.length ?? 0).toBeGreaterThan(0);
+  expect(verificationTimeline?.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      label: "Quality review",
+      message: verifierEvidence
+    })
+  ]));
 
   const requestCountBeforeReplay = requests.length;
   const replayLaunch = await service.startCodexSessionRun(contract.id, { goal: "Replay runtime script e2e" });
