@@ -79,3 +79,22 @@ Observed results:
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
 - `git diff --check`: passed with no whitespace errors.
+
+## Reviewer follow-up fix 2
+
+- Reviewer found that the previous `sessionId` requirement was too broad for subagent-configured validators in no-bridge environments.
+- Root cause: verification was marked `waiting_for_validator` before any session-bridge check, so `pendingValidatorIds` alone was not a reliable signal that a verifier session actually existed.
+- Fixed `recordValidatorResult()` to require verifier identity only when an actual launched verifier session exists for `stepId: verification:${validatorId}`.
+- Preserved the stricter launched-session behavior from the prior fix:
+  - launched verifier session + missing `sessionId` => reject
+  - launched verifier session + mismatched `sessionId` => reject
+  - no launched verifier session => plain external writeback without `sessionId` still succeeds
+- Added regression coverage for a subagent-configured validator running without any `sessionBridge`; external writeback without `sessionId` now passes and completes verification.
+
+Observed results:
+
+- `test/runtimeScript/verificationSubagent.test.ts test/runtimeScript/approval.test.ts test/service.runtimeScript.test.ts test/service.test.ts test/mcpServer.test.ts`: 148 tests passed.
+- `DITTOSLOOP_RUNTIME_SCRIPT_LIVE=1 test/runtimeScript/verificationSubagent.live.test.ts`: 1 test passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+- `git diff --check`: passed with no whitespace errors.

@@ -26329,9 +26329,8 @@ ${priorOutput}`;
       const launchedVerifierTaskRun = context.taskRuns.find(
         (taskRun) => isVerificationTaskStepId(taskRun.stepId, input.validatorId)
       );
-      const requiresVerifierSessionIdentity = Boolean(
-        launchedVerifierTaskRun || validator.subagent && verification.pendingValidatorIds.includes(input.validatorId)
-      );
+      const launchedVerifierSessionId = launchedVerifierTaskRun?.sessionId;
+      const requiresVerifierSessionIdentity = Boolean(launchedVerifierSessionId);
       if (requiresVerifierSessionIdentity && !input.sessionId) {
         throw new Error("Validator result sessionId is required for verifier session writeback");
       }
@@ -26340,7 +26339,7 @@ ${priorOutput}`;
       )) {
         throw new Error("Validator result session cannot be a workflow task session");
       }
-      if (input.sessionId && launchedVerifierTaskRun && launchedVerifierTaskRun.sessionId !== input.sessionId) {
+      if (input.sessionId && launchedVerifierSessionId && launchedVerifierSessionId !== input.sessionId) {
         throw new Error("Validator result session must match the launched verifier session");
       }
       if (verification.idempotencyKeys.includes(idempotencyKey)) {

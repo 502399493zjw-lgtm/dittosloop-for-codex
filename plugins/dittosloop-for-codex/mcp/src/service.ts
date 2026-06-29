@@ -2728,10 +2728,8 @@ export class LoopService {
       const launchedVerifierTaskRun = context.taskRuns.find((taskRun) =>
         isVerificationTaskStepId(taskRun.stepId, input.validatorId)
       );
-      const requiresVerifierSessionIdentity = Boolean(
-        launchedVerifierTaskRun ||
-        (validator.subagent && verification.pendingValidatorIds.includes(input.validatorId))
-      );
+      const launchedVerifierSessionId = launchedVerifierTaskRun?.sessionId;
+      const requiresVerifierSessionIdentity = Boolean(launchedVerifierSessionId);
       if (requiresVerifierSessionIdentity && !input.sessionId) {
         throw new Error("Validator result sessionId is required for verifier session writeback");
       }
@@ -2748,8 +2746,8 @@ export class LoopService {
       }
       if (
         input.sessionId &&
-        launchedVerifierTaskRun &&
-        launchedVerifierTaskRun.sessionId !== input.sessionId
+        launchedVerifierSessionId &&
+        launchedVerifierSessionId !== input.sessionId
       ) {
         throw new Error("Validator result session must match the launched verifier session");
       }

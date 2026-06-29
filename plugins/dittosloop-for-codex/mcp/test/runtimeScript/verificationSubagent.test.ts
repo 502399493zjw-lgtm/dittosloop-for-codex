@@ -366,6 +366,61 @@ describe("verification subagent workflow", () => {
     })).rejects.toThrow(/verifier session/i);
   });
 
+  test("subagent-configured validators still allow external writeback when no verifier session exists", async () => {
+    const service = await createService();
+    const contract = await service.createLoopContract({
+      title: "No bridge verifier flow",
+      goal: "Allow plain verifier writeback when no verifier session exists",
+      workflowKind: "runtime_script",
+      script: `
+        return { output: "candidate" };
+      `,
+      verification: verificationWithVerifierSubagent()
+    });
+    await service.approveRuntimeScript(contract.id, { approvedBy: "test" });
+    const launch = await service.startCodexSessionRun(contract.id, { goal: "Run no bridge verifier flow" });
+
+    const firstRun = await service.executeWorkflowAttempt(launch.run.id, {
+      attemptId: launch.attempt.id
+    });
+
+    const detailBeforeVerification = await service.getRunDetail(firstRun.id);
+    expect(detailBeforeVerification.workflowContexts[0].verification).toMatchObject({
+      status: "waiting_for_validator",
+      pendingValidatorIds: ["quality-review"]
+    });
+    expect(
+      detailBeforeVerification.workflowContexts[0].taskRuns.some((taskRun) => taskRun.stepId === "verification:quality-review")
+    ).toBe(false);
+
+    const verification = await service.recordValidatorResult(firstRun.id, {
+      workflowContextId: launch.launchRequest.workflowContextId,
+      attemptId: launch.attempt.id,
+      validatorId: "quality-review",
+      idempotencyKey: "verification:no-bridge-external-writeback",
+      result: {
+        type: "rubric_agent",
+        status: "passed",
+        evidence: "No bridge exists, so plain external writeback should still work.",
+        criteriaResults: [
+          {
+            criterionId: "quality",
+            status: "passed",
+            score: 1,
+            maxScore: 1,
+            evidence: "No bridge exists, so plain external writeback should still work."
+          }
+        ]
+      }
+    });
+
+    expect(verification).toMatchObject({ version: 2, status: "passed" });
+    await expect(service.getRunDetail(firstRun.id)).resolves.toMatchObject({
+      run: { status: "completed" },
+      verificationResults: [expect.objectContaining({ version: 2, status: "passed" })]
+    });
+  });
+
   test("default allowSelfReview=false rejects validator writeback that reuses the worker session", async () => {
     const { bridge } = createMutableSessionBridge();
     const service = await createService(bridge);
