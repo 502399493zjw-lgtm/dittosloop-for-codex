@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "npm --prefix plugins/dittosloop-for-codex/mcp run build",
+    "dev:local": "node scripts/dev-local.mjs",
     "test": "node --test test/*.test.mjs",
     "validate": "node scripts/validate-plugin.mjs",
     "verify:generated": "node scripts/verify-generated.mjs",

@@ -188,6 +188,17 @@ npm run validate
 npm run check
 ```
 
+For fast local plugin iteration, sync the built plugin into the Codex plugin cache:
+
+```bash
+npm run dev:local
+```
+
+This runs the repo tests, MCP tests, build, and plugin validation before copying
+`plugins/dittosloop-for-codex` into the local Codex plugin cache for the current
+manifest version. Use `npm run dev:local -- --dry-run` to print the exact cache
+path and checks without copying files.
+
 The MCP package can still be exercised directly:
 
 ```bash
