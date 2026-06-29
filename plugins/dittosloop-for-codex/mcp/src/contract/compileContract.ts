@@ -72,7 +72,8 @@ function normalizeVerificationV2(policy: VerificationPolicyV2): VerificationPoli
         prompt: validator.prompt ?? defaultRubricAgentPrompt,
         scoreScale: validator.scoreScale ?? { min: 0, max: 1 },
         passScore: validator.passScore ?? validator.scoreScale?.max ?? 1,
-        evidenceRequired: validator.evidenceRequired ?? true
+        evidenceRequired: validator.evidenceRequired ?? true,
+        allowSelfReview: validator.allowSelfReview ?? false
       };
     })
   };

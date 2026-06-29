@@ -13,6 +13,7 @@ import type {
   LegacyVerificationPolicy,
   PhaseStep,
   Step,
+  VerificationRubricAgentValidator,
   VerificationPolicyV2
 } from "./contract/types.js";
 import { validateContract } from "./contract/validateContract.js";
@@ -2686,15 +2687,19 @@ export class LoopService {
     let contextAfterWrite: WorkflowContext | undefined;
     let policy: FormalLoopContract["verification"] | undefined;
     let duplicateResultId: string | undefined;
+    let codexSessionUpdate:
+      | {
+          input: RecordSessionResultInput;
+          status: CodexSubagentStatus;
+          isTargeted: boolean;
+        }
+      | undefined;
 
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
       const context = findWorkflowContextForValidatorResult(state, runId, input);
       if (input.attemptId && context.attemptId !== input.attemptId) {
         throw new Error(`Workflow context does not belong to attempt: ${context.id}`);
-      }
-      if (input.sessionId && context.taskRuns.some((taskRun) => taskRun.sessionId === input.sessionId)) {
-        throw new Error("Validator result session cannot be a workflow task session");
       }
       const attempt = requireAttempt(state, context.attemptId);
       if (attempt.runId !== runId) {
@@ -2713,8 +2718,22 @@ export class LoopService {
       if (!validator) {
         throw new Error(`Validator not found: ${input.validatorId}`);
       }
+      if (validator.type !== "rubric_agent") {
+        throw new Error(`Validator does not accept external writeback: ${input.validatorId}`);
+      }
       if (validator.type !== input.result.type) {
         throw new Error(`Validator result type does not match validator: ${input.validatorId}`);
+      }
+      if (
+        input.sessionId &&
+        !validator.allowSelfReview &&
+        context.taskRuns.some(
+          (taskRun) =>
+            taskRun.sessionId === input.sessionId &&
+            !isVerificationTaskStepId(taskRun.stepId, input.validatorId)
+        )
+      ) {
+        throw new Error("Validator result session cannot self-review a workflow task session");
       }
 
       const verification = context.verification ?? createWorkflowVerificationState(timestamp);
@@ -2736,8 +2755,20 @@ export class LoopService {
         normalizeRecordedRubricAgentInput(input.result)
       );
       const validatorResults = [...verification.validatorResults, validatorResult];
+      const verificationTaskRun = input.sessionId
+        ? context.taskRuns.find(
+            (taskRun) =>
+              taskRun.sessionId === input.sessionId &&
+              isVerificationTaskStepId(taskRun.stepId, input.validatorId)
+          )
+        : undefined;
       const pendingValidatorIds = pendingRubricAgentValidatorIds(contract.verification, {
-        ...context,
+        ...completeWorkflowContextVerificationTask(
+          context,
+          verificationTaskRun,
+          input.sessionId,
+          timestamp
+        ),
         verification: {
           ...verification,
           validatorResults
@@ -2752,14 +2783,48 @@ export class LoopService {
         updatedAt: timestamp
       };
       contextAfterWrite = {
-        ...context,
+        ...completeWorkflowContextVerificationTask(
+          context,
+          verificationTaskRun,
+          input.sessionId,
+          timestamp
+        ),
         verification: nextVerification,
         updatedAt: timestamp
       };
       policy = contract.verification;
+      codexSessionUpdate = input.sessionId
+        ? {
+            input: {
+              status: "passed",
+              summary: validatorResult.summary ?? `Validator result recorded: ${input.validatorId}`,
+              sessionId: input.sessionId,
+              stepId: verificationValidatorStepId(input.validatorId)
+            },
+            status: "completed",
+            isTargeted: true
+          }
+        : undefined;
 
       return {
         ...state,
+        runs: codexSessionUpdate
+          ? updateRun(state.runs, runId, {
+              ...run,
+              codexSession: run.codexSession
+                ? {
+                    ...run.codexSession,
+                    subagents: updateCodexSessionSubagentsForResult(
+                      run.codexSession.subagents,
+                      codexSessionUpdate.input,
+                      codexSessionUpdate.status,
+                      codexSessionUpdate.isTargeted
+                    )
+                  }
+                : run.codexSession,
+              updatedAt: timestamp
+            })
+          : state.runs,
         workflowContexts: updateWorkflowContext(state.workflowContexts, context.id, contextAfterWrite!),
         events: [
           ...state.events,
@@ -3546,7 +3611,8 @@ export class LoopService {
     policy: FormalLoopContract["verification"]
   ): Promise<void> {
     const timestamp = this.now();
-    const pendingValidatorIds = pendingRubricAgentValidatorIds(policy, context);
+    const pendingValidators = pendingRubricAgentValidators(policy, context);
+    const pendingValidatorIds = pendingValidators.map((validator) => validator.id);
     if (pendingValidatorIds.length === 0) {
       return;
     }
@@ -3581,6 +3647,61 @@ export class LoopService {
         ]
       };
     });
+
+    const bridge = this.options.sessionBridge;
+    if (!bridge) {
+      return;
+    }
+
+    const state = await this.options.store.readState();
+    const contract = context.contractSnapshot ?? requireFormalContract(state, run.loopId);
+    const workflowLaunch = buildWorkflowLaunch(contract);
+
+    for (const validator of pendingValidators) {
+      if (!validator.subagent) {
+        continue;
+      }
+
+      const stepId = verificationValidatorStepId(validator.id);
+      const idempotencyKey = verificationValidatorIdempotencyKey(run.id, context.attemptId, validator.id);
+      const existingTaskRun = await this.findWorkflowTaskRunByIdempotencyKey(context.id, idempotencyKey);
+      if (existingTaskRun?.sessionId) {
+        continue;
+      }
+      const prompt = verificationValidatorPrompt(policy, context, validator);
+
+      const taskRunId = existingTaskRun?.id ?? await this.markWorkflowTaskRunning(context.id, {
+        attemptId: context.attemptId,
+        runId: run.id,
+        stepId,
+        label: validator.label,
+        prompt,
+        subagent: validator.subagent,
+        idempotencyKey
+      });
+      const createdSession = await bridge.createSession({
+        runId: run.id,
+        attemptId: context.attemptId,
+        workflowContextId: context.id,
+        stepId,
+        title: validator.label,
+        prompt,
+        subagent: validator.subagent,
+        workflowRuntime: workflowLaunch.workflowRuntime,
+        workflowContractId: workflowLaunch.workflowContractId,
+        workflowPlan: workflowLaunch.workflowPlan,
+        projectId: run.codexProjectId,
+        projectLabel: run.projectLabel,
+        projectPath: run.projectPath
+      });
+      const session: CodexSessionRef = {
+        ...createdSession,
+        subagent: createdSession.subagent ?? validator.subagent
+      };
+      await this.attachWorkflowTaskSession(context.id, taskRunId, session);
+      await this.suspendWorkflowTaskForSession(context.id, taskRunId, session);
+      await this.markRunWaitingForCodexSession(run.id, session);
+    }
   }
 
   private async markWorkflowVerificationCompleted(
@@ -4400,6 +4521,42 @@ function completedWorkflowVerificationInput(context: WorkflowContext): unknown {
   return completedWorkflowStepOutputs(context);
 }
 
+function verificationValidatorStepId(validatorId: string): string {
+  return `verification:${validatorId}`;
+}
+
+function verificationValidatorIdempotencyKey(runId: string, attemptId: string, validatorId: string): string {
+  return `verification:${runId}:${attemptId}:${validatorId}`;
+}
+
+function isVerificationTaskStepId(stepId: string | undefined, validatorId?: string): boolean {
+  if (!stepId?.startsWith("verification:")) {
+    return false;
+  }
+
+  return validatorId ? stepId === verificationValidatorStepId(validatorId) : true;
+}
+
+function verificationValidatorPrompt(
+  policy: FormalLoopContract["verification"],
+  context: WorkflowContext,
+  validator: VerificationRubricAgentValidator
+): string {
+  const criteria = policy.criteria.filter((criterion) => validator.criteriaIds.includes(criterion.id));
+
+  return [
+    validator.prompt,
+    "",
+    "Criteria:",
+    criteria
+      .map((criterion) => `- [${criterion.severity}] ${criterion.label}: ${criterion.description}`)
+      .join("\n"),
+    "",
+    "Workflow result:",
+    JSON.stringify(completedWorkflowVerificationInput(context), null, 2)
+  ].join("\n");
+}
+
 function completedWorkflowStepOutputs(context: WorkflowContext): Record<string, string> {
   return Object.fromEntries(
     Object.entries(context.steps)
@@ -4433,13 +4590,21 @@ function pendingRubricAgentValidatorIds(
   policy: FormalLoopContract["verification"],
   context: WorkflowContext
 ): string[] {
+  return pendingRubricAgentValidators(policy, context).map((validator) => validator.id);
+}
+
+function pendingRubricAgentValidators(
+  policy: FormalLoopContract["verification"],
+  context: WorkflowContext
+): VerificationRubricAgentValidator[] {
   const recordedValidatorIds = new Set(
     (context.verification?.validatorResults ?? []).map((result) => result.validatorId)
   );
 
-  return policy.validators
-    .filter((validator) => validator.type === "rubric_agent" && !recordedValidatorIds.has(validator.id))
-    .map((validator) => validator.id);
+  return policy.validators.filter(
+    (validator): validator is VerificationRubricAgentValidator =>
+      validator.type === "rubric_agent" && !recordedValidatorIds.has(validator.id)
+  );
 }
 
 function usesVerificationV2Runtime(policy: FormalLoopContract["verification"]): boolean {
@@ -5267,6 +5432,61 @@ function findWorkflowContextForValidatorResult(
   }
 
   return context;
+}
+
+function completeWorkflowContextVerificationTask(
+  context: WorkflowContext,
+  taskRun: WorkflowTaskRun | undefined,
+  sessionId: string | undefined,
+  timestamp: string
+): WorkflowContext {
+  if (!taskRun) {
+    return {
+      ...context,
+      pendingSessionIds: sessionId
+        ? context.pendingSessionIds.filter((pendingSessionId) => pendingSessionId !== sessionId)
+        : context.pendingSessionIds
+    };
+  }
+
+  return updateNodeRunForTaskResult(
+    {
+      ...context,
+      steps: {
+        ...context.steps,
+        [taskRun.stepId]: {
+          status: "completed",
+          sessionId: taskRun.sessionId,
+          output: taskRun.result ?? "",
+          updatedAt: timestamp
+        }
+      },
+      taskRuns: context.taskRuns.map((candidate) =>
+        candidate.id === taskRun.id
+          ? {
+              ...candidate,
+              status: "completed",
+              updatedAt: timestamp,
+              completedAt: timestamp
+            }
+          : candidate
+      ),
+      pendingSessionIds: taskRun.sessionId
+        ? context.pendingSessionIds.filter((pendingSessionId) => pendingSessionId !== taskRun.sessionId)
+        : context.pendingSessionIds,
+      updatedAt: timestamp
+    },
+    {
+      stepId: taskRun.stepId,
+      taskRunId: taskRun.id,
+      sessionId: taskRun.sessionId,
+      status: "passed",
+      result: taskRun.result,
+      summary: taskRun.result ?? "",
+      idempotencyKey: taskRun.idempotencyKey,
+      timestamp
+    }
+  );
 }
 
 function completeWorkflowContextFromSessionResult(
