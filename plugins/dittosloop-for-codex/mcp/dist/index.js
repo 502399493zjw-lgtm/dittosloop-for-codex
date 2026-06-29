@@ -21275,9 +21275,10 @@ var defaultDecision = {
   failOnShouldValidatorFailure: false,
   requireEvidenceForAgentScores: true
 };
+var defaultRubricAgentPrompt = "Review the workflow result against the verification criteria.";
 function migrateVerificationToV2(input) {
   if ("version" in input && input.version === 2) {
-    return input;
+    return normalizeVerificationV2(input);
   }
   const legacy = input;
   const criteria = legacy.rubrics.map((rubric) => ({
@@ -21286,7 +21287,7 @@ function migrateVerificationToV2(input) {
     description: rubric.requirement,
     severity: rubric.severity
   }));
-  return {
+  return normalizeVerificationV2({
     version: 2,
     mode: legacy.mode === "after_each_agent" ? "after_each_step" : "after_workflow",
     criteria,
@@ -21296,6 +21297,7 @@ function migrateVerificationToV2(input) {
         type: "rubric_agent",
         label: "Rubric review",
         criteriaIds: criteria.map((criterion) => criterion.id),
+        prompt: defaultRubricAgentPrompt,
         scoreScale: { min: 0, max: 1 },
         passScore: 1,
         evidenceRequired: true,
@@ -21303,18 +21305,105 @@ function migrateVerificationToV2(input) {
       }
     ] : [],
     decision: defaultDecision
+  });
+}
+function normalizeVerificationV2(policy) {
+  return {
+    ...policy,
+    validators: policy.validators.map((validator) => {
+      if (validator.type !== "rubric_agent") {
+        return validator;
+      }
+      return {
+        ...validator,
+        prompt: validator.prompt ?? defaultRubricAgentPrompt,
+        scoreScale: validator.scoreScale ?? { min: 0, max: 1 },
+        passScore: validator.passScore ?? validator.scoreScale?.max ?? 1,
+        evidenceRequired: validator.evidenceRequired ?? true
+      };
+    })
   };
 }
 function compileContract(input, now = (/* @__PURE__ */ new Date()).toISOString()) {
+  const { workflowKind, workflow: workflow2, body, script, args, limits, approval, journal, verification, ...contractInput } = input;
+  const normalizedWorkflow = normalizeWorkflowDefinition({
+    workflowKind,
+    workflow: workflow2,
+    body,
+    script,
+    args,
+    limits,
+    approval,
+    journal
+  });
   return {
-    ...input,
-    verification: migrateVerificationToV2(input.verification),
-    trigger: input.trigger ?? { mode: "manual" },
-    repairPolicy: input.repairPolicy ?? { maxAttempts: 1, strategy: "repair_then_retry" },
-    stopPolicy: input.stopPolicy ?? { rule: "user cancels" },
-    status: input.status ?? "active",
-    createdAt: input.createdAt ?? now,
-    updatedAt: input.updatedAt ?? now
+    ...contractInput,
+    workflow: normalizedWorkflow.workflow,
+    body: normalizedWorkflow.workflow.kind === "runtime_script" ? void 0 : normalizedWorkflow.body,
+    verification: migrateVerificationToV2(verification),
+    trigger: contractInput.trigger ?? { mode: "manual" },
+    repairPolicy: contractInput.repairPolicy ?? { maxAttempts: 1, strategy: "repair_then_retry" },
+    stopPolicy: contractInput.stopPolicy ?? { rule: "user cancels" },
+    status: contractInput.status ?? "active",
+    createdAt: contractInput.createdAt ?? now,
+    updatedAt: contractInput.updatedAt ?? now,
+    ...normalizedWorkflow.budgetUsd !== void 0 && contractInput.budgetUsd === void 0 ? { budgetUsd: normalizedWorkflow.budgetUsd } : {}
+  };
+}
+function normalizeWorkflowDefinition(input) {
+  if (input.body && input.script !== void 0) {
+    throw new Error("Loop contract cannot include both body and script");
+  }
+  if (typeof input.script === "string") {
+    if (input.workflowKind !== "runtime_script") {
+      throw new Error('String script requires workflowKind: "runtime_script"');
+    }
+    return {
+      workflow: normalizeRuntimeScriptWorkflow(input, input.script)
+    };
+  }
+  if (input.script !== void 0) {
+    if (input.workflowKind === "runtime_script") {
+      throw new Error("script.build is a static_steps builder script and cannot be used with workflowKind runtime_script");
+    }
+    const built = evalScriptAst(input.script);
+    const body2 = { steps: built.steps };
+    return {
+      workflow: { kind: "static_steps", body: body2 },
+      body: body2,
+      ...built.budgetUsd !== void 0 ? { budgetUsd: built.budgetUsd } : {}
+    };
+  }
+  if (input.workflow?.kind === "runtime_script") {
+    return {
+      workflow: normalizeRuntimeScriptWorkflow(input, input.workflow.source)
+    };
+  }
+  if (input.body) {
+    if (input.workflowKind === "runtime_script") {
+      throw new Error("body.steps cannot be used with workflowKind runtime_script");
+    }
+    return {
+      workflow: { kind: "static_steps", body: input.body },
+      body: input.body
+    };
+  }
+  const body = input.workflow?.body;
+  return {
+    workflow: { kind: "static_steps", body },
+    body
+  };
+}
+function normalizeRuntimeScriptWorkflow(input, source) {
+  const workflow2 = input.workflow?.kind === "runtime_script" ? input.workflow : void 0;
+  return {
+    kind: "runtime_script",
+    language: "javascript",
+    source,
+    ...input.args !== void 0 || workflow2?.args !== void 0 ? { args: input.args ?? workflow2?.args } : {},
+    ...input.limits !== void 0 || workflow2?.limits !== void 0 ? { limits: input.limits ?? workflow2?.limits } : {},
+    approval: input.approval ?? workflow2?.approval ?? { required: true },
+    ...input.journal !== void 0 || workflow2?.journal !== void 0 ? { journal: input.journal ?? workflow2?.journal } : {}
   };
 }
 
@@ -21338,7 +21427,11 @@ function resolveEffectiveAgentProfile(contract, step) {
 }
 function resolveEffectiveProfilesByStep(contract) {
   const profiles = /* @__PURE__ */ new Map();
-  visitSteps(contract.body.steps, (step) => {
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : void 0);
+  if (!body) {
+    return profiles;
+  }
+  visitSteps(body.steps, (step) => {
     if (step.kind !== "agent" && step.kind !== "task") return;
     const profile = resolveEffectiveAgentProfile(contract, step);
     if (profile) {
@@ -21654,6 +21747,7 @@ function isPlainObject3(value) {
 
 // src/contract/validateContract.ts
 import path from "node:path";
+var MAX_RUNTIME_SCRIPT_SOURCE_CHARS = 1e5;
 var scoreOperators = /* @__PURE__ */ new Set([">=", ">", "<=", "<", "==", "!="]);
 function validateContract(contract) {
   const errors = [];
@@ -21662,11 +21756,18 @@ function validateContract(contract) {
   required2(contract.title, "title", errors);
   required2(contract.goal, "goal", errors);
   validateAgentProfiles(contract, errors);
-  if (!contract.body || !Array.isArray(contract.body.steps) || contract.body.steps.length === 0) {
-    errors.push("body.steps must contain at least one step");
+  if (!contract.workflow) {
+    errors.push("workflow is required");
+  } else if (contract.workflow.kind === "runtime_script") {
+    validateRuntimeScriptWorkflow(contract.workflow, contract.body, errors);
   } else {
-    for (const step of contract.body.steps) {
-      validateStep(contract, step, stepIds, errors);
+    const body = contract.body ?? contract.workflow.body;
+    if (!body || !Array.isArray(body.steps) || body.steps.length === 0) {
+      errors.push("body.steps must contain at least one step");
+    } else {
+      for (const step of body.steps) {
+        validateStep(contract, step, stepIds, errors);
+      }
     }
   }
   validateVerificationV2(contract.verification, contract.projectBinding, errors);
@@ -21760,20 +21861,53 @@ function required2(value, label, errors) {
   }
 }
 function validateSubagent(subagent, step, errors) {
+  validateCodexSubagentSpec(subagent, `${step.kind} step ${step.id || "<missing>"} subagent`, errors);
+}
+function validateCodexSubagentSpec(subagent, label, errors) {
   if (!subagent) return;
   if (subagent.timeoutMs !== void 0 && (!Number.isInteger(subagent.timeoutMs) || subagent.timeoutMs <= 0)) {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.timeoutMs must be a positive integer`);
+    errors.push(`${label}.timeoutMs must be a positive integer`);
   }
   if (subagent.tools !== void 0) {
     if (!Array.isArray(subagent.tools) || subagent.tools.some((tool) => !tool || tool.trim().length === 0)) {
-      errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.tools must contain non-empty strings`);
+      errors.push(`${label}.tools must contain non-empty strings`);
     }
   }
   if (subagent.permissions?.filesystem !== void 0 && !["read-only", "workspace-write", "danger-full-access"].includes(subagent.permissions.filesystem)) {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.filesystem is invalid`);
+    errors.push(`${label}.permissions.filesystem is invalid`);
   }
   if (subagent.permissions?.network !== void 0 && subagent.permissions.network !== "enabled" && subagent.permissions.network !== "disabled") {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.network is invalid`);
+    errors.push(`${label}.permissions.network is invalid`);
+  }
+}
+function validateRuntimeScriptWorkflow(workflow2, body, errors) {
+  if (workflow2.language !== "javascript") {
+    errors.push("runtime_script workflow language must be javascript");
+  }
+  if (!workflow2.source || workflow2.source.trim().length === 0) {
+    errors.push("runtime_script workflow source is required");
+  } else if (workflow2.source.length > MAX_RUNTIME_SCRIPT_SOURCE_CHARS) {
+    errors.push(`runtime_script workflow source must be at most ${MAX_RUNTIME_SCRIPT_SOURCE_CHARS} characters`);
+  }
+  if (body?.steps !== void 0) {
+    errors.push("runtime_script workflow must not include body.steps");
+  }
+  validateRuntimeScriptLimits(workflow2.limits, errors);
+  if (!workflow2.approval) {
+    errors.push("runtime_script workflow approval policy is required");
+  } else if (typeof workflow2.approval.required !== "boolean") {
+    errors.push("runtime_script workflow approval.required must be a boolean");
+  }
+  if (workflow2.journal !== void 0 && typeof workflow2.journal.enabled !== "boolean") {
+    errors.push("runtime_script workflow journal.enabled must be a boolean");
+  }
+}
+function validateRuntimeScriptLimits(limits, errors) {
+  if (!limits) return;
+  for (const [key, value] of Object.entries(limits)) {
+    if (value !== void 0 && (!Number.isInteger(value) || value <= 0)) {
+      errors.push(`runtime_script workflow limits.${key} must be a positive integer`);
+    }
   }
 }
 function validateAgentProfile(profileId, profile, errors) {
@@ -21991,12 +22125,21 @@ function validateRubricAgentValidator(validator, errors) {
   if (!Array.isArray(validator.criteriaIds) || validator.criteriaIds.length === 0) {
     errors.push("rubric_agent validator criteriaIds must contain at least one criterion");
   }
-  const scoreValues = [validator.scoreScale.min, validator.scoreScale.max, validator.passScore];
+  if (!validator.prompt || validator.prompt.trim().length === 0) {
+    errors.push("rubric_agent validator prompt is required");
+  }
+  if (validator.allowSelfReview !== void 0 && typeof validator.allowSelfReview !== "boolean") {
+    errors.push("rubric_agent validator allowSelfReview must be a boolean");
+  }
+  validateCodexSubagentSpec(validator.subagent, `rubric_agent validator ${validator.id || "<missing>"} subagent`, errors);
+  const scoreScale = validator.scoreScale ?? { min: 0, max: 1 };
+  const passScore = validator.passScore ?? scoreScale.max;
+  const scoreValues = [scoreScale.min, scoreScale.max, passScore];
   if (scoreValues.some((value) => !Number.isFinite(value))) {
     errors.push("score validator threshold must be finite");
     return;
   }
-  if (validator.passScore < validator.scoreScale.min || validator.passScore > validator.scoreScale.max) {
+  if (passScore < scoreScale.min || passScore > scoreScale.max) {
     errors.push("rubric_agent validator passScore must be inside scoreScale");
   }
 }
@@ -22235,7 +22378,7 @@ function aggregateVerificationDecision(policy, validatorResults) {
   };
 }
 function recordedRubricAgentResultToValidatorResult(validator, input) {
-  const hasRequiredEvidence = !validator.evidenceRequired || Boolean(input.evidence?.trim());
+  const hasRequiredEvidence = validator.evidenceRequired === false || Boolean(input.evidence?.trim());
   const hasScore = typeof input.score === "number" && Number.isFinite(input.score);
   const status = rubricAgentStatusFromInput(validator, input.status, input.score, hasScore, hasRequiredEvidence);
   return {
@@ -22402,7 +22545,7 @@ function enforceRubricAgentPolicy(policy, result) {
   const validator = policy.validators.find(
     (candidate) => candidate.id === result.validatorId && candidate.type === "rubric_agent"
   );
-  const requiresEvidence = policy.decision.requireEvidenceForAgentScores || validator?.type === "rubric_agent" && validator.evidenceRequired;
+  const requiresEvidence = policy.decision.requireEvidenceForAgentScores || validator?.type === "rubric_agent" && validator.evidenceRequired !== false;
   const hasRequiredEvidence = !requiresEvidence || Boolean(result.evidence?.trim());
   const hasScore = typeof result.score === "number" && Number.isFinite(result.score);
   if (!hasScore || !hasRequiredEvidence) {
@@ -22412,7 +22555,7 @@ function enforceRubricAgentPolicy(policy, result) {
       summary: !hasScore ? "Rubric agent result requires a finite score." : "Rubric agent result requires evidence."
     };
   }
-  if (validator?.type === "rubric_agent" && result.score !== void 0 && result.score < validator.passScore) {
+  if (validator?.type === "rubric_agent" && result.score !== void 0 && result.score < rubricAgentPassScore(validator)) {
     return {
       ...result,
       status: "failed",
@@ -22438,7 +22581,7 @@ function rubricAgentStatusFromInput(validator, requestedStatus, score, hasScore,
   if (!hasScore || !hasRequiredEvidence) {
     return "needs_human";
   }
-  return score >= validator.passScore ? "passed" : "failed";
+  return score >= rubricAgentPassScore(validator) ? "passed" : "failed";
 }
 function decisionSummary(decision) {
   if (decision.status === "passed" && decision.warnings.length > 0) {
@@ -22453,7 +22596,10 @@ function rubricAgentSummary(validator, score, hasRequiredEvidence) {
   if (!hasRequiredEvidence) {
     return "Rubric agent result requires evidence.";
   }
-  return score >= validator.passScore ? `${validator.label} passed with score ${score}.` : `${validator.label} failed with score ${score}.`;
+  return score >= rubricAgentPassScore(validator) ? `${validator.label} passed with score ${score}.` : `${validator.label} failed with score ${score}.`;
+}
+function rubricAgentPassScore(validator) {
+  return validator.passScore ?? validator.scoreScale?.max ?? 1;
 }
 function resolveCommandCwd(validator, input) {
   const cwd = validator.cwd;
@@ -22642,8 +22788,9 @@ var LoopRunner = class {
         sequence: ++sequence
       });
     };
+    const body = requireStaticWorkflowBody(request.contract);
     const flowResult = await runFlow(
-      (api) => runBody(request.contract.body, api, resolveEffectiveProfilesByStep(request.contract)),
+      (api) => runBody(body, api, resolveEffectiveProfilesByStep(request.contract)),
       {
         runId: request.runId,
         executor: this.options.executor,
@@ -22698,17 +22845,25 @@ var LoopRunner = class {
 };
 function buildWorkflowExecutionPlan(contract) {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+  const body = requireStaticWorkflowBody(contract);
   return {
     runtime: "dittosloop-local-workflow",
     contractId: contract.id,
     goal: contract.goal,
-    steps: flattenWorkflowSteps(contract.body.steps, effectiveProfilesByStep),
+    steps: flattenWorkflowSteps(body.steps, effectiveProfilesByStep),
     verification: contract.verification,
     repairPolicy: contract.repairPolicy,
     stopPolicy: contract.stopPolicy,
     budgetUsd: contract.budgetUsd,
     escalation: contract.escalation
   };
+}
+function requireStaticWorkflowBody(contract) {
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : void 0);
+  if (!body) {
+    throw new Error("Static workflow execution requires body.steps");
+  }
+  return body;
 }
 function flattenWorkflowSteps(steps, effectiveProfilesByStep, phaseId, depth = 0) {
   return steps.flatMap((step) => {
@@ -23182,6 +23337,7 @@ import { createHash } from "node:crypto";
 var compilerVersion = 1;
 function compileExecutionGraph(input) {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(input.contract);
+  const body = requireStaticWorkflowBody2(input.contract);
   const nodes = [
     {
       nodeId: "root",
@@ -23193,7 +23349,7 @@ function compileExecutionGraph(input) {
   ];
   const edges = [];
   const topLevelNodeIds = [];
-  input.contract.body.steps.forEach((step, index) => {
+  body.steps.forEach((step, index) => {
     const node = appendStepNode({
       step,
       parentNodeId: "root",
@@ -23234,6 +23390,13 @@ function compileExecutionGraph(input) {
     nodes,
     edges
   };
+}
+function requireStaticWorkflowBody2(contract) {
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : void 0);
+  if (!body) {
+    throw new Error("Execution graph compilation requires body.steps");
+  }
+  return body;
 }
 function appendStepNode(input) {
   const nodeKind = graphNodeKindForStep(input.step);
@@ -23592,9 +23755,8 @@ var LoopService = class {
   previewBaseUrl;
   async createLoopContract(input) {
     const timestamp2 = this.now();
-    const resolvedInput = resolveScriptContractInput(input);
     const contract = compileContractWithVerificationInputKind(
-      normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")),
+      normalizeFormalContractInput(input, input.id ?? this.nextId("loop")),
       timestamp2
     );
     validateContract(contract);
@@ -24214,7 +24376,8 @@ var LoopService = class {
       return request.prompt;
     }
     const contract = context.contractSnapshot;
-    const phase2 = contract ? findPipelinePhase(contract.body.steps, request.phaseId) : void 0;
+    const contractBody = contract ? staticWorkflowBody(contract) : void 0;
+    const phase2 = contractBody ? findPipelinePhase(contractBody.steps, request.phaseId) : void 0;
     if (!phase2) {
       return request.prompt;
     }
@@ -24399,7 +24562,7 @@ ${priorOutput}`;
       const runId = this.nextId("run");
       const attemptId = this.nextId("attempt");
       const workflowContextId = this.nextId("workflow");
-      const graphSnapshotId = launchContract ? this.nextId("graph") : void 0;
+      const graphSnapshotId = launchContract && staticWorkflowBody(launchContract) ? this.nextId("graph") : void 0;
       const memoryWindow = loopMemoryWindow(state, loopId);
       const prompt = buildCodexSessionPrompt(loop, goal, launchContract, {
         runId,
@@ -24652,7 +24815,8 @@ ${priorOutput}`;
       const targetContract = targetContext ? targetContext.contractSnapshot ?? state.formalContracts.find((candidate) => candidate.id === (targetContext.contractId ?? run.loopId)) : void 0;
       if (resultInput.status === "passed" && targetContext && targetContract) {
         const validationStepId = resultInput.stepId ?? targetTaskRun?.stepId;
-        const outputSchema = validationStepId ? findStepOutputSchema(targetContract.body.steps, validationStepId) : void 0;
+        const targetBody = staticWorkflowBody(targetContract);
+        const outputSchema = validationStepId && targetBody ? findStepOutputSchema(targetBody.steps, validationStepId) : void 0;
         if (outputSchema && resultInput.result !== void 0) {
           validateOutputAgainstSchema(resultInput.result, outputSchema);
         }
@@ -25415,7 +25579,7 @@ ${priorOutput}`;
     if (!input.contract && !input.patch) {
       throw new Error("Workflow revision requires a patch or contract");
     }
-    const revisionContractInput = input.contract ? resolveScriptContractInput({ ...input.contract, id: loopId }) : resolveScriptContractInput(applyContractPatch(baseContract, input.patch ?? {}));
+    const revisionContractInput = input.contract ? { ...input.contract, id: loopId } : applyContractPatch(baseContract, input.patch ?? {});
     const normalized = normalizeFormalContractInput(revisionContractInput, loopId);
     const contract = compileContractWithVerificationInputKind(
       {
@@ -26283,7 +26447,7 @@ function hasDefaultLegacyMigrationShape(policy) {
   if (policy.criteria.length === 0 && policy.validators.length === 0) return true;
   if (policy.validators.length !== 1) return false;
   const validator = policy.validators[0];
-  return validator.type === "rubric_agent" && validator.id === "rubric-agent" && validator.label === "Rubric review" && validator.scoreScale.min === 0 && validator.scoreScale.max === 1 && validator.passScore === 1 && validator.evidenceRequired === true && validator.severity === "must" && sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id));
+  return validator.type === "rubric_agent" && validator.id === "rubric-agent" && validator.label === "Rubric review" && (validator.scoreScale?.min ?? 0) === 0 && (validator.scoreScale?.max ?? 1) === 1 && (validator.passScore ?? 1) === 1 && (validator.evidenceRequired ?? true) === true && validator.severity === "must" && sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id));
 }
 function sameStringSet(left, right) {
   if (left.length !== right.length) return false;
@@ -26381,8 +26545,10 @@ function validateWorkflowSessionResultTarget(context, input) {
   return targetTaskRun;
 }
 function hasRemainingExecutableSteps(contract, context) {
+  const body = staticWorkflowBody(contract);
+  if (!body) return false;
   const completedSteps = new Set(Object.keys(completedWorkflowStepOutputs(context)));
-  return executableWorkflowStepIds(contract.body.steps).some((stepId) => !completedSteps.has(stepId));
+  return executableWorkflowStepIds(body.steps).some((stepId) => !completedSteps.has(stepId));
 }
 function executableWorkflowStepIds(steps) {
   return steps.flatMap((step) => {
@@ -26391,6 +26557,9 @@ function executableWorkflowStepIds(steps) {
     }
     return executableWorkflowStepIds(step.children);
   });
+}
+function staticWorkflowBody(contract) {
+  return contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : void 0);
 }
 function requireLoop(state, loopId) {
   const loop = state.loops.find((candidate) => candidate.id === loopId);
@@ -26440,30 +26609,8 @@ function requireWorkflowRevisionSessionContext(state, loopId, input, revision) {
   }
   return { run, attempt };
 }
-function resolveScriptContractInput(input) {
-  const { script, ...rest } = input;
-  if (!script) {
-    if (!rest.body) {
-      throw new Error("Loop contract requires body.steps or a script");
-    }
-    return rest;
-  }
-  if (rest.body) {
-    throw new Error("Loop contract cannot include both body and script");
-  }
-  const built = evalScriptAst(script);
-  return {
-    ...rest,
-    body: { steps: built.steps },
-    ...built.budgetUsd !== void 0 && rest.budgetUsd === void 0 ? { budgetUsd: built.budgetUsd } : {}
-  };
-}
 function normalizeFormalContractInput(input, id) {
-  const { codexProjectId, projectLabel, projectPath, projectBinding, script, body, ...contractInput } = input;
-  void script;
-  if (!body) {
-    throw new Error("Loop contract requires body.steps");
-  }
+  const { codexProjectId, projectLabel, projectPath, projectBinding, ...contractInput } = input;
   const normalizedProjectBinding = {
     codexProjectId: projectBinding?.codexProjectId ?? codexProjectId,
     projectLabel: projectBinding?.projectLabel ?? projectLabel,
@@ -26472,7 +26619,6 @@ function normalizeFormalContractInput(input, id) {
   const hasProjectBinding = Object.values(normalizedProjectBinding).some(Boolean);
   return {
     ...contractInput,
-    body,
     id,
     ...hasProjectBinding ? { projectBinding: normalizedProjectBinding } : {}
   };
@@ -26498,7 +26644,7 @@ function withVerificationInputKind(contract, inputKind) {
   };
 }
 function applyContractPatch(baseContract, patch) {
-  if (patch.script) {
+  if (patch.script !== void 0) {
     return {
       ...baseContract,
       ...patch,
@@ -26703,7 +26849,11 @@ function codexSessionSubagentsForContract(contract, prompt, status = "requested"
   if (!contract) {
     return [{ role: "loop-runner", status, prompt }];
   }
-  const agents = flattenWorkflowLaunchSteps(contract.body.steps, resolveEffectiveProfilesByStep(contract)).filter((step) => step.kind === "agent" || step.kind === "task").map((step) => ({
+  const body = staticWorkflowBody(contract);
+  if (!body) {
+    return [{ role: "runtime-script", status, prompt }];
+  }
+  const agents = flattenWorkflowLaunchSteps(body.steps, resolveEffectiveProfilesByStep(contract)).filter((step) => step.kind === "agent" || step.kind === "task").map((step) => ({
     stepId: step.id,
     phaseId: step.phaseId,
     role: step.label,
@@ -27670,6 +27820,7 @@ function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow, 
 }
 function buildWorkflowLaunch(contract) {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+  const body = staticWorkflowBody(contract);
   return {
     workflowRuntime: "dittosloop-local-workflow",
     workflowContractId: contract.id,
@@ -27677,7 +27828,7 @@ function buildWorkflowLaunch(contract) {
       runtime: "dittosloop-local-workflow",
       contractId: contract.id,
       goal: contract.goal,
-      steps: flattenWorkflowLaunchSteps(contract.body.steps, effectiveProfilesByStep),
+      steps: body ? flattenWorkflowLaunchSteps(body.steps, effectiveProfilesByStep) : [],
       verification: workflowLaunchVerification(contract.verification),
       repairPolicy: contract.repairPolicy,
       stopPolicy: contract.stopPolicy,
@@ -27728,6 +27879,10 @@ function flattenWorkflowLaunchSteps(steps, effectiveProfilesByStep, phaseId, dep
 }
 function formatWorkflowSteps(contract) {
   const lines = [];
+  const body = staticWorkflowBody(contract);
+  if (!body) {
+    return "- runtime_script workflow: javascript source";
+  }
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
   const visit = (steps, depth) => {
     for (const step of steps) {
@@ -27745,7 +27900,7 @@ function formatWorkflowSteps(contract) {
       }
     }
   };
-  visit(contract.body.steps, 0);
+  visit(body.steps, 0);
   return lines.join("\n");
 }
 function formatAgentProfiles(contract, profilePreflight) {
@@ -27897,6 +28052,13 @@ var scriptCallSchema = external_exports.object({
 var scriptSchema = external_exports.object({
   build: external_exports.array(scriptCallSchema).min(1)
 });
+var runtimeScriptLimitsSchema = external_exports.object({
+  timeoutMs: external_exports.number().int().positive().optional(),
+  maxAgentCalls: external_exports.number().int().positive().optional(),
+  maxParallelBranches: external_exports.number().int().positive().optional(),
+  maxPipelineItems: external_exports.number().int().positive().optional(),
+  maxLogChars: external_exports.number().int().positive().optional()
+}).strict();
 var verificationCriterionSchema = external_exports.object({
   id: external_exports.string().min(1),
   label: external_exports.string().min(1),
@@ -27946,12 +28108,15 @@ var rubricAgentValidatorSchema = external_exports.object({
   type: external_exports.literal("rubric_agent"),
   label: external_exports.string().min(1),
   criteriaIds: external_exports.array(external_exports.string().min(1)).min(1),
+  prompt: external_exports.string().min(1),
   scoreScale: external_exports.object({
     min: external_exports.number().finite(),
     max: external_exports.number().finite()
-  }),
-  passScore: external_exports.number().finite(),
-  evidenceRequired: external_exports.boolean(),
+  }).optional(),
+  passScore: external_exports.number().finite().optional(),
+  evidenceRequired: external_exports.boolean().optional(),
+  subagent: subagentSchema.optional(),
+  allowSelfReview: external_exports.boolean().optional(),
   severity: verificationSeveritySchema
 });
 var verificationValidatorSchema = external_exports.discriminatedUnion("type", [
@@ -27970,9 +28135,12 @@ var createLoopContractObjectSchema = external_exports.object({
   id: external_exports.string().min(1).optional(),
   title: external_exports.string().min(1),
   goal: external_exports.string().min(1),
+  workflowKind: external_exports.enum(["static_steps", "runtime_script"]).optional(),
   intent: external_exports.string().optional(),
   body: external_exports.object({ steps: external_exports.array(stepSchema).min(1) }).optional(),
-  script: scriptSchema.optional(),
+  script: external_exports.union([scriptSchema, external_exports.string().min(1)]).optional(),
+  args: external_exports.record(external_exports.unknown()).optional(),
+  limits: runtimeScriptLimitsSchema.optional(),
   verification: verificationV2Schema,
   repairPolicy: external_exports.object({
     maxAttempts: external_exports.number().int().nonnegative(),
@@ -27991,10 +28159,43 @@ var createLoopContractObjectSchema = external_exports.object({
     projectPath: external_exports.string().optional()
   }).optional()
 });
-var createLoopContractSchema = createLoopContractObjectSchema.refine(
-  (value) => Boolean(value.body) !== Boolean(value.script),
-  { message: "exactly one of body or script is required" }
-);
+var createLoopContractSchema = createLoopContractObjectSchema.superRefine(validateCreateLoopContractInput);
+function validateCreateLoopContractInput(input, ctx) {
+  if (input.body && input.script !== void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "exactly one of body or script is required; choose either body.steps or script, not both",
+      path: ["script"]
+    });
+  }
+  if (!input.body && input.script === void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "exactly one of body or script is required"
+    });
+  }
+  if (input.body && input.workflowKind === "runtime_script") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "body.steps cannot be used with workflowKind runtime_script",
+      path: ["body"]
+    });
+  }
+  if (typeof input.script === "string" && input.workflowKind !== "runtime_script") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: 'string script requires workflowKind: "runtime_script"',
+      path: ["workflowKind"]
+    });
+  }
+  if (input.script !== void 0 && typeof input.script !== "string" && input.workflowKind === "runtime_script") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "script.build is a static_steps builder script; use a string script with workflowKind runtime_script",
+      path: ["script"]
+    });
+  }
+}
 var startCodexSessionSchema = external_exports.object({
   loopId: external_exports.string().min(1),
   goal: external_exports.string().optional(),
@@ -29473,7 +29674,8 @@ function createEmptyState() {
     humanRequests: [],
     memoryCommits: [],
     loopMemories: [],
-    artifacts: []
+    artifacts: [],
+    runtimeScriptJournals: []
   };
 }
 var LoopStore = class {
@@ -29543,7 +29745,8 @@ function normalizeState(value) {
     })),
     memoryCommits: value?.memoryCommits ?? [],
     loopMemories: deriveLoopMemories(value?.loopMemories ?? [], value?.memoryCommits ?? []),
-    artifacts: value?.artifacts ?? []
+    artifacts: value?.artifacts ?? [],
+    runtimeScriptJournals: value?.runtimeScriptJournals ?? []
   };
   return {
     ...state,
