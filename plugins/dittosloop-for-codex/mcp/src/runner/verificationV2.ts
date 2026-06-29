@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -79,6 +81,13 @@ export interface ScriptValidatorResult extends ValidatorResultBase {
   timedOut?: boolean;
   score?: number;
   output?: unknown;
+}
+
+interface ScriptCriteriaResult {
+  criterionId: string;
+  status: VerificationDecisionStatus;
+  score?: number;
+  evidence?: string | string[];
 }
 
 export type ValidatorResult =
@@ -400,6 +409,22 @@ async function runScriptValidator(
 ): Promise<ScriptValidatorResult> {
   const executor = input.commandExecutor ?? defaultCommandExecutor;
   const cwd = resolveScriptCwd(validator, input);
+  const checksumCheck = await verifyScriptChecksum(validator, cwd);
+  if (!checksumCheck.ok) {
+    return {
+      validatorId: validator.id,
+      type: "script",
+      label: validator.label,
+      severity: validator.severity,
+      criteriaIds: validator.criteriaIds,
+      status: "failed",
+      summary: checksumCheck.summary,
+      evidence: checksumCheck.evidence,
+      runtime: validator.runtime,
+      scriptPath: validator.scriptRef.path,
+      cwd
+    };
+  }
   const execution = await executor({
     command: scriptRuntimeCommand(validator.runtime),
     args: [validator.scriptRef.path, ...(validator.scriptRef.args ?? [])],
@@ -407,7 +432,7 @@ async function runScriptValidator(
     timeoutMs: validator.scriptRef.timeoutMs,
     stdin: JSON.stringify(scriptValidatorInputEnvelope(validator, input))
   });
-  const parsed = parseScriptVerificationJson(execution.stdout);
+  const parsed = parseScriptVerificationJson(execution.stdout, validator);
   const stdout = truncateEvidence(execution.stdout);
   const stderr = truncateEvidence(execution.stderr);
   const error = execution.error ? truncateEvidence(execution.error) : undefined;
@@ -471,6 +496,42 @@ async function runScriptValidator(
   };
 }
 
+async function verifyScriptChecksum(
+  validator: VerificationScriptValidator,
+  cwd: string | undefined
+): Promise<{ ok: true } | { ok: false; summary: string; evidence: string }> {
+  const scriptPath = resolveExecutablePath(validator.scriptRef.path, cwd);
+  let content: Buffer;
+
+  try {
+    content = await readFile(scriptPath);
+  } catch (error) {
+    return {
+      ok: false,
+      summary: `Script validator ${validator.id} checksum verification failed.`,
+      evidence: `Unable to read script file at ${scriptPath}: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+
+  const actualChecksum = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+  if (actualChecksum !== validator.scriptRef.checksum) {
+    return {
+      ok: false,
+      summary: `Script validator ${validator.id} checksum verification failed.`,
+      evidence: `Expected ${validator.scriptRef.checksum} but found ${actualChecksum} for ${scriptPath}.`
+    };
+  }
+
+  return { ok: true };
+}
+
+function resolveExecutablePath(scriptPath: string, cwd: string | undefined): string {
+  if (path.isAbsolute(scriptPath)) {
+    return scriptPath;
+  }
+  return path.resolve(cwd ?? process.cwd(), scriptPath);
+}
+
 function scriptRuntimeCommand(runtime: VerificationScriptValidator["runtime"]): string {
   return runtime === "python" ? "python3" : "node";
 }
@@ -492,7 +553,8 @@ function scriptValidatorInputEnvelope(
 }
 
 function parseScriptVerificationJson(
-  stdout: string
+  stdout: string,
+  validator: VerificationScriptValidator
 ):
   | {
       ok: true;
@@ -502,6 +564,7 @@ function parseScriptVerificationJson(
         evidence?: string;
         score?: number;
         output?: unknown;
+        criteriaResults?: ScriptCriteriaResult[];
       };
     }
   | { ok: false; error: string } {
@@ -537,17 +600,28 @@ function parseScriptVerificationJson(
 
   const evidence = normalizeScriptEvidence(record.evidence);
   if (record.evidence !== undefined && evidence === undefined) {
-    return { ok: false, error: "JSON output evidence must be a string or array of strings." };
+    return { ok: false, error: "JSON output evidence must be a non-empty string or array of non-empty strings." };
   }
+
+  const criteriaResults = parseScriptCriteriaResults(record.criteriaResults, validator);
+  if (!criteriaResults.ok) {
+    return criteriaResults;
+  }
+
+  const combinedEvidence = mergeEvidence([
+    evidence,
+    ...criteriaResults.value.flatMap((criterionResult) => normalizeEvidenceParts(criterionResult.evidence))
+  ]);
 
   return {
     ok: true,
     value: {
       status,
       summary,
-      evidence,
+      evidence: combinedEvidence,
       score,
-      output: record.output
+      output: record.output ?? (criteriaResults.value.length > 0 ? { criteriaResults: criteriaResults.value } : undefined),
+      criteriaResults: criteriaResults.value.length > 0 ? criteriaResults.value : undefined
     }
   };
 }
@@ -557,12 +631,94 @@ function normalizeScriptEvidence(value: unknown): string | undefined {
     return undefined;
   }
   if (typeof value === "string") {
-    return value;
+    return value.trim().length > 0 ? value : undefined;
   }
-  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim().length > 0)) {
     return value.join("\n");
   }
   return undefined;
+}
+
+function parseScriptCriteriaResults(
+  value: unknown,
+  validator: VerificationScriptValidator
+): { ok: true; value: ScriptCriteriaResult[] } | { ok: false; error: string } {
+  if (value === undefined) {
+    return { ok: true, value: [] };
+  }
+  if (!Array.isArray(value)) {
+    return { ok: false, error: "JSON output criteriaResults must be an array when provided." };
+  }
+
+  const allowedCriterionIds = new Set(validator.criteriaIds);
+  const results: ScriptCriteriaResult[] = [];
+
+  for (const [index, candidate] of value.entries()) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return { ok: false, error: `criteriaResults[${index}] must be an object.` };
+    }
+
+    const record = candidate as Record<string, unknown>;
+    const criterionId = record.criterionId;
+    if (typeof criterionId !== "string" || criterionId.trim().length === 0) {
+      return { ok: false, error: `criteriaResults[${index}].criterionId must be a non-empty string.` };
+    }
+    if (!allowedCriterionIds.has(criterionId)) {
+      return { ok: false, error: `criteriaResults[${index}].criterionId must be covered by the validator criteriaIds.` };
+    }
+
+    const status = record.status;
+    if (status !== "passed" && status !== "failed" && status !== "needs_human") {
+      return { ok: false, error: `criteriaResults[${index}].status must be passed, failed, or needs_human.` };
+    }
+
+    const score = record.score;
+    if (score !== undefined && (typeof score !== "number" || !Number.isFinite(score))) {
+      return { ok: false, error: `criteriaResults[${index}].score must be a finite number when provided.` };
+    }
+
+    const evidence = normalizeCriteriaEvidence(record.evidence);
+    if (record.evidence !== undefined && evidence === undefined) {
+      return {
+        ok: false,
+        error: `criteriaResults[${index}].evidence must be a non-empty string or array of non-empty strings.`
+      };
+    }
+
+    results.push({
+      criterionId,
+      status,
+      score,
+      evidence
+    });
+  }
+
+  return { ok: true, value: results };
+}
+
+function normalizeCriteriaEvidence(value: unknown): string | string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? value : undefined;
+  }
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim().length > 0)) {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeEvidenceParts(value: string | string[] | undefined): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
+function mergeEvidence(values: Array<string | undefined>): string | undefined {
+  const parts = values.flatMap((value) => (value ? [value] : []));
+  return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
 function readScoreSource(

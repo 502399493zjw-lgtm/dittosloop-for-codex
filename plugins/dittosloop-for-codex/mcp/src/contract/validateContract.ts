@@ -426,6 +426,7 @@ function validateScriptValidator(validator: VerificationScriptValidator, errors:
 
 function validateScriptRef(validator: VerificationScriptValidator, errors: string[]): void {
   const ref = validator.scriptRef;
+  const checksumPattern = /^sha256:[0-9a-f]{64}$/;
   if (!ref || typeof ref !== "object") {
     errors.push("script validator scriptRef is required");
     return;
@@ -437,6 +438,8 @@ function validateScriptRef(validator: VerificationScriptValidator, errors: strin
   }
   if (!ref.checksum || ref.checksum.trim().length === 0) {
     errors.push("script validator scriptRef.checksum is required");
+  } else if (!checksumPattern.test(ref.checksum)) {
+    errors.push("script validator scriptRef.checksum must match sha256:<64 hex characters>");
   }
   if (!Number.isInteger(ref.timeoutMs) || ref.timeoutMs <= 0) {
     errors.push("script validator scriptRef.timeoutMs must be a positive integer");

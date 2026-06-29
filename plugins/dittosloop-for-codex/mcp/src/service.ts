@@ -17,7 +17,7 @@ import type {
 import { validateContract } from "./contract/validateContract.js";
 import type { AgentRequest, AgentResult, EngineEvent, EngineEventInput, Executor } from "./engine/types.js";
 import { buildWorkflowExecutionPlan, LoopRunner, type LoopRunResult, type LoopVerifier } from "./runner/loopRunner.js";
-import { runContractVerification } from "./runner/contractVerification.js";
+import { runContractVerification, toEngineVerificationEvent } from "./runner/contractVerification.js";
 import { shouldRepair } from "./runner/repair.js";
 import type { VerificationDecision, VerificationDecisionStatus } from "./runner/verifier.js";
 import {
@@ -2211,6 +2211,17 @@ export class LoopService {
       );
     }
 
+    const detailBeforeFinalization = await this.getRunDetail(runId);
+    let sequence = latestEngineEventSequence(detailBeforeFinalization.events);
+    const engineEvents: EngineEvent[] = [];
+    const emitRuntimeEvent = (event: EngineEventInput): void => {
+      engineEvents.push({
+        ...event,
+        runId,
+        createdAt: timestamp,
+        sequence: ++sequence
+      } as EngineEvent);
+    };
     const result = await runVerificationV2({
       id: this.nextId("verification"),
       runId,
@@ -2220,8 +2231,10 @@ export class LoopService {
       workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
       projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
       contractWorkspacePath: await this.syncLoopWorkspace(loopId),
-      priorValidatorResults: contextAfterWrite.verification.validatorResults
+      priorValidatorResults: contextAfterWrite.verification.validatorResults,
+      emit: (event) => emitRuntimeEvent(toEngineVerificationEvent(event, contextAfterWrite!.attemptId))
     });
+    await this.recordEngineEvents(runId, engineEvents);
     await this.finalizeV2Verification(runId, contextAfterWrite.id, result);
 
     return result;

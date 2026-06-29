@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -172,256 +173,375 @@ test("verification v2 does not auto-pass rubric agents or unloaded artifacts", a
 });
 
 test("verification v2 script validators emit failed results instead of crashing", async () => {
-  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+  const workspace = createScriptWorkspace();
   const events: string[] = [];
 
-  const result = await runVerificationV2({
-    id: "verification_1",
-    runId: "run_1",
-    attemptId: "attempt_1",
-    createdAt: "2026-06-26T00:00:00.000Z",
-    policy,
-    workflowResult: {},
-    contractWorkspacePath: "/loop-workspace",
-    commandExecutor: async () => ({
-      exitCode: 1,
-      stdout: "",
-      stderr: "script boom"
-    }),
-    emit: (event) => {
-      events.push(event.type);
-    }
-  });
-
-  expect(result).toMatchObject({
-    status: "failed",
-    validatorResults: [
-      {
-        validatorId: "release-note-script",
-        type: "script",
-        status: "failed",
-        criteriaIds: ["tests-pass"]
+  try {
+    const policy = verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]);
+    const result = await runVerificationV2({
+      id: "verification_1",
+      runId: "run_1",
+      attemptId: "attempt_1",
+      createdAt: "2026-06-26T00:00:00.000Z",
+      policy,
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "script boom"
+      }),
+      emit: (event) => {
+        events.push(event.type);
       }
-    ]
-  });
-  expect(result.validatorResults[0]?.summary).toContain("failed to execute");
-  expect(result.validatorResults[0]?.evidence).toContain("stderr:");
-  expect(events).toEqual(["validator_started", "validator_done", "verification_decided"]);
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      validatorResults: [
+        {
+          validatorId: "release-note-script",
+          type: "script",
+          status: "failed",
+          criteriaIds: ["tests-pass"]
+        }
+      ]
+    });
+    expect(result.validatorResults[0]?.summary).toContain("failed to execute");
+    expect(result.validatorResults[0]?.evidence).toContain("stderr:");
+    expect(events).toEqual(["validator_started", "validator_done", "verification_decided"]);
+  } finally {
+    workspace.cleanup();
+  }
 });
 
 test("verification v2 script validators parse structured JSON results", async () => {
+  const workspace = createScriptWorkspace();
   const requests: Array<{ command: string; args: string[]; cwd?: string; stdin?: string }> = [];
-  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+  try {
+    const policy = verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]);
+    const result = await runVerificationV2({
+      id: "verification_script",
+      runId: "run_1",
+      attemptId: "attempt_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy,
+      workflowResult: { releaseNotes: "All changes covered." },
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async (request) => {
+        requests.push(request);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            status: "passed",
+            score: 0.92,
+            summary: "Release notes cover all changes.",
+            evidence: ["Matched 8 of 8 commits."],
+            criteriaResults: [
+              {
+                criterionId: "tests-pass",
+                status: "passed",
+                score: 0.92,
+                evidence: "Every user-facing change is represented."
+              }
+            ],
+            output: { matchedCommits: 8, totalCommits: 8 }
+          }),
+          stderr: ""
+        };
+      }
+    });
 
-  const result = await runVerificationV2({
-    id: "verification_script",
-    runId: "run_1",
-    attemptId: "attempt_1",
-    createdAt: "2026-06-29T00:00:00.000Z",
-    policy,
-    workflowResult: { releaseNotes: "All changes covered." },
-    contractWorkspacePath: "/loop-workspace",
-    commandExecutor: async (request) => {
-      requests.push(request);
-      return {
+    expect(requests[0]).toMatchObject({
+      command: "node",
+      args: ["evaluators/release-note-script/evaluator.mjs"],
+      cwd: workspace.tempDir
+    });
+    expect(JSON.parse(requests[0].stdin ?? "{}")).toMatchObject({
+      validatorId: "release-note-script",
+      workflowResult: { releaseNotes: "All changes covered." }
+    });
+    expect(result).toMatchObject({
+      status: "passed",
+      validatorResults: [
+        {
+          validatorId: "release-note-script",
+          type: "script",
+          status: "passed",
+          score: 0.92,
+          evidence: "Matched 8 of 8 commits.\nEvery user-facing change is represented."
+        }
+      ]
+    });
+  } finally {
+    workspace.cleanup();
+  }
+});
+
+test("verification v2 script validators preserve criteriaResults in output when output is omitted", async () => {
+  const workspace = createScriptWorkspace();
+
+  try {
+    const result = await runVerificationV2({
+      id: "verification_script_criteria_output",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy: verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]),
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => ({
         exitCode: 0,
         stdout: JSON.stringify({
           status: "passed",
-          score: 0.92,
-          summary: "Release notes cover all changes.",
-          evidence: ["Matched 8 of 8 commits."],
+          summary: "Criterion details retained.",
           criteriaResults: [
             {
               criterionId: "tests-pass",
               status: "passed",
-              score: 0.92,
-              evidence: "Every user-facing change is represented."
+              score: 1,
+              evidence: ["Detailed criterion evidence"]
             }
-          ],
-          output: { matchedCommits: 8, totalCommits: 8 }
+          ]
         }),
         stderr: ""
-      };
-    }
-  });
+      })
+    });
 
-  expect(requests[0]).toMatchObject({
-    command: "node",
-    args: ["evaluators/release-note-script/evaluator.mjs"],
-    cwd: "/loop-workspace"
-  });
-  expect(JSON.parse(requests[0].stdin ?? "{}")).toMatchObject({
-    validatorId: "release-note-script",
-    workflowResult: { releaseNotes: "All changes covered." }
-  });
-  expect(result).toMatchObject({
-    status: "passed",
-    validatorResults: [
-      {
-        validatorId: "release-note-script",
-        type: "script",
-        status: "passed",
-        score: 0.92,
-        evidence: "Matched 8 of 8 commits."
+    expect(result.validatorResults[0]).toMatchObject({
+      validatorId: "release-note-script",
+      output: {
+        criteriaResults: [
+          {
+            criterionId: "tests-pass",
+            status: "passed",
+            score: 1,
+            evidence: ["Detailed criterion evidence"]
+          }
+        ]
       }
-    ]
-  });
+    });
+  } finally {
+    workspace.cleanup();
+  }
+});
+
+test("verification v2 script validators treat criterion evidence as satisfying evidence policy", async () => {
+  const workspace = createScriptWorkspace();
+
+  try {
+    const result = await runVerificationV2({
+      id: "verification_script_criteria_evidence",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy: verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]),
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          status: "passed",
+          summary: "Criterion evidence only.",
+          criteriaResults: [
+            {
+              criterionId: "tests-pass",
+              status: "passed",
+              evidence: ["Evidence came from the criterion result."]
+            }
+          ]
+        }),
+        stderr: ""
+      })
+    });
+
+    expect(result).toMatchObject({
+      status: "passed",
+      validatorResults: [
+        expect.objectContaining({
+          validatorId: "release-note-script",
+          status: "passed",
+          evidence: "Evidence came from the criterion result."
+        })
+      ]
+    });
+  } finally {
+    workspace.cleanup();
+  }
 });
 
 test("verification v2 script validators fail on invalid JSON output", async () => {
-  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+  const workspace = createScriptWorkspace();
 
-  const result = await runVerificationV2({
-    id: "verification_script_invalid",
-    runId: "run_1",
-    createdAt: "2026-06-29T00:00:00.000Z",
-    policy,
-    workflowResult: {},
-    contractWorkspacePath: "/loop-workspace",
-    commandExecutor: async () => ({
-      exitCode: 0,
-      stdout: "not-json",
-      stderr: "warning"
-    })
-  });
+  try {
+    const policy = verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]);
+    const result = await runVerificationV2({
+      id: "verification_script_invalid",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy,
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => ({
+        exitCode: 0,
+        stdout: "not-json",
+        stderr: "warning"
+      })
+    });
 
-  expect(result).toMatchObject({
-    status: "failed",
-    validatorResults: [
-      {
-        validatorId: "release-note-script",
-        type: "script",
-        status: "failed",
-        summary: "Script validator release-note-script did not return valid verification_result_v1 JSON."
-      }
-    ]
-  });
-  expect(result.validatorResults[0]?.evidence).toContain("stdout:");
+    expect(result).toMatchObject({
+      status: "failed",
+      validatorResults: [
+        {
+          validatorId: "release-note-script",
+          type: "script",
+          status: "failed",
+          summary: "Script validator release-note-script did not return valid verification_result_v1 JSON."
+        }
+      ]
+    });
+    expect(result.validatorResults[0]?.evidence).toContain("stdout:");
+  } finally {
+    workspace.cleanup();
+  }
 });
 
 test("verification v2 script validators require evidence when validator marks it required", async () => {
-  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+  const workspace = createScriptWorkspace();
 
-  const result = await runVerificationV2({
-    id: "verification_script_missing_evidence",
-    runId: "run_1",
-    createdAt: "2026-06-29T00:00:00.000Z",
-    policy,
-    workflowResult: {},
-    contractWorkspacePath: "/loop-workspace",
-    commandExecutor: async () => ({
-      exitCode: 0,
-      stdout: JSON.stringify({
-        status: "passed",
-        score: 1,
-        summary: "Structured result but no evidence."
-      }),
-      stderr: ""
-    })
-  });
+  try {
+    const policy = verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]);
+    const result = await runVerificationV2({
+      id: "verification_script_missing_evidence",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy,
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          status: "passed",
+          score: 1,
+          summary: "Structured result but no evidence."
+        }),
+        stderr: ""
+      })
+    });
 
-  expect(result).toMatchObject({
-    status: "needs_human",
-    decision: {
-      needsHumanValidatorIds: ["release-note-script"],
-      humanQuestion: "Review required for validators: release-note-script"
-    }
-  });
+    expect(result).toMatchObject({
+      status: "needs_human",
+      decision: {
+        needsHumanValidatorIds: ["release-note-script"],
+        humanQuestion: "Review required for validators: release-note-script"
+      }
+    });
+  } finally {
+    workspace.cleanup();
+  }
 });
 
 test("verification v2 script validators cannot pass without required evidence", async () => {
-  const validator = scriptValidatorFixture();
+  const workspace = createScriptWorkspace();
+  const validator = scriptValidatorFixture({ checksum: workspace.checksum });
   if (validator.type !== "script") {
     throw new Error("expected script validator");
   }
   const policy = verificationPolicyWithValidators([{ ...validator, evidenceRequired: false }]);
   policy.decision.requireEvidenceForScriptResults = true;
 
-  const result = await runVerificationV2({
-    id: "verification_script_no_evidence",
-    runId: "run_1",
-    createdAt: "2026-06-29T00:00:00.000Z",
-    policy,
-    workflowResult: {},
-    contractWorkspacePath: "/loop-workspace",
-    commandExecutor: async () => ({
-      exitCode: 0,
-      stdout: JSON.stringify({
-        status: "passed",
-        score: 1,
-        summary: "Looks good."
-      }),
-      stderr: ""
-    })
-  });
+  try {
+    const result = await runVerificationV2({
+      id: "verification_script_no_evidence",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy,
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          status: "passed",
+          score: 1,
+          summary: "Looks good."
+        }),
+        stderr: ""
+      })
+    });
 
-  expect(result).toMatchObject({
-    status: "needs_human",
-    decision: {
-      needsHumanValidatorIds: ["release-note-script"]
-    }
-  });
+    expect(result).toMatchObject({
+      status: "needs_human",
+      decision: {
+        needsHumanValidatorIds: ["release-note-script"]
+      }
+    });
+  } finally {
+    workspace.cleanup();
+  }
 });
 
 test("verification v2 script validators surface missing required evidence in visible results", async () => {
-  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+  const workspace = createScriptWorkspace();
   const validatorDoneResults: Array<{ validatorId: string; status: string; summary: string }> = [];
 
-  const result = await runVerificationV2({
-    id: "verification_script_visible_no_evidence",
-    runId: "run_1",
-    createdAt: "2026-06-29T00:00:00.000Z",
-    policy,
-    workflowResult: {},
-    contractWorkspacePath: "/loop-workspace",
-    commandExecutor: async () => ({
-      exitCode: 0,
-      stdout: JSON.stringify({
-        status: "passed",
-        score: 1,
-        summary: "Structured result but no evidence."
+  try {
+    const policy = verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]);
+    const result = await runVerificationV2({
+      id: "verification_script_visible_no_evidence",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy,
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          status: "passed",
+          score: 1,
+          summary: "Structured result but no evidence."
+        }),
+        stderr: ""
       }),
-      stderr: ""
-    }),
-    emit: (event) => {
-      if (event.type === "validator_done") {
-        validatorDoneResults.push({
-          validatorId: event.result.validatorId,
-          status: event.result.status,
-          summary: event.result.summary
-        });
+      emit: (event) => {
+        if (event.type === "validator_done") {
+          validatorDoneResults.push({
+            validatorId: event.result.validatorId,
+            status: event.result.status,
+            summary: event.result.summary
+          });
+        }
       }
-    }
-  });
+    });
 
-  expect(result).toMatchObject({
-    status: "needs_human",
-    checks: [
-      {
-        rubricId: "tests-pass",
-        status: "needs_human"
-      }
-    ],
-    validatorResults: [
+    expect(result).toMatchObject({
+      status: "needs_human",
+      checks: [
+        {
+          rubricId: "tests-pass",
+          status: "needs_human"
+        }
+      ],
+      validatorResults: [
+        {
+          validatorId: "release-note-script",
+          type: "script",
+          status: "needs_human",
+          summary: "Script validator result requires evidence."
+        }
+      ]
+    });
+    expect(validatorDoneResults).toEqual([
       {
         validatorId: "release-note-script",
-        type: "script",
         status: "needs_human",
         summary: "Script validator result requires evidence."
       }
-    ]
-  });
-  expect(validatorDoneResults).toEqual([
-    {
-      validatorId: "release-note-script",
-      status: "needs_human",
-      summary: "Script validator result requires evidence."
-    }
-  ]);
+    ]);
+  } finally {
+    workspace.cleanup();
+  }
 });
 
 test("verification v2 script validators parse valid long JSON stdout before truncating stored logs", async () => {
-  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+  const workspace = createScriptWorkspace();
   const longEvidence = "x".repeat(MAX_EVIDENCE_CHARS);
   const stdout = JSON.stringify({
     status: "passed",
@@ -430,35 +550,143 @@ test("verification v2 script validators parse valid long JSON stdout before trun
     evidence: [longEvidence]
   });
 
-  const result = await runVerificationV2({
-    id: "verification_script_long_stdout",
-    runId: "run_1",
-    createdAt: "2026-06-29T00:00:00.000Z",
-    policy,
-    workflowResult: {},
-    contractWorkspacePath: "/loop-workspace",
-    commandExecutor: async () => ({
-      exitCode: 0,
-      stdout,
-      stderr: ""
-    })
-  });
+  try {
+    const policy = verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]);
+    const result = await runVerificationV2({
+      id: "verification_script_long_stdout",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy,
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => ({
+        exitCode: 0,
+        stdout,
+        stderr: ""
+      })
+    });
 
-  expect(result).toMatchObject({
-    status: "passed",
-    validatorResults: [
-      {
+    expect(result).toMatchObject({
+      status: "passed",
+      validatorResults: [
+        {
+          validatorId: "release-note-script",
+          type: "script",
+          status: "passed",
+          summary: "Long payload is still valid.",
+          evidence: longEvidence
+        }
+      ]
+    });
+    expect(result.validatorResults[0]).toMatchObject({
+      stdout: expect.stringContaining("[truncated]")
+    });
+  } finally {
+    workspace.cleanup();
+  }
+});
+
+test("verification v2 script validators reject invalid criteriaResults shapes", async () => {
+  const invalidOutputs = [
+    {
+      label: "unknown criterion",
+      payload: {
+        status: "passed",
+        summary: "bad criterion",
+        criteriaResults: [{ criterionId: "missing", status: "passed" }]
+      },
+      message: "criterionId must be covered by the validator criteriaIds"
+    },
+    {
+      label: "invalid status",
+      payload: {
+        status: "passed",
+        summary: "bad status",
+        criteriaResults: [{ criterionId: "tests-pass", status: "unknown" }]
+      },
+      message: "status must be passed, failed, or needs_human"
+    },
+    {
+      label: "invalid score",
+      payload: {
+        status: "passed",
+        summary: "bad score",
+        criteriaResults: [{ criterionId: "tests-pass", status: "passed", score: "high" }]
+      },
+      message: "score must be a finite number"
+    },
+    {
+      label: "invalid evidence",
+      payload: {
+        status: "passed",
+        summary: "bad evidence",
+        criteriaResults: [{ criterionId: "tests-pass", status: "passed", evidence: ["ok", ""] }]
+      },
+      message: "evidence must be a non-empty string or array of non-empty strings"
+    }
+  ];
+
+  for (const invalidOutput of invalidOutputs) {
+    const workspace = createScriptWorkspace();
+    try {
+      const result = await runVerificationV2({
+        id: `verification_script_invalid_${invalidOutput.label.replace(/\s+/g, "_")}`,
+        runId: "run_1",
+        createdAt: "2026-06-29T00:00:00.000Z",
+        policy: verificationPolicyWithValidators([scriptValidatorFixture({ checksum: workspace.checksum })]),
+        workflowResult: {},
+        contractWorkspacePath: workspace.tempDir,
+        commandExecutor: async () => ({
+          exitCode: 0,
+          stdout: JSON.stringify(invalidOutput.payload),
+          stderr: ""
+        })
+      });
+
+      expect(result.validatorResults[0]).toMatchObject({
         validatorId: "release-note-script",
         type: "script",
-        status: "passed",
-        summary: "Long payload is still valid.",
-        evidence: longEvidence
+        status: "failed",
+        summary: "Script validator release-note-script did not return valid verification_result_v1 JSON."
+      });
+      expect(result.validatorResults[0]?.evidence).toContain(invalidOutput.message);
+    } finally {
+      workspace.cleanup();
+    }
+  }
+});
+
+test("verification v2 script validators fail checksum mismatches before execution", async () => {
+  const workspace = createScriptWorkspace();
+  let invoked = false;
+
+  try {
+    const result = await runVerificationV2({
+      id: "verification_script_checksum_mismatch",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy: verificationPolicyWithValidators([scriptValidatorFixture({
+        checksum: `sha256:${"f".repeat(64)}`
+      })]),
+      workflowResult: {},
+      contractWorkspacePath: workspace.tempDir,
+      commandExecutor: async () => {
+        invoked = true;
+        return { exitCode: 0, stdout: "", stderr: "" };
       }
-    ]
-  });
-  expect(result.validatorResults[0]).toMatchObject({
-    stdout: expect.stringContaining("[truncated]")
-  });
+    });
+
+    expect(invoked).toBe(false);
+    expect(result.validatorResults[0]).toMatchObject({
+      validatorId: "release-note-script",
+      type: "script",
+      status: "failed",
+      summary: "Script validator release-note-script checksum verification failed."
+    });
+    expect(result.validatorResults[0]?.evidence).toContain(workspace.checksum);
+  } finally {
+    workspace.cleanup();
+  }
 });
 
 test("verification v2 uncovered must criteria fail aggregation", () => {
@@ -582,11 +810,21 @@ test("default command executor pipes stdin to child processes for script validat
   );
 
   try {
+    const checksum = checksumForContent([
+      "let input = '';",
+      "for await (const chunk of process.stdin) input += chunk;",
+      "const payload = JSON.parse(input);",
+      "process.stdout.write(JSON.stringify({",
+      "  status: 'passed',",
+      "  summary: 'stdin received',",
+      "  evidence: [`releaseNotes=${payload.workflowResult.releaseNotes}`]",
+      "}));"
+    ].join("\n"));
     const result = await runVerificationV2({
       id: "verification_script_stdin",
       runId: "run_1",
       createdAt: "2026-06-29T00:00:00.000Z",
-      policy: verificationPolicyWithValidators([scriptValidatorFixture()]),
+      policy: verificationPolicyWithValidators([scriptValidatorFixture({ checksum })]),
       workflowResult: { releaseNotes: "from-stdin" },
       contractWorkspacePath: tempDir
     });
@@ -619,12 +857,28 @@ function verificationPolicyWithValidators(validators: VerificationPolicyV2["vali
       requireAllMustCriteriaCovered: true,
       failOnMustValidatorFailure: true,
       failOnShouldValidatorFailure: false,
-      requireEvidenceForAgentScores: true
+      requireEvidenceForAgentScores: true,
+      requireEvidenceForScriptResults: true
     }
   };
 }
 
-function scriptValidatorFixture(): VerificationPolicyV2["validators"][number] {
+function scriptValidatorFixture(
+  overrides: Partial<VerificationPolicyV2["validators"][number]> & {
+    checksum?: string;
+    scriptRef?: Partial<VerificationPolicyV2["validators"][number]["scriptRef"]>;
+  } = {}
+): VerificationPolicyV2["validators"][number] {
+  const { checksum, scriptRef: scriptRefOverrides = {}, ...validatorOverrides } = overrides;
+  const scriptRef = {
+    path: "evaluators/release-note-script/evaluator.mjs",
+    checksum: checksum ?? `sha256:${"0".repeat(64)}`,
+    cwd: "loop",
+    args: [],
+    timeoutMs: 30000,
+    ...scriptRefOverrides
+  };
+
   return {
     id: "release-note-script",
     type: "script",
@@ -632,13 +886,6 @@ function scriptValidatorFixture(): VerificationPolicyV2["validators"][number] {
     criteriaIds: ["tests-pass"],
     severity: "must",
     runtime: "node",
-    scriptRef: {
-      path: "evaluators/release-note-script/evaluator.mjs",
-      checksum: "sha256:0123456789abcdef",
-      cwd: "loop",
-      args: [],
-      timeoutMs: 30000
-    },
     input: { source: "workflow_result" },
     output: { schema: "verification_result_v1" },
     evidenceRequired: true,
@@ -651,6 +898,29 @@ function scriptValidatorFixture(): VerificationPolicyV2["validators"][number] {
         args: ["evaluators/release-note-script/evaluator.mjs"],
         evidence: "fixture passed"
       }
+    },
+    ...validatorOverrides,
+    scriptRef
+  };
+}
+
+function createScriptWorkspace(sourceLines?: string[]) {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "verification-v2-script-"));
+  const evaluatorDir = path.join(tempDir, "evaluators", "release-note-script");
+  const source = (sourceLines ?? [
+    "process.stdout.write(JSON.stringify({ status: 'passed', summary: 'fixture', evidence: ['fixture evidence'] }));"
+  ]).join("\n");
+  mkdirSync(evaluatorDir, { recursive: true });
+  writeFileSync(path.join(evaluatorDir, "evaluator.mjs"), source, "utf8");
+  return {
+    tempDir,
+    checksum: checksumForContent(source),
+    cleanup() {
+      rmSync(tempDir, { recursive: true, force: true });
     }
   };
+}
+
+function checksumForContent(source: string): string {
+  return `sha256:${createHash("sha256").update(source).digest("hex")}`;
 }

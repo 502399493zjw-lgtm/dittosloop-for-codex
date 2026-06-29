@@ -11,6 +11,7 @@ import type { VerificationScriptValidator } from "../src/contract/types.js";
 import { validateContract } from "../src/contract/validateContract.js";
 
 const fixedTime = "2026-06-24T00:00:00.000Z";
+const validScriptChecksum = `sha256:${"0".repeat(64)}`;
 
 // @ts-expect-error VerificationScriptValidator must require input, output, and builder.
 const invalidMissingScriptValidatorFields: VerificationScriptValidator = {
@@ -22,7 +23,7 @@ const invalidMissingScriptValidatorFields: VerificationScriptValidator = {
   runtime: "node",
   scriptRef: {
     path: "evaluators/release-note-script/evaluator.mjs",
-    checksum: "sha256:0123456789abcdef",
+    checksum: validScriptChecksum,
     timeoutMs: 30000
   },
   evidenceRequired: true
@@ -38,7 +39,7 @@ const invalidScriptValidatorSchema: VerificationScriptValidator = {
   runtime: "node",
   scriptRef: {
     path: "evaluators/release-note-script/evaluator.mjs",
-    checksum: "sha256:0123456789abcdef",
+    checksum: validScriptChecksum,
     timeoutMs: 30000
   },
   input: { source: "workflow_result" },
@@ -1038,7 +1039,7 @@ describe("formal loop contracts", () => {
               runtime: "node",
               scriptRef: {
                 path: "evaluators/release-note-script/evaluator.mjs",
-                checksum: "sha256:0123456789abcdef",
+                checksum: validScriptChecksum,
                 cwd: "loop",
                 args: [],
                 timeoutMs: 30000
@@ -1098,7 +1099,7 @@ describe("formal loop contracts", () => {
               runtime: "node",
               scriptRef: {
                 path: "evaluators/release-note-script/evaluator.mjs",
-                checksum: "sha256:0123456789abcdef",
+                checksum: validScriptChecksum,
                 cwd: "loop",
                 args: [],
                 timeoutMs: 30000
@@ -1167,6 +1168,20 @@ describe("formal loop contracts", () => {
     });
 
     expect(() => validateContract(contract)).toThrow(/script validator scriptRef\.checksum is required/i);
+  });
+
+  test("rejects script validators with an invalid checksum format", () => {
+    const contract = compileScriptValidatorContract({
+      scriptRef: {
+        path: "evaluators/release-note-script/evaluator.mjs",
+        checksum: "sha256:short",
+        cwd: "loop",
+        args: [],
+        timeoutMs: 30000
+      }
+    });
+
+    expect(() => validateContract(contract)).toThrow(/script validator scriptRef\.checksum must match sha256:<64 hex characters>/i);
   });
 
   test("rejects script validators with an unsupported output schema", () => {

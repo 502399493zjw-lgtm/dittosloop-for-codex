@@ -47,7 +47,7 @@ export async function runContractVerification(input: {
   })));
 }
 
-function toEngineVerificationEvent(event: RunVerificationV2Event, attemptId: string): EngineEventInput {
+export function toEngineVerificationEvent(event: RunVerificationV2Event, attemptId: string): EngineEventInput {
   if (event.type === "validator_started") {
     return {
       type: "validator_started",

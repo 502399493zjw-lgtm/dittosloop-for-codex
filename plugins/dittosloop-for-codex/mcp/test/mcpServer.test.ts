@@ -200,6 +200,64 @@ test("create_loop_contract rejects legacy rubrics shape at the MCP boundary", as
   })).rejects.toThrow(/version/i);
 });
 
+test("create_loop_contract accepts script validators and requireEvidenceForScriptResults", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Script verification loop",
+    goal: "Validate workflow output with a generated script",
+    body: { steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft" }] },
+    verification: {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "quality", label: "Quality", description: "Structured script verification passes.", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "script-quality",
+          type: "script",
+          label: "Script quality",
+          criteriaIds: ["quality"],
+          severity: "must",
+          runtime: "node",
+          scriptRef: {
+            path: "evaluators/script-quality/evaluator.mjs",
+            checksum: validScriptChecksum(),
+            cwd: "loop",
+            timeoutMs: 30000
+          },
+          input: { source: "workflow_result" },
+          output: { schema: "verification_result_v1" },
+          evidenceRequired: true,
+          builder: {
+            kind: "codex_subagent",
+            builtAt: "2026-06-29T00:00:00.000Z",
+            selfCheck: {
+              status: "passed",
+              command: "node",
+              args: ["evaluators/script-quality/evaluator.mjs"],
+              evidence: "fixture passed"
+            }
+          }
+        }
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true,
+        requireEvidenceForScriptResults: true
+      }
+    }
+  }));
+
+  expect(contract.verification).toMatchObject({
+    validators: [expect.objectContaining({ type: "script", id: "script-quality" })],
+    decision: expect.objectContaining({ requireEvidenceForScriptResults: true })
+  });
+});
+
 test("record_validator_result is exposed through MCP", async () => {
   const handlers = await createHandlers();
   const contract = readResult(await handlers.create_loop_contract({
@@ -1351,4 +1409,8 @@ function v2RubricAgentVerification(
       requireEvidenceForAgentScores: true
     }
   };
+}
+
+function validScriptChecksum(): string {
+  return `sha256:${"0".repeat(64)}`;
 }

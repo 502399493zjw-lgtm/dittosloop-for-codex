@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, test } from "vitest";
 
 import type { FormalLoopContract } from "../src/contract/types.js";
@@ -247,76 +252,81 @@ describe("LoopRunner", () => {
   });
 
   test("passes contract workspace path to script validators", async () => {
+    const workspace = createScriptWorkspace("script-quality");
     const requests: Array<{ cwd?: string; stdin?: string }> = [];
-    const scriptContract = {
-      ...contract,
-      verification: {
-        version: 2,
-        mode: "after_workflow",
-        criteria: [
-          { id: "quality", label: "Quality", description: "Output is acceptable.", severity: "must" }
-        ],
-        validators: [
-          {
-            id: "script-quality",
-            type: "script",
-            label: "Script quality",
-            criteriaIds: ["quality"],
-            severity: "must",
-            runtime: "node",
-            scriptRef: {
-              path: "evaluators/script-quality/evaluator.mjs",
-              checksum: "sha256:0123456789abcdef",
-              cwd: "loop",
-              timeoutMs: 30000
-            },
-            input: { source: "workflow_result" },
-            output: { schema: "verification_result_v1" },
-            evidenceRequired: true,
-            builder: {
-              kind: "codex_subagent",
-              builtAt: "2026-06-29T00:00:00.000Z",
-              selfCheck: {
-                status: "passed",
-                command: "node",
-                args: ["evaluators/script-quality/evaluator.mjs"],
-                evidence: "fixture passed"
+    try {
+      const scriptContract = {
+        ...contract,
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "quality", label: "Quality", description: "Output is acceptable.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "script-quality",
+              type: "script",
+              label: "Script quality",
+              criteriaIds: ["quality"],
+              severity: "must",
+              runtime: "node",
+              scriptRef: {
+                path: "evaluators/script-quality/evaluator.mjs",
+                checksum: workspace.checksum,
+                cwd: "loop",
+                timeoutMs: 30000
+              },
+              input: { source: "workflow_result" },
+              output: { schema: "verification_result_v1" },
+              evidenceRequired: true,
+              builder: {
+                kind: "codex_subagent",
+                builtAt: "2026-06-29T00:00:00.000Z",
+                selfCheck: {
+                  status: "passed",
+                  command: "node",
+                  args: ["evaluators/script-quality/evaluator.mjs"],
+                  evidence: "fixture passed"
+                }
               }
             }
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true,
+            requireEvidenceForScriptResults: true
           }
-        ],
-        decision: {
-          requireAllMustCriteriaCovered: true,
-          failOnMustValidatorFailure: true,
-          failOnShouldValidatorFailure: false,
-          requireEvidenceForAgentScores: true,
-          requireEvidenceForScriptResults: true
         }
-      }
-    } satisfies FormalLoopContract;
+      } satisfies FormalLoopContract;
 
-    const runner = new LoopRunner({
-      executor: { async run() { return { text: "candidate" }; } },
-      commandExecutor: async (request) => {
-        requests.push(request);
-        return {
-          exitCode: 0,
-          stdout: JSON.stringify({
-            status: "passed",
-            summary: "Script accepted output.",
-            evidence: ["checked candidate"]
-          }),
-          stderr: ""
-        };
-      },
-      contractWorkspacePath: "/loop-workspace",
-      now: () => "2026-06-29T00:00:00.000Z"
-    });
+      const runner = new LoopRunner({
+        executor: { async run() { return { text: "candidate" }; } },
+        commandExecutor: async (request) => {
+          requests.push(request);
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              status: "passed",
+              summary: "Script accepted output.",
+              evidence: ["checked candidate"]
+            }),
+            stderr: ""
+          };
+        },
+        contractWorkspacePath: workspace.tempDir,
+        now: () => "2026-06-29T00:00:00.000Z"
+      });
 
-    const result = await runner.run({ contract: scriptContract, runId: "run_script", attemptId: "attempt_script" });
+      const result = await runner.run({ contract: scriptContract, runId: "run_script", attemptId: "attempt_script" });
 
-    expect(result.status).toBe("completed");
-    expect(requests[0]).toMatchObject({ cwd: "/loop-workspace" });
+      expect(result.status).toBe("completed");
+      expect(requests[0]).toMatchObject({ cwd: workspace.tempDir });
+    } finally {
+      workspace.cleanup();
+    }
   });
 
   test("passes workflow launch context to agent executors", async () => {
@@ -380,3 +390,18 @@ describe("LoopRunner", () => {
     ]);
   });
 });
+
+function createScriptWorkspace(validatorId: string) {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), `loop-runner-${validatorId}-`));
+  const evaluatorDir = path.join(tempDir, "evaluators", validatorId);
+  const source = "process.stdout.write(JSON.stringify({ status: 'passed', summary: 'fixture', evidence: ['fixture evidence'] }));";
+  mkdirSync(evaluatorDir, { recursive: true });
+  writeFileSync(path.join(evaluatorDir, "evaluator.mjs"), source, "utf8");
+  return {
+    tempDir,
+    checksum: `sha256:${createHash("sha256").update(source).digest("hex")}`,
+    cleanup() {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  };
+}

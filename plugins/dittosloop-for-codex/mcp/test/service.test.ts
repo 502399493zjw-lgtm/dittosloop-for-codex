@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,19 @@ import type {
 
 const tempDirs: string[] = [];
 const fixedTime = "2026-06-23T00:00:00.000Z";
+const defaultLoopOwnedEvaluatorSourceLines = [
+  "const chunks = [];",
+  "for await (const chunk of process.stdin) chunks.push(chunk);",
+  "const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));",
+  "const payload = JSON.stringify(input.workflowResult);",
+  "const passed = payload.includes('accepted');",
+  "console.log(JSON.stringify({",
+  "  status: passed ? 'passed' : 'failed',",
+  "  summary: passed ? 'accepted' : 'missing accepted marker',",
+  "  evidence: [payload],",
+  "  output: { checked: true, contractWorkspacePath: input.contractWorkspacePath }",
+  "}));"
+];
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -431,7 +445,7 @@ function loopOwnedScriptValidator(
     runtime: "node" as const,
     scriptRef: {
       path: `evaluators/${overrides.id ?? "script-quality"}/evaluator.mjs`,
-      checksum: "sha256:0123456789abcdef",
+      checksum: checksumForContent(defaultLoopOwnedEvaluatorSourceLines.join("\n")),
       cwd: "loop" as const,
       timeoutMs: 30000
     },
@@ -462,19 +476,7 @@ async function writeLoopOwnedEvaluator(
   await mkdir(evaluatorDir, { recursive: true });
   await writeFile(
     join(evaluatorDir, "evaluator.mjs"),
-    (sourceLines ?? [
-      "const chunks = [];",
-      "for await (const chunk of process.stdin) chunks.push(chunk);",
-      "const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));",
-      "const payload = JSON.stringify(input.workflowResult);",
-      "const passed = payload.includes('accepted');",
-      "console.log(JSON.stringify({",
-      "  status: passed ? 'passed' : 'failed',",
-      "  summary: passed ? 'accepted' : 'missing accepted marker',",
-      "  evidence: [payload],",
-      "  output: { checked: true, contractWorkspacePath: input.contractWorkspacePath }",
-      "}));"
-    ]).join("\n"),
+    (sourceLines ?? defaultLoopOwnedEvaluatorSourceLines).join("\n"),
     "utf8"
   );
 }
@@ -2885,7 +2887,33 @@ test("recordValidatorResult finalization executes loop-owned script evaluators f
   });
   const detail = await service.getRunDetail(launch.run.id);
   expect(detail.run.status).toBe("completed");
+  expect(detail.events).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      data: expect.objectContaining({
+        engineEvent: expect.objectContaining({
+          type: "validator_started",
+          validatorId: "script-quality"
+        })
+      })
+    }),
+    expect.objectContaining({
+      data: expect.objectContaining({
+        engineEvent: expect.objectContaining({
+          type: "validator_done",
+          result: expect.objectContaining({
+            validatorId: "script-quality",
+            type: "script",
+            status: "passed"
+          })
+        })
+      })
+    })
+  ]));
 });
+
+function checksumForContent(content: string): string {
+  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+}
 
 test("manual verification completion keeps workflow terminal while the Codex thread remains pending", async () => {
   const service = await createServiceWithSequentialIds();

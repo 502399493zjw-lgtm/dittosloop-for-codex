@@ -176,7 +176,8 @@ const verificationDecisionPolicySchema = z.object({
   requireAllMustCriteriaCovered: z.boolean(),
   failOnMustValidatorFailure: z.boolean(),
   failOnShouldValidatorFailure: z.boolean(),
-  requireEvidenceForAgentScores: z.boolean()
+  requireEvidenceForAgentScores: z.boolean(),
+  requireEvidenceForScriptResults: z.boolean().optional()
 });
 
 const commandValidatorSchema = z.object({
@@ -228,10 +229,49 @@ const rubricAgentValidatorSchema = z.object({
   severity: verificationSeveritySchema
 });
 
+const scriptValidatorSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("script"),
+  label: z.string().min(1),
+  criteriaIds: z.array(z.string().min(1)).min(1),
+  severity: verificationSeveritySchema,
+  runtime: z.enum(["node", "python"]),
+  scriptRef: z.object({
+    path: z.string().min(1),
+    checksum: z.string().min(1),
+    cwd: z.union([
+      z.literal("project"),
+      z.literal("contract"),
+      z.literal("loop"),
+      z.object({ relativeToProject: z.string().min(1) })
+    ]).optional(),
+    args: z.array(z.string()).optional(),
+    timeoutMs: z.number().int().positive()
+  }),
+  input: z.object({
+    source: z.enum(["workflow_result", "artifact", "project"])
+  }),
+  output: z.object({
+    schema: z.literal("verification_result_v1")
+  }),
+  evidenceRequired: z.boolean(),
+  builder: z.object({
+    kind: z.literal("codex_subagent"),
+    builtAt: z.string().min(1),
+    selfCheck: z.object({
+      status: z.literal("passed"),
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      evidence: z.string().min(1)
+    })
+  })
+});
+
 const verificationValidatorSchema = z.discriminatedUnion("type", [
   commandValidatorSchema,
   scoreValidatorSchema,
-  rubricAgentValidatorSchema
+  rubricAgentValidatorSchema,
+  scriptValidatorSchema
 ]);
 
 const verificationV2Schema = z.object({
