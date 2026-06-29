@@ -105,10 +105,14 @@ export interface VerificationCriterion {
   severity: "must" | "should";
 }
 
-export type CommandValidatorCwd =
+export type ValidatorCwd =
   | "project"
   | "contract"
+  | "loop"
   | { relativeToProject: string };
+
+export type CommandValidatorCwd = Exclude<ValidatorCwd, "loop">;
+export type ScriptValidatorCwd = ValidatorCwd;
 
 export interface VerificationCommandValidator {
   id: string;
@@ -122,6 +126,39 @@ export interface VerificationCommandValidator {
   severity: "must" | "should";
   parse: {
     kind: "none";
+  };
+}
+
+export interface VerificationScriptValidator {
+  id: string;
+  type: "script";
+  label: string;
+  criteriaIds: string[];
+  severity: "must" | "should";
+  runtime: "node" | "python";
+  scriptRef: {
+    path: string;
+    checksum: string;
+    cwd?: ScriptValidatorCwd;
+    args?: string[];
+    timeoutMs: number;
+  };
+  input?: {
+    source: "workflow_result" | "artifact" | "project";
+  };
+  output?: {
+    schema: "verification_result_v1" | string;
+  };
+  evidenceRequired: boolean;
+  builder?: {
+    kind: "codex_subagent";
+    builtAt: string;
+    selfCheck?: {
+      status: "passed" | "failed";
+      command: string;
+      args?: string[];
+      evidence: string;
+    };
   };
 }
 
@@ -158,6 +195,7 @@ export interface VerificationRubricAgentValidator {
 
 export type VerificationValidator =
   | VerificationCommandValidator
+  | VerificationScriptValidator
   | ScoreValidator
   | VerificationRubricAgentValidator;
 
@@ -171,6 +209,7 @@ export interface VerificationPolicyV2 {
     failOnMustValidatorFailure: boolean;
     failOnShouldValidatorFailure: boolean;
     requireEvidenceForAgentScores: boolean;
+    requireEvidenceForScriptResults?: boolean;
   };
 }
 

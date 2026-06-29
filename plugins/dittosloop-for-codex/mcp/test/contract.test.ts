@@ -965,4 +965,122 @@ describe("formal loop contracts", () => {
       ]
     });
   });
+
+  test("accepts verification v2 script validators with builder self-check metadata", () => {
+    const contract = compileContract(
+      {
+        id: "loop_script",
+        title: "Script evaluator loop",
+        goal: "Verify structured workflow output with a generated evaluator",
+        body: {
+          steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft release notes." }]
+        },
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "release-coverage", label: "Release coverage", description: "Release notes cover every user-facing change.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "release-note-script",
+              type: "script",
+              label: "Release note script",
+              criteriaIds: ["release-coverage"],
+              severity: "must",
+              runtime: "node",
+              scriptRef: {
+                path: "evaluators/release-note-script/evaluator.mjs",
+                checksum: "sha256:0123456789abcdef",
+                cwd: "loop",
+                args: [],
+                timeoutMs: 30000
+              },
+              input: { source: "workflow_result" },
+              output: { schema: "verification_result_v1" },
+              evidenceRequired: true,
+              builder: {
+                kind: "codex_subagent",
+                builtAt: fixedTime,
+                selfCheck: {
+                  status: "passed",
+                  command: "node",
+                  args: ["evaluators/release-note-script/evaluator.mjs"],
+                  evidence: "fixture passed"
+                }
+              }
+            }
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true,
+            requireEvidenceForScriptResults: true
+          }
+        }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+  });
+
+  test("rejects script validators without script refs checksums output schema or self-check", () => {
+    const contract = compileContract(
+      {
+        id: "loop_bad_script",
+        title: "Bad script evaluator loop",
+        goal: "Reject incomplete generated evaluators",
+        body: {
+          steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft release notes." }]
+        },
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "release-coverage", label: "Release coverage", description: "Release notes cover every user-facing change.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "release-note-script",
+              type: "script",
+              label: "Release note script",
+              criteriaIds: ["release-coverage"],
+              severity: "must",
+              runtime: "node",
+              scriptRef: {
+                path: "../outside.mjs",
+                checksum: "",
+                cwd: "loop",
+                timeoutMs: 0
+              },
+              input: { source: "workflow_result" },
+              output: { schema: "anything_else" },
+              evidenceRequired: true,
+              builder: {
+                kind: "codex_subagent",
+                builtAt: "",
+                selfCheck: {
+                  status: "failed",
+                  command: "",
+                  evidence: ""
+                }
+              }
+            } as any
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true,
+            requireEvidenceForScriptResults: true
+          }
+        }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).toThrow(/script validator/i);
+  });
 });

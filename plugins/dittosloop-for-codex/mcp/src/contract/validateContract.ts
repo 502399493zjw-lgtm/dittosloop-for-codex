@@ -9,6 +9,7 @@ import type {
   VerificationCommandValidator,
   VerificationPolicyV2,
   VerificationRubricAgentValidator,
+  VerificationScriptValidator,
   VerificationValidator
 } from "./types.js";
 
@@ -353,6 +354,9 @@ function validateVerificationValidator(
     case "command":
       validateCommandValidator(validator, errors);
       return;
+    case "script":
+      validateScriptValidator(validator, errors);
+      return;
     case "score":
       validateScoreValidator(validator, validatorIds, errors);
       return;
@@ -386,15 +390,79 @@ function validateCommandValidator(validator: VerificationCommandValidator, error
     return;
   }
 
-  if (path.isAbsolute(relativePath)) {
-    errors.push("command validator cwd must not be absolute");
+  const pathErrors: string[] = [];
+  validateSafeRelativePath(relativePath, "command validator cwd", pathErrors);
+  if (pathErrors.includes("command validator cwd must stay within the workspace")) {
+    errors.push("command validator cwd must stay within the project");
+  } else {
+    errors.push(...pathErrors);
+  }
+}
+
+function validateScriptValidator(validator: VerificationScriptValidator, errors: string[]): void {
+  if (!Array.isArray(validator.criteriaIds) || validator.criteriaIds.length === 0) {
+    errors.push("script validator criteriaIds must contain at least one criterion");
+  }
+  if (validator.runtime !== "node" && validator.runtime !== "python") {
+    errors.push("script validator runtime must be node or python");
+  }
+  validateScriptRef(validator, errors);
+  if (validator.input?.source !== "workflow_result" && validator.input?.source !== "artifact" && validator.input?.source !== "project") {
+    errors.push("script validator input.source must be workflow_result, artifact, or project");
+  }
+  if (validator.output?.schema !== "verification_result_v1") {
+    errors.push("script validator output.schema must be verification_result_v1");
+  }
+  if (validator.builder?.kind !== "codex_subagent") {
+    errors.push("script validator builder.kind must be codex_subagent");
+  }
+  required(validator.builder?.builtAt, "script validator builder.builtAt", errors);
+  if (validator.builder?.selfCheck?.status !== "passed") {
+    errors.push("script validator builder.selfCheck.status must be passed");
+  }
+  required(validator.builder?.selfCheck?.command, "script validator builder.selfCheck.command", errors);
+  required(validator.builder?.selfCheck?.evidence, "script validator builder.selfCheck.evidence", errors);
+}
+
+function validateScriptRef(validator: VerificationScriptValidator, errors: string[]): void {
+  const ref = validator.scriptRef;
+  if (!ref || typeof ref !== "object") {
+    errors.push("script validator scriptRef is required");
+    return;
+  }
+  if (!ref.path || ref.path.trim().length === 0) {
+    errors.push("script validator scriptRef.path is required");
+  } else {
+    validateSafeRelativePath(ref.path, "script validator scriptRef.path", errors);
+  }
+  if (!ref.checksum || ref.checksum.trim().length === 0) {
+    errors.push("script validator scriptRef.checksum is required");
+  }
+  if (!Number.isInteger(ref.timeoutMs) || ref.timeoutMs <= 0) {
+    errors.push("script validator scriptRef.timeoutMs must be a positive integer");
+  }
+  validateScriptCwd(ref.cwd, errors);
+}
+
+function validateScriptCwd(
+  cwd: VerificationScriptValidator["scriptRef"]["cwd"],
+  errors: string[]
+): void {
+  if (cwd === undefined) {
     return;
   }
 
-  const normalized = path.normalize(relativePath);
-  if (normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
-    errors.push("command validator cwd must stay within the project");
+  if (cwd === "project" || cwd === "contract" || cwd === "loop") {
+    return;
   }
+
+  const relativePath = cwd.relativeToProject?.trim();
+  if (!relativePath) {
+    errors.push("script validator scriptRef.cwd relativeToProject is required");
+    return;
+  }
+
+  validateSafeRelativePath(relativePath, "script validator scriptRef.cwd", errors);
 }
 
 function validateScoreValidator(
@@ -475,6 +543,17 @@ function validateRubricAgentValidator(validator: VerificationRubricAgentValidato
 
   if (validator.passScore < validator.scoreScale.min || validator.passScore > validator.scoreScale.max) {
     errors.push("rubric_agent validator passScore must be inside scoreScale");
+  }
+}
+
+function validateSafeRelativePath(relativePath: string, label: string, errors: string[]): void {
+  if (path.isAbsolute(relativePath)) {
+    errors.push(`${label} must not be absolute`);
+    return;
+  }
+  const normalized = path.normalize(relativePath);
+  if (normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
+    errors.push(`${label} must stay within the workspace`);
   }
 }
 
