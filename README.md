@@ -28,6 +28,10 @@ codex plugin marketplace upgrade dittosloop
 
 Then restart Codex or start a new thread. Codex may not show a separate update button for installed marketplace plugins; refreshing the marketplace source is the update path for Git-backed installs.
 
+Maintainers should bump `plugins/dittosloop-for-codex/.codex-plugin/plugin.json`
+before publishing a new marketplace release, because Codex installs and caches Git-backed
+plugins by the plugin manifest version.
+
 If you added the marketplace with a different name, replace `dittosloop` with that configured marketplace name.
 
 ## Quick Check

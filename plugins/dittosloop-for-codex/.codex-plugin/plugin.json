@@ -1,6 +1,6 @@
 {
   "name": "dittosloop-for-codex",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Turn Codex work into visible local Dittos loops with run history, verification, memory, and preview.",
   "author": {
     "name": "Dittos Loop"
@@ -15,8 +15,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "DittosLoop For Codex",
-    "shortDescription": "Create and inspect local Dittos loops from Codex",
-    "longDescription": "DittosLoop For Codex helps turn delegated work into durable, visible local loops. It records loop contracts, runs, attempts, verification results, human requests, memory summaries, artifacts, and exposes a local preview URL for Codex's in-app browser. To update an existing Git marketplace install, run `codex plugin marketplace upgrade dittosloop`, then restart Codex or start a new thread.",
+    "shortDescription": "Create, inspect, and verify local Dittos loops from Codex",
+    "longDescription": "DittosLoop For Codex helps turn delegated work into durable, visible local loops. It records loop contracts, runs, attempts, verification results, human requests, memory summaries, artifacts, and exposes a local preview URL for Codex's in-app browser. It also keeps Codex-started session handoffs visible while the host-created thread is attached. To update an existing Git marketplace install, run `codex plugin marketplace upgrade dittosloop`, then restart Codex or start a new thread.",
     "developerName": "Dittos Loop",
     "category": "Productivity",
     "capabilities": [
