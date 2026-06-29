@@ -59,3 +59,11 @@
 - `cd plugins/dittosloop-for-codex/mcp && npm run typecheck`
 - `cd plugins/dittosloop-for-codex/mcp && npm run build`
 - `git diff --check`
+
+Observed results:
+
+- `test/runtimeScript/verificationSubagent.test.ts test/runtimeScript/approval.test.ts test/service.runtimeScript.test.ts test/service.test.ts test/mcpServer.test.ts`: 146 tests passed.
+- `DITTOSLOOP_RUNTIME_SCRIPT_LIVE=1 test/runtimeScript/verificationSubagent.live.test.ts`: 1 test passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+- `git diff --check`: passed with no whitespace errors.
