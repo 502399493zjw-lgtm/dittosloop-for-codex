@@ -414,6 +414,71 @@ function v2LegacyLikeRubricAgentLoopInput() {
   };
 }
 
+function loopOwnedScriptValidator(
+  overrides: Partial<{
+    id: string;
+    label: string;
+    criteriaIds: string[];
+    severity: "must" | "should";
+  }> = {}
+) {
+  return {
+    id: overrides.id ?? "script-quality",
+    type: "script" as const,
+    label: overrides.label ?? "Script quality",
+    criteriaIds: overrides.criteriaIds ?? ["quality"],
+    severity: overrides.severity ?? "must",
+    runtime: "node" as const,
+    scriptRef: {
+      path: `evaluators/${overrides.id ?? "script-quality"}/evaluator.mjs`,
+      checksum: "sha256:0123456789abcdef",
+      cwd: "loop" as const,
+      timeoutMs: 30000
+    },
+    input: { source: "workflow_result" as const },
+    output: { schema: "verification_result_v1" as const },
+    evidenceRequired: true,
+    builder: {
+      kind: "codex_subagent" as const,
+      builtAt: fixedTime,
+      selfCheck: {
+        status: "passed" as const,
+        command: "node",
+        args: [`evaluators/${overrides.id ?? "script-quality"}/evaluator.mjs`],
+        evidence: "fixture passed"
+      }
+    }
+  };
+}
+
+async function writeLoopOwnedEvaluator(
+  service: LoopService,
+  loopId: string,
+  validatorId: string,
+  sourceLines?: string[]
+) {
+  const dataDir = (service as any).options.store.dataDir as string;
+  const evaluatorDir = join(dataDir, "loops", loopId, "evaluators", validatorId);
+  await mkdir(evaluatorDir, { recursive: true });
+  await writeFile(
+    join(evaluatorDir, "evaluator.mjs"),
+    (sourceLines ?? [
+      "const chunks = [];",
+      "for await (const chunk of process.stdin) chunks.push(chunk);",
+      "const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));",
+      "const payload = JSON.stringify(input.workflowResult);",
+      "const passed = payload.includes('accepted');",
+      "console.log(JSON.stringify({",
+      "  status: passed ? 'passed' : 'failed',",
+      "  summary: passed ? 'accepted' : 'missing accepted marker',",
+      "  evidence: [payload],",
+      "  output: { checked: true, contractWorkspacePath: input.contractWorkspacePath }",
+      "}));"
+    ]).join("\n"),
+    "utf8"
+  );
+}
+
 async function createPendingServiceWithSequentialIds() {
   const { bridge, requests } = createPendingSessionBridge();
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
@@ -624,35 +689,7 @@ test("executes loop-owned script evaluators from the loop workspace", async () =
       criteria: [
         { id: "quality", label: "Quality", description: "Output passes script quality checks.", severity: "must" }
       ],
-      validators: [
-        {
-          id: "script-quality",
-          type: "script",
-          label: "Script quality",
-          criteriaIds: ["quality"],
-          severity: "must",
-          runtime: "node",
-          scriptRef: {
-            path: "evaluators/script-quality/evaluator.mjs",
-            checksum: "sha256:0123456789abcdef",
-            cwd: "loop",
-            timeoutMs: 30000
-          },
-          input: { source: "workflow_result" },
-          output: { schema: "verification_result_v1" },
-          evidenceRequired: true,
-          builder: {
-            kind: "codex_subagent",
-            builtAt: fixedTime,
-            selfCheck: {
-              status: "passed",
-              command: "node",
-              args: ["evaluators/script-quality/evaluator.mjs"],
-              evidence: "fixture passed"
-            }
-          }
-        }
-      ],
+      validators: [loopOwnedScriptValidator()],
       decision: {
         requireAllMustCriteriaCovered: true,
         failOnMustValidatorFailure: true,
@@ -663,26 +700,7 @@ test("executes loop-owned script evaluators from the loop workspace", async () =
     }
   });
   const launch = await service.startCodexSessionRun(formal.id, { goal: "Run script verification" });
-  const dataDir = (service as any).options.store.dataDir as string;
-  const evaluatorDir = join(dataDir, "loops", formal.id, "evaluators", "script-quality");
-  await mkdir(evaluatorDir, { recursive: true });
-  await writeFile(
-    join(evaluatorDir, "evaluator.mjs"),
-    [
-      "const chunks = [];",
-      "for await (const chunk of process.stdin) chunks.push(chunk);",
-      "const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));",
-      "const payload = JSON.stringify(input.workflowResult);",
-      "const passed = payload.includes('accepted');",
-      "console.log(JSON.stringify({",
-      "  status: passed ? 'passed' : 'failed',",
-      "  summary: passed ? 'accepted' : 'missing accepted marker',",
-      "  evidence: [payload],",
-      "  output: { checked: true }",
-      "}));"
-    ].join("\n"),
-    "utf8"
-  );
+  await writeLoopOwnedEvaluator(service, formal.id, "script-quality");
 
   const run = await service.executeWorkflowAttempt(launch.run.id, {
     attemptId: launch.attempt.id,
@@ -708,6 +726,68 @@ test("executes loop-owned script evaluators from the loop workspace", async () =
       ]
     }
   ]);
+});
+
+test("graph workflow verification executes loop-owned script evaluators from the loop workspace", async () => {
+  const { service } = await createPendingServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Graph script verification",
+    goal: "Verify graph workflow output through a loop-owned script",
+    body: {
+      steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft result." }]
+    },
+    verification: {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "quality", label: "Quality", description: "Output passes script quality checks.", severity: "must" }
+      ],
+      validators: [loopOwnedScriptValidator()],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true,
+        requireEvidenceForScriptResults: true
+      }
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run graph script verification" });
+  await writeLoopOwnedEvaluator(service, formal.id, "script-quality");
+
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  const run = await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "draft",
+    idempotencyKey: "draft:accepted",
+    status: "passed",
+    summary: "Draft done",
+    result: "accepted result"
+  });
+  expect(run.status).toBe("completed");
+  const detail = await service.getRunDetail(run.id);
+
+  expect(detail.verificationResults).toMatchObject([
+    {
+      version: 2,
+      status: "passed",
+      validatorResults: [
+        {
+          validatorId: "script-quality",
+          type: "script",
+          status: "passed",
+          evidence: "{\"draft\":\"accepted result\"}",
+          cwd: join((service as any).options.store.dataDir as string, "loops", formal.id)
+        }
+      ]
+    }
+  ]);
+  expect(detail.run.status).toBe("completed");
+  expect(detail.events.map((event) => event.data?.engineEvent?.type).filter(Boolean)).toEqual(
+    expect.arrayContaining(["verification_started", "validator_started", "validator_done", "verification_done"])
+  );
 });
 
 test("renders workspace loop directory files from stored loop state", async () => {
@@ -2721,6 +2801,90 @@ test("recordValidatorResult finalizes v2 verification from a separate rubric age
     ]
   });
   expect(detail.run.codexSession?.threadId).toBeUndefined();
+});
+
+test("recordValidatorResult finalization executes loop-owned script evaluators from the loop workspace", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Mixed validator verification",
+    goal: "Finalize verification with rubric and loop-owned script evaluators",
+    body: {
+      steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft result." }]
+    },
+    verification: {
+      version: 2,
+      mode: "after_workflow",
+      criteria: [
+        { id: "quality", label: "Quality", description: "Output passes verification.", severity: "must" }
+      ],
+      validators: [
+        {
+          id: "quality-review",
+          type: "rubric_agent",
+          label: "Quality review",
+          criteriaIds: ["quality"],
+          scoreScale: { min: 0, max: 1 },
+          passScore: 1,
+          evidenceRequired: true,
+          severity: "must"
+        },
+        loopOwnedScriptValidator({ id: "script-quality", label: "Script quality" })
+      ],
+      decision: {
+        requireAllMustCriteriaCovered: true,
+        failOnMustValidatorFailure: true,
+        failOnShouldValidatorFailure: false,
+        requireEvidenceForAgentScores: true,
+        requireEvidenceForScriptResults: true
+      }
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run mixed verification" });
+  await writeLoopOwnedEvaluator(service, formal.id, "script-quality");
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    stepId: "draft",
+    status: "passed",
+    summary: "Worker produced candidate",
+    result: "accepted result"
+  });
+
+  const verification = await service.recordValidatorResult(launch.run.id, {
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    validatorId: "quality-review",
+    idempotencyKey: "validator-quality-review-mixed-1",
+    result: {
+      type: "rubric_agent",
+      status: "passed",
+      evidence: "Candidate is complete.",
+      criteriaResults: [
+        { criterionId: "quality", status: "passed", score: 1, maxScore: 1, evidence: "Complete answer." }
+      ]
+    }
+  });
+
+  expect(verification).toMatchObject({
+    version: 2,
+    status: "passed",
+    validatorResults: [
+      expect.objectContaining({
+        validatorId: "quality-review",
+        type: "rubric_agent",
+        status: "passed"
+      }),
+      expect.objectContaining({
+        validatorId: "script-quality",
+        type: "script",
+        status: "passed",
+        evidence: "{\"draft\":\"accepted result\"}",
+        cwd: join((service as any).options.store.dataDir as string, "loops", formal.id)
+      })
+    ]
+  });
+  const detail = await service.getRunDetail(launch.run.id);
+  expect(detail.run.status).toBe("completed");
 });
 
 test("manual verification completion keeps workflow terminal while the Codex thread remains pending", async () => {
