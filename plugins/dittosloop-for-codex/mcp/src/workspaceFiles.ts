@@ -273,6 +273,8 @@ function verificationFile(input: {
   if (!isVerificationPolicyV2(verification)) {
     throw new Error("verificationFile requires a v2 verification policy");
   }
+  const requireEvidenceForScriptResults = (verification.decision as { requireEvidenceForScriptResults?: boolean })
+    .requireEvidenceForScriptResults;
 
   return [
     `# ${input.contract.title} verification`,
@@ -311,20 +313,33 @@ function verificationFile(input: {
     `- failOnMustValidatorFailure: ${verification.decision.failOnMustValidatorFailure}`,
     `- failOnShouldValidatorFailure: ${verification.decision.failOnShouldValidatorFailure}`,
     `- requireEvidenceForAgentScores: ${verification.decision.requireEvidenceForAgentScores}`,
+    requireEvidenceForScriptResults === undefined ? undefined : `- requireEvidenceForScriptResults: ${requireEvidenceForScriptResults}`,
     ""
-  ].join("\n");
+  ].filter((line): line is string => line !== undefined).join("\n");
 }
 
-function validatorEvidenceRequirement(validator: FormalLoopContract["verification"]["validators"][number]): string {
+function validatorEvidenceRequirement(
+  validator: {
+    type: string;
+    severity: "must" | "should";
+    criteriaIds?: string[];
+    evidenceRequired?: boolean;
+    metric?: string;
+    source?: { type?: string };
+  }
+): string {
   if (validator.type === "command") return "stdout/stderr";
-  if (validator.type === "score") return `${validator.metric} from ${validator.source.type}`;
+  if (validator.type === "score") return `${validator.metric} from ${validator.source?.type ?? "source"}`;
   if (validator.type === "rubric_agent") return validator.evidenceRequired ? "agent score with evidence" : "agent score";
+  if (validator.type === "script") return validator.evidenceRequired ? "script JSON evidence" : "script JSON summary";
   return "verification result";
 }
 
 function validatorFailureEffect(
-  validator: FormalLoopContract["verification"]["validators"][number],
-  decision: FormalLoopContract["verification"]["decision"]
+  validator: {
+    severity: "must" | "should";
+  },
+  decision: FormalLoopContract["verification"]["decision"] & { requireEvidenceForScriptResults?: boolean }
 ): string {
   if (validator.severity === "must") {
     return decision.failOnMustValidatorFailure ? "must failure fails the run" : "must failure records a warning";
@@ -409,20 +424,6 @@ function isVerificationResultV2(value: VerificationResultRecord | undefined): va
 function validatorResultId(result: ValidatorResult | (ValidatorResult & { id?: string })): string {
   const resultWithId = result as ValidatorResult & { id?: string };
   return result.validatorId ?? resultWithId.id ?? result.label;
-}
-
-function criterionStatus(criterionId: string, results: ValidatorResult[]): string {
-  const covering = results.filter((result) => result.criteriaIds.includes(criterionId));
-  if (covering.some((result) => result.status === "failed")) return "failed";
-  if (covering.some((result) => result.status === "needs_human")) return "needs_human";
-  if (covering.some((result) => result.status === "passed")) return "passed";
-  return "not-run";
-}
-
-function validatorScoreText(result: ValidatorResult | undefined): string {
-  if (!result || !("score" in result) || typeof result.score !== "number") return "";
-  const maxScore = "maxScore" in result && typeof result.maxScore === "number" ? `/${result.maxScore}` : "";
-  return `${result.score}${maxScore}`;
 }
 
 function evidenceExcerpt(value: string | undefined): string {

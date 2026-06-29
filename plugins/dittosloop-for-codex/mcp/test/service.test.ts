@@ -738,7 +738,7 @@ test("renders workspace loop directory files from stored loop state", async () =
   expect(verificationFile).not.toMatch(/latest score/i);
   expect(verificationFile).not.toMatch(/latest evidence/i);
   expect(verificationFile).not.toMatch(/latest decision/i);
-  expect(verificationFile).not.toMatch(/status:\\s*(通过|passed|failed|失败|not-run|未运行)/i);
+  expect(verificationFile).not.toMatch(/status:\s*(passed|failed|needs_human|通过|失败|需要人工)/i);
   const statusJson = JSON.parse(files.find((file) => file.path === "status.json")?.content ?? "{}");
   expect(statusJson.latestVerification).toMatchObject({
     version: 2,
