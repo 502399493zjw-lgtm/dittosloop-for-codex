@@ -92,3 +92,20 @@ Observed results:
 - `test/runtimeScript/serviceSubagentBridge.test.ts test/service.runtimeScript.test.ts`: 11 tests passed.
 - `npm run typecheck`: passed.
 - `npm run build`: passed and refreshed `dist/index.js`.
+
+Controller post-fix verification:
+
+```bash
+cd plugins/dittosloop-for-codex/mcp
+npm test -- --run test/service.runtimeScript.test.ts test/service.test.ts
+npm run typecheck
+npm run build
+git diff --check
+```
+
+Observed results:
+
+- `test/service.runtimeScript.test.ts test/service.test.ts`: 105 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+- `git diff --check`: passed with no whitespace errors.
