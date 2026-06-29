@@ -70,7 +70,7 @@ git status --short
 Results:
 
 - `npm test`
-  - Passed: `26 passed | 1 skipped (files)`, `334 passed | 1 skipped (tests)`.
+  - Passed: `26 passed | 1 skipped (files)`, `337 passed | 1 skipped (tests)`.
 - `npm run typecheck`
   - Passed.
 - `npm run build`
