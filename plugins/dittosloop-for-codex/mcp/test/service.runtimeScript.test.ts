@@ -135,6 +135,66 @@ function createPendingSessionBridge() {
   return { bridge, requests };
 }
 
+function createBarrierPendingSessionBridge(expectedRequests: number) {
+  const requests: CodexSessionRequest[] = [];
+  let releaseReads!: () => void;
+  const allSessionsStarted = new Promise<void>((resolve) => {
+    releaseReads = resolve;
+  });
+  const bridge: CodexSessionBridge = {
+    async createSession(request) {
+      requests.push(request);
+      if (requests.length === expectedRequests) {
+        releaseReads();
+      }
+      return {
+        sessionId: `session_${requests.length}`,
+        runId: request.runId,
+        attemptId: request.attemptId,
+        workflowContextId: request.workflowContextId,
+        stepId: request.stepId,
+        phaseId: request.phaseId,
+        title: request.title,
+        status: "requested",
+        createdAt: fixedTime,
+        prompt: request.prompt,
+        subagent: request.subagent,
+        agentProfile: request.agentProfile,
+        workflowRuntime: request.workflowRuntime,
+        workflowContractId: request.workflowContractId,
+        workflowPlan: request.workflowPlan,
+        projectId: request.projectId,
+        projectLabel: request.projectLabel,
+        projectPath: request.projectPath
+      } satisfies CodexSessionRef;
+    },
+    async sendMessage() {},
+    async recordResult() {},
+    async readResult(): Promise<CodexSessionResult | undefined> {
+      await allSessionsStarted;
+      return undefined;
+    }
+  };
+
+  return { bridge, requests };
+}
+
+function runtimeExplicitAgentJournalKey(
+  contractId: string,
+  source: string,
+  prompt: string,
+  options: { key: string; label: string }
+) {
+  return runtimeAgentJournalKey({
+    contractId,
+    scriptHash: hashRuntimeScriptSource(source),
+    argsHash: hashRuntimeScriptArgs({}),
+    callSite: options.key,
+    prompt,
+    options
+  });
+}
+
 test("creates a runtime script loop without body steps", async () => {
   const service = await createService();
 
@@ -531,4 +591,101 @@ test("runtime script v2 rubric agent verification waits for validator writeback 
     run: { status: "completed" },
     verificationResults: [expect.objectContaining({ version: 2, status: "passed" })]
   });
+});
+
+test("failed pending runtime script child session resumes as null once sibling writebacks are complete", async () => {
+  const { bridge, requests } = createBarrierPendingSessionBridge(2);
+  const service = await createServiceWithSequentialIds(bridge);
+  const okOptions = { key: "ok", label: "ok" };
+  const failOptions = { key: "fail", label: "fail" };
+  const source = `
+    const results = await parallel(
+      () => agent("ok", ${JSON.stringify(okOptions)}),
+      () => agent("fail", ${JSON.stringify(failOptions)})
+    );
+    return { results };
+  `;
+  const contract = await service.createLoopContract({
+    title: "Runtime script failed resume isolation",
+    goal: "Resume failed pending runtime script child sessions without aborting siblings",
+    workflowKind: "runtime_script",
+    script: source,
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Runtime script result is acceptable", severity: "must" }]
+    }
+  });
+  await service.approveRuntimeScript(contract.id, { approvedBy: "test" });
+  const launch = await service.startCodexSessionRun(contract.id, { goal: "Run pending runtime script execution" });
+
+  const firstRun = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id
+  });
+
+  expect(firstRun.status).toBe("running");
+  expect(requests).toHaveLength(2);
+  expect(new Set(requests.map((request) => request.prompt))).toEqual(new Set(["ok", "fail"]));
+  const sessionIdByPrompt = new Map(requests.map((request, index) => [request.prompt, `session_${index + 1}`]));
+
+  const okIdempotencyKey = runtimeExplicitAgentJournalKey(contract.id, source, "ok", okOptions);
+  const failIdempotencyKey = runtimeExplicitAgentJournalKey(contract.id, source, "fail", failOptions);
+
+  await service.recordSessionResult(firstRun.id, {
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: sessionIdByPrompt.get("ok"),
+    stepId: "runtime:ok",
+    idempotencyKey: okIdempotencyKey,
+    status: "passed",
+    summary: "good result",
+    result: "good result"
+  });
+
+  const runAfterFailedWriteback = await service.recordSessionResult(firstRun.id, {
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: sessionIdByPrompt.get("fail"),
+    stepId: "runtime:fail",
+    idempotencyKey: failIdempotencyKey,
+    status: "failed",
+    summary: "bad exploded",
+    result: "bad exploded"
+  });
+
+  expect(runAfterFailedWriteback.status).toBe("running");
+
+  const resumedRun = await service.executeWorkflowAttempt(firstRun.id, {
+    attemptId: launch.attempt.id,
+    verifier: async ({ result }) => ({
+      status: JSON.stringify((result as { results: Array<string | null> }).results) === JSON.stringify(["good result", null])
+        ? "passed"
+        : "failed",
+      summary: "Verified resumed isolation",
+      checks: [{ rubricId: "done", status: "passed", evidence: JSON.stringify(result) }]
+    })
+  });
+
+  expect(resumedRun.status).toBe("completed");
+
+  const detail = await service.getRunDetail(resumedRun.id);
+  expect(detail.workflowContexts[0].vars.runtimeScript).toMatchObject({
+    status: "completed",
+    result: {
+      results: ["good result", null]
+    }
+  });
+  expect(detail.workflowContexts[0].taskRuns).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      sessionId: sessionIdByPrompt.get("ok"),
+      stepId: "runtime:ok",
+      status: "completed",
+      result: "good result"
+    }),
+    expect.objectContaining({
+      sessionId: sessionIdByPrompt.get("fail"),
+      stepId: "runtime:fail",
+      status: "failed",
+      error: "bad exploded"
+    })
+  ]));
 });

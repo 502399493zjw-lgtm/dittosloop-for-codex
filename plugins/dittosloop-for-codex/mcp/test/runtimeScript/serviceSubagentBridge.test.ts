@@ -303,3 +303,102 @@ test("failed runtime script bridge result marks the task failed and surfaces the
     })
   ]);
 });
+
+test("failed runtime script child session inside parallel is isolated as null while siblings finish", async () => {
+  const requests: CodexSessionRequest[] = [];
+  const requestBySessionId = new Map<string, CodexSessionRequest>();
+  let releaseReads!: () => void;
+  const allSessionsStarted = new Promise<void>((resolve) => {
+    releaseReads = resolve;
+  });
+  const bridge: CodexSessionBridge = {
+    createSession: vi.fn(async (request) => {
+      requests.push(request);
+      const session = createSessionRef(request, requests.length, "requested");
+      requestBySessionId.set(session.sessionId, request);
+      if (requests.length === 2) {
+        releaseReads();
+      }
+      return session;
+    }),
+    sendMessage: vi.fn(async () => {}),
+    recordResult: vi.fn(async () => {}),
+    readResult: vi.fn(async (sessionId) => {
+      await allSessionsStarted;
+      const prompt = requestBySessionId.get(sessionId)?.prompt;
+      if (prompt === "good") {
+        return {
+          status: "completed",
+          text: "good result",
+          createdAt: fixedTime
+        };
+      }
+      if (prompt === "bad") {
+        return {
+          status: "failed",
+          text: "bad exploded",
+          createdAt: fixedTime
+        };
+      }
+      return undefined;
+    })
+  };
+  const service = await createService(bridge);
+  const { contract, launch } = await createRuntimeScriptRun(service, `
+    const results = await parallel(
+      () => agent("good", { key: "good", label: "good" }),
+      () => agent("bad", { key: "bad", label: "bad" })
+    );
+    return { results };
+  `);
+
+  const run = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id,
+    verifier: async ({ result }) => ({
+      status: JSON.stringify((result as { results: Array<string | null> }).results) === JSON.stringify(["good result", null])
+        ? "passed"
+        : "failed",
+      summary: "verified isolated branch failure",
+      checks: [{ rubricId: "done", status: "passed", evidence: JSON.stringify(result) }]
+    })
+  });
+
+  expect(run.status).toBe("completed");
+  expect(requests).toHaveLength(2);
+  expect(new Set(requests.map((request) => request.prompt))).toEqual(new Set(["good", "bad"]));
+  const sessionIdByPrompt = new Map(requests.map((request, index) => [request.prompt, `session_${index + 1}`]));
+
+  const detail = await service.getRunDetail(run.id);
+  expect(detail.workflowContexts[0].status).toBe("completed");
+  expect(detail.workflowContexts[0].vars.runtimeScript).toMatchObject({
+    status: "completed",
+    result: {
+      results: ["good result", null]
+    }
+  });
+  expect(detail.workflowContexts[0].taskRuns).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      sessionId: sessionIdByPrompt.get("good"),
+      stepId: "runtime:good",
+      status: "completed",
+      result: "good result"
+    }),
+    expect.objectContaining({
+      sessionId: sessionIdByPrompt.get("bad"),
+      stepId: "runtime:bad",
+      status: "failed",
+      error: "bad exploded"
+    })
+  ]));
+
+  const snapshot = await service.getSnapshot();
+  expect(snapshot.runtimeScriptJournals).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      contractId: contract.id,
+      callSite: "bad",
+      status: "failed",
+      error: "bad exploded",
+      sessionId: sessionIdByPrompt.get("bad")
+    })
+  ]));
+});

@@ -317,6 +317,54 @@ describe("runRuntimeScriptInVm", () => {
     expect((result as string[])).toHaveLength(3);
   });
 
+  test("pipeline stage callbacks receive previous value, original item, and item index", async () => {
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return await pipeline(
+          args.items,
+          async (item, originalItem, index) => ({
+            step: "extract",
+            previousValue: item,
+            originalItem,
+            index
+          }),
+          async (previousValue, originalItem, index) => ({
+            step: "verify",
+            previousValue,
+            originalItem,
+            index
+          })
+        );
+      `,
+      args: { items: ["a", "b"] }
+    }));
+
+    expect(result).toEqual([
+      {
+        step: "verify",
+        previousValue: {
+          step: "extract",
+          previousValue: "a",
+          originalItem: "a",
+          index: 0
+        },
+        originalItem: "a",
+        index: 0
+      },
+      {
+        step: "verify",
+        previousValue: {
+          step: "extract",
+          previousValue: "b",
+          originalItem: "b",
+          index: 1
+        },
+        originalItem: "b",
+        index: 1
+      }
+    ]);
+  });
+
   test("pipeline keeps array form with options object", async () => {
     const events: RuntimeScriptEventInput[] = [];
     const result = await runRuntimeScriptInVm(createRunInput({

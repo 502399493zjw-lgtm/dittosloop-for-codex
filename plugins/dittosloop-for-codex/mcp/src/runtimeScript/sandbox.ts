@@ -364,7 +364,7 @@ async function pipeline(items, ...args) {
     try {
       let current = item;
       for (const stage of stages) {
-        current = await stage(current, index);
+        current = await stage(current, item, index);
       }
       return current;
     } catch (error) {

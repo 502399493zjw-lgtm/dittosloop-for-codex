@@ -17,13 +17,13 @@ export interface RuntimeScriptApi {
   parallel<T>(task: () => Promise<T>, ...tasks: Array<() => Promise<T>>): Promise<Array<T | null>>;
   pipeline<TInput, TOutput>(
     items: TInput[],
-    stages: Array<(item: TInput | TOutput, index: number) => Promise<TOutput>>,
+    stages: Array<(prev: TInput | TOutput, item: TInput, index: number) => Promise<TOutput>>,
     options?: RuntimeWorkflowOptions
   ): Promise<Array<TOutput | null>>;
   pipeline<TInput, TOutput>(
     items: TInput[],
-    stage: (item: TInput | TOutput, index: number) => Promise<TOutput>,
-    ...stages: Array<(item: TInput | TOutput, index: number) => Promise<TOutput>>
+    stage: (prev: TInput | TOutput, item: TInput, index: number) => Promise<TOutput>,
+    ...stages: Array<(prev: TInput | TOutput, item: TInput, index: number) => Promise<TOutput>>
   ): Promise<Array<TOutput | null>>;
   phase(label: string): { done(status?: "ok" | "failed"): void };
   log(message: string): void;
@@ -31,7 +31,11 @@ export interface RuntimeScriptApi {
 
 type RuntimeWorkflowOptions = { label?: string };
 type RuntimeParallelTask<T> = () => Promise<T>;
-type RuntimePipelineStage<TInput, TOutput> = (item: TInput | TOutput, index: number) => Promise<TOutput>;
+type RuntimePipelineStage<TInput, TOutput> = (
+  prev: TInput | TOutput,
+  item: TInput,
+  index: number
+) => Promise<TOutput>;
 
 export class RuntimeScriptAgentError extends Error {
   readonly status: "failed" | "needs_human";
@@ -239,7 +243,7 @@ export function createRuntimeScriptScheduler(input: RuntimeScriptRunInput): Runt
       try {
         let current: TInput | TOutput = item;
         for (const stage of stages) {
-          current = await stage(current, index);
+          current = await stage(current, item, index);
         }
         return current as TOutput;
       } catch (error) {

@@ -68,7 +68,7 @@ import {
 } from "./runtimeScript/hash.js";
 import { createLoopStoreRuntimeScriptJournal } from "./runtimeScript/journal.js";
 import { runRuntimeScriptInVm } from "./runtimeScript/sandbox.js";
-import type { RuntimeScriptEventInput, WorkflowSubagentBridge } from "./runtimeScript/types.js";
+import type { RuntimeScriptEventInput, WorkflowSubagentBridge, WorkflowSubagentResult } from "./runtimeScript/types.js";
 import { compileExecutionGraph } from "./workflowGraph/compileGraph.js";
 import {
   createInitialNodeRuns,
@@ -1400,7 +1400,7 @@ export class LoopService {
         if (!bridge) {
           throw new Error("No workflow executor or Codex session bridge is configured.");
         }
-        const result = await this.runRuntimeScriptCodexSessionStep(
+        return this.runRuntimeScriptCodexSessionStep(
           bridge,
           run,
           {
@@ -1424,12 +1424,6 @@ export class LoopService {
             }
           }
         );
-
-        return {
-          status: "completed",
-          output: result.text,
-          session: result.data?.session as CodexSessionRef | undefined
-        };
       }
     };
   }
@@ -1534,7 +1528,7 @@ export class LoopService {
     bridge: CodexSessionBridge,
     run: LoopRun,
     request: AgentRequest
-  ): Promise<AgentResult> {
+  ): Promise<WorkflowSubagentResult> {
     if (!request.workflowContextId || !request.attemptId) {
       throw new Error("Runtime script Codex sessions require workflow context and attempt ids");
     }
@@ -1548,14 +1542,17 @@ export class LoopService {
     );
     if (existingTaskRun?.status === "completed") {
       return {
-        text: existingTaskRun.result ?? "",
-        data: {
-          session: this.codexSessionRefFromWorkflowTask(run, existingTaskRun, request, "completed")
-        }
+        status: "completed",
+        output: existingTaskRun.result ?? "",
+        session: this.codexSessionRefFromWorkflowTask(run, existingTaskRun, request, "completed")
       };
     }
     if (existingTaskRun?.status === "failed") {
-      throw new Error(existingTaskRun.error ?? `Codex session failed: ${existingTaskRun.sessionId ?? existingTaskRun.id}`);
+      return {
+        status: "failed",
+        error: existingTaskRun.error ?? `Codex session failed: ${existingTaskRun.sessionId ?? existingTaskRun.id}`,
+        session: this.codexSessionRefFromWorkflowTask(run, existingTaskRun, request, "failed")
+      };
     }
     if (existingTaskRun) {
       if (!existingTaskRun.sessionId) {
@@ -1653,7 +1650,7 @@ export class LoopService {
     taskRunId: string,
     session: CodexSessionRef | undefined,
     result: Awaited<ReturnType<CodexSessionBridge["readResult"]>>
-  ): Promise<AgentResult> {
+  ): Promise<WorkflowSubagentResult> {
     if (!session) {
       throw new Error(`Runtime script Codex task has no session: ${taskRunId}`);
     }
@@ -1673,15 +1670,18 @@ export class LoopService {
     if (result.status === "failed") {
       const message = result.text || `Codex session failed: ${session.sessionId}`;
       await this.failWorkflowTask(workflowContextId, taskRunId, message);
-      throw new Error(message);
+      return {
+        status: "failed",
+        error: message,
+        session: sessionWithResult
+      };
     }
 
     await this.completeWorkflowTask(workflowContextId, taskRunId, result.text);
     return {
-      text: result.text,
-      data: {
-        session: sessionWithResult
-      }
+      status: "completed",
+      output: result.text,
+      session: sessionWithResult
     };
   }
 
@@ -2206,7 +2206,13 @@ export class LoopService {
       }
 
       const workflowContextAfterTaskResult = targetContext
-        ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp, { finalize: false })
+        ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp, {
+            finalize: false,
+            keepRuntimeScriptActive:
+              targetContract?.workflow.kind === "runtime_script" &&
+              isWorkflowTaskResult &&
+              resultInput.status !== "needs_human"
+          })
         : undefined;
       const graphTaskNodeTransition = workflowTaskNodeTransition({
         before: targetContext,
@@ -2264,11 +2270,18 @@ export class LoopService {
         hasPendingWorkflowSessions
       );
       const shouldResumeRuntimeScriptWorkflow = Boolean(
-        resultInput.status === "passed" &&
         isWorkflowTaskResult &&
         targetContract?.workflow.kind === "runtime_script" &&
+        resultInput.status !== "needs_human" &&
         workflowContextAfterTaskResult &&
         !hasPendingWorkflowSessions
+      );
+      const shouldKeepRuntimeScriptWaiting = Boolean(
+        isWorkflowTaskResult &&
+        targetContract?.workflow.kind === "runtime_script" &&
+        resultInput.status !== "needs_human" &&
+        workflowContextAfterTaskResult &&
+        hasPendingWorkflowSessions
       );
       const codexSession = {
         ...run.codexSession,
@@ -2293,7 +2306,12 @@ export class LoopService {
       };
 
       if (
-        (shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions || shouldResumeRuntimeScriptWorkflow) &&
+        (
+          shouldContinueThisWorkflow ||
+          shouldWaitForPendingWorkflowSessions ||
+          shouldResumeRuntimeScriptWorkflow ||
+          shouldKeepRuntimeScriptWaiting
+        ) &&
         workflowContextAfterTaskResult
       ) {
         const workflowProgressEvents = shouldWaitForPendingWorkflowSessions && shouldSynthesizeWorkflowEngineEvents
@@ -2353,7 +2371,9 @@ export class LoopService {
                 ? "Codex task result recorded; continuing workflow"
                 : shouldResumeRuntimeScriptWorkflow
                   ? "Codex task result recorded; runtime script is ready to resume"
-                  : "Codex task result recorded; waiting for pending workflow sessions",
+                  : shouldKeepRuntimeScriptWaiting
+                    ? "Codex task result recorded; waiting for pending runtime script sessions"
+                    : "Codex task result recorded; waiting for pending workflow sessions",
               timestamp,
               {
                 attemptId,
@@ -5508,9 +5528,10 @@ function completeWorkflowContextFromSessionResult(
   context: WorkflowContext,
   input: RecordSessionResultInput,
   timestamp: string,
-  options: { finalize?: boolean } = {}
+  options: { finalize?: boolean; keepRuntimeScriptActive?: boolean } = {}
 ): WorkflowContext {
   const finalize = options.finalize ?? true;
+  const keepRuntimeScriptActive = options.keepRuntimeScriptActive ?? false;
   const targetTaskRun =
     context.taskRuns.find((taskRun) => matchesWorkflowTaskRun(taskRun, input)) ??
     (input.attemptId ? context.taskRuns.find((taskRun) => taskRun.attemptId === input.attemptId) : undefined) ??
@@ -5522,7 +5543,9 @@ function completeWorkflowContextFromSessionResult(
     input.status === "failed" ? "failed" : input.status === "needs_human" ? "suspended" : "completed";
   const contextStatus =
     input.status === "failed"
-      ? "failed"
+      ? keepRuntimeScriptActive
+        ? "running"
+        : "failed"
       : input.status === "needs_human"
         ? "suspended"
         : finalize
@@ -5530,7 +5553,9 @@ function completeWorkflowContextFromSessionResult(
           : "running";
   const cursor =
     input.status === "failed"
-      ? { state: "failed" as const, stepId, phaseId, sessionId }
+      ? keepRuntimeScriptActive
+        ? { state: "executing" as const, stepId, phaseId, sessionId }
+        : { state: "failed" as const, stepId, phaseId, sessionId }
       : input.status === "needs_human"
         ? { state: "waiting_for_human" as const, stepId, phaseId, sessionId }
         : finalize
