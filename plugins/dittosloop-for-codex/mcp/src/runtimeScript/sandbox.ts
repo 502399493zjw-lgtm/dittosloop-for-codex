@@ -210,6 +210,11 @@ function emit(type, data) {
   parentPort.postMessage({ kind: "event", type, data });
 }
 
+function finish(message) {
+  parentPort.postMessage(message);
+  parentPort.close();
+}
+
 function deepFreeze(value, seen = new WeakSet()) {
   if (!value || typeof value !== "object") {
     return value;
@@ -318,9 +323,9 @@ function log(message) {
       filename: ` + "`dittosloop-runtime-script:${workerData.contractId}`" + `
     });
     const value = await script.runInContext(context);
-    parentPort.postMessage({ kind: "done", value });
+    finish({ kind: "done", value });
   } catch (error) {
-    parentPort.postMessage({
+    finish({
       kind: "error",
       error: {
         name: error?.name,

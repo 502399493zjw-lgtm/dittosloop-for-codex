@@ -297,6 +297,15 @@ describe("runRuntimeScriptInVm", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Runtime script timed out");
   }, 10_000);
+
+  test("successful runtime script child process exits naturally after worker completes", async () => {
+    const result = await runNaturalExitProbeChildProcess();
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toContain('"result":"ok"');
+  }, 10_000);
 });
 
 function runTimeoutProbeChildProcess(): Promise<{
@@ -362,6 +371,97 @@ function runTimeoutProbeChildProcess(): Promise<{
     } catch (error) {
       console.log(error instanceof Error ? error.message : String(error));
       process.exit(/Runtime script timed out/.test(String(error instanceof Error ? error.message : error)) ? 0 : 3);
+    }
+  `;
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childSource], {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stdout = "";
+  let stderr = "";
+  let timedOut = false;
+  const killTimer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, 1_500);
+
+  child.stdout.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+
+  return new Promise((resolve) => {
+    child.on("close", (code, signal) => {
+      clearTimeout(killTimer);
+      resolve({ code, signal, stdout, stderr, timedOut });
+    });
+  });
+}
+
+function runNaturalExitProbeChildProcess(): Promise<{
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}> {
+  const childSource = `
+    import { runRuntimeScriptInVm } from "./src/runtimeScript/sandbox.ts";
+
+    class MemoryRuntimeScriptJournal {
+      records = new Map();
+      async get(key) {
+        return this.records.get(key);
+      }
+      async recordCompleted(input) {
+        return this.upsert(input);
+      }
+      async recordFailed(input) {
+        return this.upsert(input);
+      }
+      async upsert(input) {
+        const record = {
+          ...input,
+          id: "journal_1",
+          createdAt: "2026-06-29T00:00:00.000Z",
+          updatedAt: "2026-06-29T00:00:00.000Z"
+        };
+        this.records.set(input.key, record);
+        return record;
+      }
+    }
+
+    const input = {
+      runId: "run_success",
+      attemptId: "attempt_success",
+      workflowContextId: "workflow_success",
+      contractId: "contract_success",
+      source: 'return await agent("ok");',
+      args: {},
+      limits: {
+        timeoutMs: 1_000,
+        maxAgentCalls: 2,
+        maxParallelBranches: 2,
+        maxPipelineItems: 2,
+        maxLogChars: 100
+      },
+      journal: new MemoryRuntimeScriptJournal(),
+      subagentBridge: {
+        async runAgent() {
+          return { status: "completed", output: "ok" };
+        }
+      },
+      now: () => "2026-06-29T00:00:00.000Z"
+    };
+
+    try {
+      const result = await runRuntimeScriptInVm(input);
+      console.log(JSON.stringify({ result }));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 3;
     }
   `;
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childSource], {
