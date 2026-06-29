@@ -168,6 +168,9 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).toContain("Codex worker 会话");
   expect(app).toContain("codexSessionRequestAgents");
   expect(app).toContain("codexWorkflowPlanAgents");
+  expect(app).toContain("hasCodexThreadLink");
+  expect(app).toContain("等待 Codex 宿主创建并回填真实新会话。");
+  expect(app).toContain("status: hasThread ? run.codexSession.status : \"requested\"");
   expect(app).toContain("工作流计划");
   expect(app).toContain("hasWorkflowTimeline");
   expect(app).toContain("phaseDone");
@@ -335,6 +338,17 @@ test("loop launch copy reuses an existing run prompt and reports failures with t
   expect(app).toContain("window.__dittosloopLastLaunchPrompt = existingLaunch.prompt");
   expect(app).toContain("showToast(\"已复制启动提示，请打开 Codex 新会话粘贴运行。\")");
   expect(app).toContain("showToast(`复制启动提示失败：${errorMessage(response,");
+  expect(app).toContain("showToast(\"创建启动请求失败：预览服务已断开，请重新打开 DittosLoop 预览后再试。\", \"error\")");
+  expect(app).toContain("showToast(\"读取运行详情失败：预览服务已断开，请重新打开 DittosLoop 预览后再试。\", \"error\")");
+  expect(app).toContain("const copied = await copyText(launch.prompt)");
+  expect(app).toContain("renderPromptNotice(\"已创建启动请求，但浏览器没有开放剪贴板。请手动复制下面的 prompt。\", launch.prompt)");
+  const copyLaunchBody = app.slice(
+    app.indexOf("async function copyLoopLaunchPrompt(loop)"),
+    app.indexOf("function existingLoopLaunch(loop)")
+  );
+  expect(copyLaunchBody).not.toContain("writeRouteState(\"run\"");
+  expect(copyLaunchBody).not.toContain("selectedRunId =");
+  expect(copyLaunchBody).not.toContain("loadRunDetail(");
   expect(app).not.toContain("renderError(`Codex session request failed: ${response.status}`)");
   expect(app).not.toContain("renderNotice(\"已复制启动提示");
 });
@@ -484,6 +498,8 @@ test("preview script keeps deep-linked run routes even before snapshot catches u
 
   expect(app).toContain("selectedRunId = route.runId");
   expect(app).toContain("selectedLoopId = detail.loop.id");
+  expect(app).toContain("const loop = loops.find((item) => item.id === selectedLoopId) ?? detail?.loop");
+  expect(app).toContain("detail?.run?.loopId === loop.id");
 });
 
 test("serves the loop snapshot api", async () => {

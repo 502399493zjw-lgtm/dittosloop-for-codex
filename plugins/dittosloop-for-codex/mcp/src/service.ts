@@ -1506,7 +1506,7 @@ export class LoopService {
         updatedAt: timestamp,
         codexSession: {
           ...run.codexSession,
-          status: "started",
+          status: codexSessionStatusAfterThreadAttachment(run, run.codexSession),
           ...codexThread,
           subagents:
             run.codexSession.subagents && run.codexSession.subagents.length > 0
@@ -1685,7 +1685,7 @@ export class LoopService {
           : resultInput.status === "failed"
             ? "failed" as const
             : resultInput.status === "passed"
-              ? "completed" as const
+              ? completedCodexSessionStatus(run.codexSession)
               : run.codexSession.status === "requested"
                 ? "started" as const
                 : run.codexSession.status,
@@ -2458,7 +2458,7 @@ export class LoopService {
         const codexSession = run.codexSession
           ? {
               ...run.codexSession,
-              status: status === "failed" ? "failed" as const : "completed" as const,
+              status: status === "failed" ? "failed" as const : completedCodexSessionStatus(run.codexSession),
               subagents: run.codexSession.subagents?.map((subagent) => ({
                 ...subagent,
                 status:
@@ -2744,7 +2744,15 @@ export class LoopService {
         ...run,
         codexSession: {
           mode: "new_session",
-          status: latestSession.status,
+          status:
+            latestSession.status === "failed"
+              ? "failed"
+              : hasCodexSessionThread({
+                  threadId: latestSession.threadId ?? run.codexSession?.threadId,
+                  threadUrl: latestSession.threadUrl ?? run.codexSession?.threadUrl
+                })
+                ? "completed"
+                : completedCodexSessionStatus(run.codexSession),
           threadId: latestSession.threadId ?? run.codexSession?.threadId,
           threadTitle: latestSession.threadTitle ?? run.codexSession?.threadTitle,
           threadUrl: latestSession.threadUrl ?? run.codexSession?.threadUrl,
@@ -4084,6 +4092,39 @@ function normalizeCodexSessionThreadUrl(
         : subagent
     )
   };
+}
+
+function hasCodexSessionThread(codexSession: { threadId?: string; threadUrl?: string } | undefined): boolean {
+  return Boolean(codexSession?.threadId || codexSession?.threadUrl);
+}
+
+function completedCodexSessionStatus(
+  codexSession: LoopRun["codexSession"]
+): NonNullable<LoopRun["codexSession"]>["status"] {
+  if (!codexSession) return "requested";
+  if (codexSession.status === "failed" || codexSession.status === "unavailable") {
+    return codexSession.status;
+  }
+  if (hasCodexSessionThread(codexSession)) {
+    return "completed";
+  }
+  return codexSession.status === "started" ? "started" : "requested";
+}
+
+function codexSessionStatusAfterThreadAttachment(
+  run: LoopRun,
+  codexSession: LoopRun["codexSession"]
+): NonNullable<LoopRun["codexSession"]>["status"] {
+  if (run.status === "failed" || codexSession?.status === "failed") {
+    return "failed";
+  }
+  if (run.status === "completed") {
+    return "completed";
+  }
+  if (codexSession?.status === "unavailable") {
+    return "unavailable";
+  }
+  return "started";
 }
 
 function codexSessionStatusForPendingWorkflowSession(

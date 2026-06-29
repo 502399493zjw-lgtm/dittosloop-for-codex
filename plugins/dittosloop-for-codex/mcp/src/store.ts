@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { deriveLoopOperationalStates } from "./loopOperationalState.js";
-import type { LoopMemory, LoopState, MemoryCommit } from "./types.js";
+import type { LoopMemory, LoopRun, LoopState, MemoryCommit } from "./types.js";
 
 const STATE_FILE = "state.json";
 const CURRENT_STATE_VERSION = 2 as const;
@@ -90,7 +90,7 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
       executionGraphSnapshot: context.executionGraphSnapshot,
       nodeRuns: context.nodeRuns
     })),
-    runs: value?.runs ?? [],
+    runs: normalizeRuns(value?.runs ?? []),
     attempts: value?.attempts ?? [],
     events: value?.events ?? [],
     verificationResults: value?.verificationResults ?? [],
@@ -111,6 +111,28 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function normalizeRuns(runs: LoopRun[]): LoopRun[] {
+  return runs.map((run) => {
+    const codexSession = run.codexSession;
+    if (
+      !codexSession ||
+      codexSession.status !== "completed" ||
+      codexSession.threadId ||
+      codexSession.threadUrl
+    ) {
+      return run;
+    }
+
+    return {
+      ...run,
+      codexSession: {
+        ...codexSession,
+        status: "requested"
+      }
+    };
+  });
 }
 
 function deriveLoopMemories(existing: LoopMemory[], commits: MemoryCommit[]): LoopMemory[] {

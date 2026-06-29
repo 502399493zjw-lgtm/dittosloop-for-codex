@@ -478,18 +478,23 @@ function copyTemplatePromptWithSelection(prompt) {
 }
 
 async function loadRunDetail(runId) {
-  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: "no-store" });
-  if (!response.ok) {
-    renderError(`Run detail request failed: ${response.status}`);
-    return;
-  }
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: "no-store" });
+    if (!response.ok) {
+      renderError(`Run detail request failed: ${response.status}`);
+      return;
+    }
 
-  const detail = await response.json();
-  selectedRunId = detail.run.id;
-  selectedLoopId = detail.loop.id;
-  loopSelectionClosed = false;
-  render(currentSnapshot);
-  renderLoopStage({ snapshot: currentSnapshot, detail });
+    const detail = await response.json();
+    selectedRunId = detail.run.id;
+    selectedLoopId = detail.loop.id;
+    loopSelectionClosed = false;
+    render(currentSnapshot);
+    renderLoopStage({ snapshot: currentSnapshot, detail });
+  } catch (error) {
+    console.error(error);
+    showToast("读取运行详情失败：预览服务已断开，请重新打开 DittosLoop 预览后再试。", "error");
+  }
 }
 
 async function loadLoopFiles(loopId) {
@@ -618,14 +623,18 @@ function renderLoopStage({ snapshot, detail }) {
   const runs = snapshot.runs ?? [];
   const verificationResults = snapshot.verificationResults ?? [];
   const humanRequests = snapshot.humanRequests ?? [];
-  const loop = loops.find((item) => item.id === selectedLoopId);
+  const loop = loops.find((item) => item.id === selectedLoopId) ?? detail?.loop;
 
   if (!loop) {
     elements.loopStage.replaceChildren(empty("选择一个 Live Loop 查看运行记录。"));
     return;
   }
 
-  const loopRuns = [...runsForLoop(loop.id, runs)].reverse();
+  let loopRuns = [...runsForLoop(loop.id, runs)];
+  if (detail?.run?.loopId === loop.id && !loopRuns.some((run) => run.id === detail.run.id)) {
+    loopRuns = [...loopRuns, detail.run];
+  }
+  loopRuns = loopRuns.reverse();
   const checks = loop.verification?.checks ?? [];
 
   if (detail && selectedRunId) {
@@ -739,7 +748,11 @@ async function copyNewLoopPrompt() {
 
   const launch = await response.json();
   window.__dittosloopNewLoopPrompt = launch.prompt;
-  await copyText(launch.prompt);
+  const copied = await copyText(launch.prompt);
+  if (!copied) {
+    renderPromptNotice("已创建构建提示，但浏览器没有开放剪贴板。请手动复制下面的 prompt。", launch.prompt);
+    return;
+  }
   showToast("已复制成功，请打开 Codex 新会话粘贴构建。");
 }
 
@@ -747,7 +760,7 @@ async function copyText(text) {
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
-      return;
+      return true;
     } catch {
       // Fall through to the legacy textarea path when the embedded browser denies clipboard access.
     }
@@ -760,47 +773,55 @@ async function copyText(text) {
   textarea.style.left = "-9999px";
   document.body.append(textarea);
   textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+  }
 }
 
 async function copyLoopLaunchPrompt(loop) {
-  const existingLaunch = existingLoopLaunch(loop);
-  if (existingLaunch?.prompt) {
-    window.__dittosloopLastLaunchRequest = existingLaunch.launchRequest;
-    window.__dittosloopLastLaunchPrompt = existingLaunch.prompt;
-    await copyText(existingLaunch.prompt);
-    selectedRunId = existingLaunch.run.id;
-    selectedLoopId = existingLaunch.run.loopId;
-    activeLoopTab = "history";
-    writeRouteState("run", selectedRunId);
-    await loadRunDetail(existingLaunch.run.id);
+  try {
+    const existingLaunch = existingLoopLaunch(loop);
+    if (existingLaunch?.prompt) {
+      window.__dittosloopLastLaunchRequest = existingLaunch.launchRequest;
+      window.__dittosloopLastLaunchPrompt = existingLaunch.prompt;
+      const copied = await copyText(existingLaunch.prompt);
+      if (!copied) {
+        renderPromptNotice("已创建启动请求，但浏览器没有开放剪贴板。请手动复制下面的 prompt。", existingLaunch.prompt);
+        return;
+      }
+      showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
+      return;
+    }
+
+    const response = await fetch(`/api/loops/${encodeURIComponent(loop.id)}/codex-session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        goal: loop.intent
+      })
+    });
+    if (!response.ok) {
+      showToast(`复制启动提示失败：${errorMessage(response, "请稍后重试。")}`, "error");
+      return;
+    }
+
+    const launch = await response.json();
+    window.__dittosloopLastLaunchRequest = launch.launchRequest;
+    window.__dittosloopLastLaunchPrompt = launch.prompt;
+    const copied = await copyText(launch.prompt);
+    if (!copied) {
+      renderPromptNotice("已创建启动请求，但浏览器没有开放剪贴板。请手动复制下面的 prompt。", launch.prompt);
+      return;
+    }
     showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
-    return;
+  } catch (error) {
+    console.error(error);
+    showToast("创建启动请求失败：预览服务已断开，请重新打开 DittosLoop 预览后再试。", "error");
   }
-
-  const response = await fetch(`/api/loops/${encodeURIComponent(loop.id)}/codex-session`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      goal: loop.intent
-    })
-  });
-  if (!response.ok) {
-    showToast(`复制启动提示失败：${errorMessage(response, "请稍后重试。")}`, "error");
-    return;
-  }
-
-  const launch = await response.json();
-  window.__dittosloopLastLaunchRequest = launch.launchRequest;
-  window.__dittosloopLastLaunchPrompt = launch.prompt;
-  await copyText(launch.prompt);
-  selectedRunId = launch.run.id;
-  selectedLoopId = launch.run.loopId;
-  activeLoopTab = "history";
-  writeRouteState("run", selectedRunId);
-  await loadSnapshot();
-  showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
 }
 
 function existingLoopLaunch(loop) {
@@ -1312,15 +1333,16 @@ function buildRunPhases(detail) {
 }
 
 function codexSessionRequestAgents(run) {
+  const hasThread = hasCodexThreadLink(run.codexSession);
   return [
     {
       id: `${run.id}-current-session`,
       avatar: "会",
       name: "Codex worker 会话",
-      status: run.codexSession.threadId ? "completed" : run.codexSession.status,
-      description: run.codexSession.threadId
+      status: hasThread ? run.codexSession.status : "requested",
+      description: hasThread
         ? "已关联真实 Codex worker 会话，可打开查看运行结果。"
-        : "启动提示已复制，等待在 Codex 新会话中粘贴运行。",
+        : "等待 Codex 宿主创建并回填真实新会话。",
       meta: "host-mediated session",
       threadId: run.codexSession.threadId,
       threadTitle: run.codexSession.threadTitle,
@@ -1331,10 +1353,11 @@ function codexSessionRequestAgents(run) {
 
 function codexWorkflowPlanAgents(run) {
   const subagents = Array.isArray(run.codexSession?.subagents) ? run.codexSession.subagents : [];
+  const hasThread = hasCodexThreadLink(run.codexSession);
   return subagents.map((subagent, index) => ({
     id: `${run.id}-session-subagent-${index}`,
     name: subagent.role,
-    status: subagent.status === "requested" && run.codexSession.status !== "requested"
+    status: hasThread && subagent.status === "requested" && run.codexSession.status !== "requested"
       ? run.codexSession.status
       : subagent.status,
     description: subagent.threadId
@@ -1718,15 +1741,16 @@ function buildPreviewTimelineAgents(detail) {
 
 function buildCodexSessionTimelineAgents(detail) {
   const run = detail.run;
+  const hasThread = hasCodexThreadLink(run.codexSession);
   const agents = [
     {
       id: `${run.id}-session`,
       avatar: "启",
       name: "启动 Codex 会话",
-      status: run.codexSession.threadId ? "completed" : run.codexSession.status,
-      description: run.codexSession.threadId
+      status: hasThread ? run.codexSession.status : "requested",
+      description: hasThread
         ? "真实 Codex worker session 已创建并关联。"
-        : "启动提示已复制，等待在 Codex 新会话中粘贴运行。",
+        : "等待 Codex 宿主创建并回填真实新会话。",
       meta: formatDate.format(new Date(run.createdAt)),
       threadId: run.codexSession.threadId,
       threadTitle: run.codexSession.threadTitle,
@@ -2017,6 +2041,10 @@ function statusText(status) {
     memory: "记忆"
   };
   return labels[status] ?? status;
+}
+
+function hasCodexThreadLink(session) {
+  return Boolean(session?.threadId || session?.threadUrl);
 }
 
 function statusChip(status) {

@@ -24572,7 +24572,7 @@ ${priorOutput}`;
         updatedAt: timestamp2,
         codexSession: {
           ...run.codexSession,
-          status: "started",
+          status: codexSessionStatusAfterThreadAttachment(run, run.codexSession),
           ...codexThread,
           subagents: run.codexSession.subagents && run.codexSession.subagents.length > 0 ? run.codexSession.subagents.map(
             (subagent) => ({
@@ -24697,7 +24697,7 @@ ${priorOutput}`;
       );
       const codexSession = {
         ...run.codexSession,
-        status: shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions ? run.codexSession.status === "failed" || run.codexSession.status === "unavailable" ? run.codexSession.status : "started" : resultInput.status === "failed" ? "failed" : resultInput.status === "passed" ? "completed" : run.codexSession.status === "requested" ? "started" : run.codexSession.status,
+        status: shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions ? run.codexSession.status === "failed" || run.codexSession.status === "unavailable" ? run.codexSession.status : "started" : resultInput.status === "failed" ? "failed" : resultInput.status === "passed" ? completedCodexSessionStatus(run.codexSession) : run.codexSession.status === "requested" ? "started" : run.codexSession.status,
         subagents: updateCodexSessionSubagentsForResult(
           run.codexSession.subagents,
           resultInput,
@@ -25331,7 +25331,7 @@ ${priorOutput}`;
         const subagentStatus = status === "failed" ? "failed" : "completed";
         const codexSession = run.codexSession ? {
           ...run.codexSession,
-          status: status === "failed" ? "failed" : "completed",
+          status: status === "failed" ? "failed" : completedCodexSessionStatus(run.codexSession),
           subagents: run.codexSession.subagents?.map((subagent) => ({
             ...subagent,
             status: subagent.status === "requested" || subagent.status === "running" ? subagentStatus : subagent.status
@@ -25563,7 +25563,10 @@ ${priorOutput}`;
         ...run,
         codexSession: {
           mode: "new_session",
-          status: latestSession.status,
+          status: latestSession.status === "failed" ? "failed" : hasCodexSessionThread({
+            threadId: latestSession.threadId ?? run.codexSession?.threadId,
+            threadUrl: latestSession.threadUrl ?? run.codexSession?.threadUrl
+          }) ? "completed" : completedCodexSessionStatus(run.codexSession),
           threadId: latestSession.threadId ?? run.codexSession?.threadId,
           threadTitle: latestSession.threadTitle ?? run.codexSession?.threadTitle,
           threadUrl: latestSession.threadUrl ?? run.codexSession?.threadUrl,
@@ -26605,6 +26608,31 @@ function normalizeCodexSessionThreadUrl(codexSession, threadUrl) {
       (subagent) => subagent.threadId && !subagent.threadUrl ? { ...subagent, threadUrl: codexThreadUrl(subagent.threadId) } : subagent
     )
   };
+}
+function hasCodexSessionThread(codexSession) {
+  return Boolean(codexSession?.threadId || codexSession?.threadUrl);
+}
+function completedCodexSessionStatus(codexSession) {
+  if (!codexSession) return "requested";
+  if (codexSession.status === "failed" || codexSession.status === "unavailable") {
+    return codexSession.status;
+  }
+  if (hasCodexSessionThread(codexSession)) {
+    return "completed";
+  }
+  return codexSession.status === "started" ? "started" : "requested";
+}
+function codexSessionStatusAfterThreadAttachment(run, codexSession) {
+  if (run.status === "failed" || codexSession?.status === "failed") {
+    return "failed";
+  }
+  if (run.status === "completed") {
+    return "completed";
+  }
+  if (codexSession?.status === "unavailable") {
+    return "unavailable";
+  }
+  return "started";
 }
 function codexSessionStatusForPendingWorkflowSession(codexSession) {
   if (!codexSession) return "requested";
@@ -28417,8 +28445,8 @@ var toolDefinitions = [
   },
   {
     name: "start_codex_session",
-    title: "Start Codex session",
-    description: "Request a new Codex session for a loop run and record the launch intent.",
+    title: "Request Codex session",
+    description: "Request a host-created Codex thread for a loop run and record the launch intent.",
     schema: startCodexSessionSchema
   },
   {
@@ -28454,7 +28482,7 @@ var toolDefinitions = [
   {
     name: "record_codex_thread",
     title: "Record Codex thread",
-    description: "Attach a Codex thread id after the Codex App host creates the visible session.",
+    description: "Attach the real Codex thread id after the Codex App host creates the visible session.",
     schema: recordCodexThreadSchema
   },
   {
@@ -28472,7 +28500,7 @@ var toolDefinitions = [
   {
     name: "open_codex_session",
     title: "Open Codex session",
-    description: "Return the real Codex thread reference for a run when the host has created it.",
+    description: "Return the real Codex thread reference, or the launch request when the host thread is still missing.",
     schema: openCodexSessionSchema
   },
   {
@@ -29505,7 +29533,7 @@ function normalizeState(value) {
       executionGraphSnapshot: context.executionGraphSnapshot,
       nodeRuns: context.nodeRuns
     })),
-    runs: value?.runs ?? [],
+    runs: normalizeRuns(value?.runs ?? []),
     attempts: value?.attempts ?? [],
     events: value?.events ?? [],
     verificationResults: value?.verificationResults ?? [],
@@ -29524,6 +29552,21 @@ function normalizeState(value) {
 }
 function isNodeError2(error2) {
   return error2 instanceof Error && "code" in error2;
+}
+function normalizeRuns(runs) {
+  return runs.map((run) => {
+    const codexSession = run.codexSession;
+    if (!codexSession || codexSession.status !== "completed" || codexSession.threadId || codexSession.threadUrl) {
+      return run;
+    }
+    return {
+      ...run,
+      codexSession: {
+        ...codexSession,
+        status: "requested"
+      }
+    };
+  });
 }
 function deriveLoopMemories(existing, commits) {
   const memoriesByLoopId = new Map(existing.map((memory) => [memory.loopId, memory]));

@@ -779,8 +779,8 @@ const toolDefinitions = [
   },
   {
     name: "start_codex_session",
-    title: "Start Codex session",
-    description: "Request a new Codex session for a loop run and record the launch intent.",
+    title: "Request Codex session",
+    description: "Request a host-created Codex thread for a loop run and record the launch intent.",
     schema: startCodexSessionSchema
   },
   {
@@ -816,7 +816,7 @@ const toolDefinitions = [
   {
     name: "record_codex_thread",
     title: "Record Codex thread",
-    description: "Attach a Codex thread id after the Codex App host creates the visible session.",
+    description: "Attach the real Codex thread id after the Codex App host creates the visible session.",
     schema: recordCodexThreadSchema
   },
   {
@@ -834,7 +834,7 @@ const toolDefinitions = [
   {
     name: "open_codex_session",
     title: "Open Codex session",
-    description: "Return the real Codex thread reference for a run when the host has created it.",
+    description: "Return the real Codex thread reference, or the launch request when the host thread is still missing.",
     schema: openCodexSessionSchema
   },
   {
