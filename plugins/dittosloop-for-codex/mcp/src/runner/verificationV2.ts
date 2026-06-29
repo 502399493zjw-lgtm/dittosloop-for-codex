@@ -197,7 +197,9 @@ export function aggregateVerificationDecision(
   policy: VerificationPolicyV2,
   validatorResults: ValidatorResult[]
 ): AggregatedVerificationDecision {
-  const effectiveResults = validatorResults.map((result) => enforceRubricAgentPolicy(policy, result));
+  const effectiveResults = validatorResults.map((result) =>
+    enforceScriptPolicy(policy, enforceRubricAgentPolicy(policy, result))
+  );
   const failures = effectiveResults.filter((result) => result.status === "failed");
   const mustFailures = failures.filter((result) => result.severity === "must");
   const shouldFailures = failures.filter((result) => result.severity === "should");
@@ -401,6 +403,7 @@ async function runScriptValidator(
     timeoutMs: validator.scriptRef.timeoutMs,
     stdin: JSON.stringify(scriptValidatorInputEnvelope(validator, input))
   });
+  const parsed = parseScriptVerificationJson(execution.stdout);
   const stdout = truncateEvidence(execution.stdout);
   const stderr = truncateEvidence(execution.stderr);
   const error = execution.error ? truncateEvidence(execution.error) : undefined;
@@ -425,7 +428,6 @@ async function runScriptValidator(
     };
   }
 
-  const parsed = parseScriptVerificationJson(stdout);
   if (!parsed.ok) {
     return {
       validatorId: validator.id,
@@ -662,6 +664,29 @@ function enforceRubricAgentPolicy(policy: VerificationPolicyV2, result: Validato
   return result;
 }
 
+function enforceScriptPolicy(policy: VerificationPolicyV2, result: ValidatorResult): ValidatorResult {
+  if (result.type !== "script" || result.status !== "passed") {
+    return result;
+  }
+
+  const validator = policy.validators.find((candidate) =>
+    candidate.id === result.validatorId && candidate.type === "script"
+  );
+  const requiresEvidence = policy.decision.requireEvidenceForScriptResults
+    || (validator?.type === "script" && validator.evidenceRequired);
+  const hasRequiredEvidence = !requiresEvidence || Boolean(result.evidence?.trim());
+
+  if (!hasRequiredEvidence) {
+    return {
+      ...result,
+      status: "needs_human",
+      summary: "Script validator result requires evidence."
+    };
+  }
+
+  return result;
+}
+
 function validatorResultsToDecisionChecks(validatorResults: ValidatorResult[]): VerificationDecisionCheck[] {
   return validatorResults.flatMap((result) => {
     const rubricIds = result.criteriaIds.length > 0 ? result.criteriaIds : [result.validatorId];
@@ -776,8 +801,8 @@ async function defaultCommandExecutor(request: CommandExecutionRequest): Promise
       }
       resolve({
         exitCode: null,
-        stdout: truncateEvidence(Buffer.concat(stdoutChunks).toString("utf8")),
-        stderr: truncateEvidence(Buffer.concat(stderrChunks).toString("utf8")),
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
         timedOut,
         error: error.message
       });
@@ -793,8 +818,8 @@ async function defaultCommandExecutor(request: CommandExecutionRequest): Promise
       }
       resolve({
         exitCode,
-        stdout: truncateEvidence(Buffer.concat(stdoutChunks).toString("utf8")),
-        stderr: truncateEvidence(Buffer.concat(stderrChunks).toString("utf8")),
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
         timedOut
       });
     });

@@ -1,8 +1,13 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { expect, test } from "vitest";
 
 import type { VerificationPolicyV2 } from "../src/contract/types.js";
 import { shouldRepair } from "../src/runner/repair.js";
 import {
+  MAX_EVIDENCE_CHARS,
   aggregateVerificationDecision,
   recordedRubricAgentResultToValidatorResult,
   runVerificationV2
@@ -294,6 +299,77 @@ test("verification v2 script validators fail on invalid JSON output", async () =
   expect(result.validatorResults[0]?.evidence).toContain("stdout:");
 });
 
+test("verification v2 script validators require evidence when validator marks it required", async () => {
+  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+
+  const result = await runVerificationV2({
+    id: "verification_script_missing_evidence",
+    runId: "run_1",
+    createdAt: "2026-06-29T00:00:00.000Z",
+    policy,
+    workflowResult: {},
+    contractWorkspacePath: "/loop-workspace",
+    commandExecutor: async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        status: "passed",
+        score: 1,
+        summary: "Structured result but no evidence."
+      }),
+      stderr: ""
+    })
+  });
+
+  expect(result).toMatchObject({
+    status: "needs_human",
+    decision: {
+      needsHumanValidatorIds: ["release-note-script"],
+      humanQuestion: "Review required for validators: release-note-script"
+    }
+  });
+});
+
+test("verification v2 script validators parse valid long JSON stdout before truncating stored logs", async () => {
+  const policy = verificationPolicyWithValidators([scriptValidatorFixture()]);
+  const longEvidence = "x".repeat(MAX_EVIDENCE_CHARS);
+  const stdout = JSON.stringify({
+    status: "passed",
+    score: 0.91,
+    summary: "Long payload is still valid.",
+    evidence: [longEvidence]
+  });
+
+  const result = await runVerificationV2({
+    id: "verification_script_long_stdout",
+    runId: "run_1",
+    createdAt: "2026-06-29T00:00:00.000Z",
+    policy,
+    workflowResult: {},
+    contractWorkspacePath: "/loop-workspace",
+    commandExecutor: async () => ({
+      exitCode: 0,
+      stdout,
+      stderr: ""
+    })
+  });
+
+  expect(result).toMatchObject({
+    status: "passed",
+    validatorResults: [
+      {
+        validatorId: "release-note-script",
+        type: "script",
+        status: "passed",
+        summary: "Long payload is still valid.",
+        evidence: longEvidence
+      }
+    ]
+  });
+  expect(result.validatorResults[0]).toMatchObject({
+    stdout: expect.stringContaining("[truncated]")
+  });
+});
+
 test("verification v2 uncovered must criteria fail aggregation", () => {
   const policy = verificationPolicyWithValidators([]);
   const decision = aggregateVerificationDecision(policy, []);
@@ -393,6 +469,51 @@ test("verification v2 needs-human aggregation preserves failed criterion ids", (
     failedCriterionIds: ["tests-pass"],
     needsHumanValidatorIds: ["human-review"]
   });
+});
+
+test("default command executor pipes stdin to child processes for script validators", async () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "verification-v2-stdin-"));
+  const evaluatorDir = path.join(tempDir, "evaluators", "release-note-script");
+  mkdirSync(evaluatorDir, { recursive: true });
+  writeFileSync(
+    path.join(evaluatorDir, "evaluator.mjs"),
+    [
+      "let input = '';",
+      "for await (const chunk of process.stdin) input += chunk;",
+      "const payload = JSON.parse(input);",
+      "process.stdout.write(JSON.stringify({",
+      "  status: 'passed',",
+      "  summary: 'stdin received',",
+      "  evidence: [`releaseNotes=${payload.workflowResult.releaseNotes}`]",
+      "}));"
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const result = await runVerificationV2({
+      id: "verification_script_stdin",
+      runId: "run_1",
+      createdAt: "2026-06-29T00:00:00.000Z",
+      policy: verificationPolicyWithValidators([scriptValidatorFixture()]),
+      workflowResult: { releaseNotes: "from-stdin" },
+      contractWorkspacePath: tempDir
+    });
+
+    expect(result).toMatchObject({
+      status: "passed",
+      validatorResults: [
+        {
+          validatorId: "release-note-script",
+          type: "script",
+          status: "passed",
+          evidence: "releaseNotes=from-stdin"
+        }
+      ]
+    });
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 function verificationPolicyWithValidators(validators: VerificationPolicyV2["validators"]): VerificationPolicyV2 {
