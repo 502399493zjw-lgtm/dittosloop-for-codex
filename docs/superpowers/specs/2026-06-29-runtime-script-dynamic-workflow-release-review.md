@@ -79,6 +79,6 @@ Results:
 - `git diff --check`
   - Passed with no diff formatting errors.
 - `git status --short`
-  - Reported one tracked addition for this review document:
+  - Reported the new review document as an untracked file before commit:
     - `?? ../docs/superpowers/specs/2026-06-29-runtime-script-dynamic-workflow-release-review.md`
   - The Task 12 report file is under `.superpowers/sdd/` and remains ignored by repository status, as expected.
