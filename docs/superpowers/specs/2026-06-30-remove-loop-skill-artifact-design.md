@@ -8,12 +8,15 @@ Live Loop directory generation currently adds `skill/dittosloop-for-codex-loop.m
 
 Stop generating the per-loop `skill/dittosloop-for-codex-loop.md` artifact entirely. New Live Loop directory views should not include a `skill/` folder unless future runtime-owned data makes that folder meaningful.
 
+Keep the useful Live Loop directory files that carry memory, workflow, runtime, verification, status, and contract data: `memory.md`, `workflow.json`, `runtime.js`, `verification.md`, `status.json`, and `contract.json`.
+
 ## Scope
 
 - Remove the workspace file entry for `skill/dittosloop-for-codex-loop.md`.
 - Remove the helper that builds its markdown content.
 - Update tests that currently expect the generated skill artifact.
 - Update installed loop-skill guidance so it no longer names the generated `skill/` path.
+- Assert that `memory.md`, `workflow.json`, `runtime.js`, `verification.md`, `status.json`, and `contract.json` remain available where applicable.
 
 ## Non-Goals
 
