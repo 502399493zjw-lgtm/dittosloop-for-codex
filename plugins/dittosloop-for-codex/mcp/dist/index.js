@@ -26686,9 +26686,11 @@ ${priorOutput}`;
       };
       const runStatus = resultInput.status === "passed" ? "completed" : resultInput.status === "needs_human" ? "waiting_for_human" : "failed";
       const attemptStatus = resultInput.status === "failed" ? "failed" : resultInput.status === "needs_human" ? "running" : "completed";
+      const finalOutput = runFinalOutputFromSessionResult(resultInput);
       updatedRun = {
         ...run,
         status: runStatus,
+        ...finalOutput,
         codexSession,
         updatedAt: timestamp2,
         ...runStatus === "completed" || runStatus === "failed" ? { completedAt: timestamp2 } : {},
@@ -27274,9 +27276,17 @@ ${priorOutput}`;
             status: subagent.status === "requested" || subagent.status === "running" ? subagentStatus : subagent.status
           }))
         } : void 0;
+        const finalOutput = status === "completed" ? runFinalOutputForState(state, runId, {
+          summary: input.summary,
+          result: input.result
+        }) : runFinalOutputFromFallback({
+          summary: input.summary,
+          result: input.result
+        });
         completedRun = {
           ...run,
           status,
+          ...finalOutput,
           ...codexSession ? { codexSession } : {},
           updatedAt: timestamp2,
           completedAt: timestamp2,
@@ -27305,8 +27315,9 @@ ${priorOutput}`;
     const state = await this.options.store.readState();
     const run = requireRun(state, runId);
     const loop = requireLoop(state, run.loopId);
+    const workflowContexts = state.workflowContexts.filter((context) => context.runId === runId);
     return {
-      run,
+      run: runWithFinalOutputForRead(state, run),
       loop,
       attempts: state.attempts.filter((attempt) => attempt.runId === runId),
       events: state.events.filter((event) => event.runId === runId),
@@ -27315,7 +27326,7 @@ ${priorOutput}`;
       memoryCommits: state.memoryCommits.filter((commit) => commit.runId === runId),
       artifacts: state.artifacts.filter((artifact) => artifact.runId === runId),
       workflowRevisions: state.workflowRevisions.filter((revision) => revision.runId === runId),
-      workflowContexts: state.workflowContexts.filter((context) => context.runId === runId)
+      workflowContexts
     };
   }
   async listLoopFiles(loopId) {
@@ -27339,6 +27350,7 @@ ${priorOutput}`;
     const state = await this.options.store.readState();
     return {
       ...state,
+      runs: state.runs.map((run) => runWithFinalOutputForRead(state, run)),
       previewUrl: this.getPreviewUrl(),
       codexProjects: this.options.codexProjects ?? []
     };
@@ -29675,6 +29687,74 @@ function latestWorkflowContextForRun(state, runId) {
   }
   return contexts.filter((context) => context.attemptId === latestAttempt.id).at(-1) ?? contexts.at(-1);
 }
+function runFinalOutputFromSessionResult(input) {
+  const result = nonEmptyString(input.result);
+  return runFinalOutputFromFallback({
+    summary: result ?? nonEmptyString(input.humanQuestion) ?? input.summary,
+    result
+  });
+}
+function runWithFinalOutputForRead(state, run) {
+  if (!isTerminalOutputStatus(run.status)) {
+    return run;
+  }
+  const hasSummary = nonEmptyString(run.summary) !== void 0;
+  const hasResult = nonEmptyString(run.result) !== void 0;
+  if (hasSummary && hasResult) {
+    return run;
+  }
+  const finalOutput = runFinalOutputForState(state, run.id, {
+    summary: run.summary,
+    result: run.result
+  });
+  if (!finalOutput.summary && !finalOutput.result) {
+    return run;
+  }
+  return {
+    ...run,
+    ...!hasSummary && finalOutput.summary ? { summary: finalOutput.summary } : {},
+    ...!hasResult && finalOutput.result ? { result: finalOutput.result } : {}
+  };
+}
+function runFinalOutputForState(state, runId, fallback = {}) {
+  const contexts = state.workflowContexts.filter((context) => context.runId === runId);
+  const result = latestCompletedWorkflowTaskRunWithResult(contexts)?.result ?? latestRuntimeScriptResult(contexts) ?? nonEmptyString(fallback.result);
+  return runFinalOutputFromFallback({
+    summary: result ?? nonEmptyString(fallback.summary),
+    result
+  });
+}
+function runFinalOutputFromFallback(fallback) {
+  const summary = nonEmptyString(fallback.summary);
+  const result = nonEmptyString(fallback.result);
+  return {
+    ...summary ? { summary } : {},
+    ...result ? { result } : {}
+  };
+}
+function latestCompletedWorkflowTaskRunWithResult(contexts) {
+  return contexts.flatMap((context) => context.taskRuns).filter(
+    (taskRun) => taskRun.status === "completed" && taskRun.result !== void 0 && !isVerificationTaskStepId(taskRun.stepId)
+  ).sort((left, right) => workflowTaskRunTimestamp(left).localeCompare(workflowTaskRunTimestamp(right))).at(-1);
+}
+function latestRuntimeScriptResult(contexts) {
+  return [...contexts].sort((left, right) => workflowContextTimestamp(left).localeCompare(workflowContextTimestamp(right))).reverse().map((context) => {
+    const runtimeScriptState = isRuntimeScriptContextState(context.vars.runtimeScript) ? context.vars.runtimeScript : void 0;
+    return runtimeScriptState?.status === "completed" ? nonEmptyString(runtimeScriptState.result) : void 0;
+  }).find((result) => result !== void 0);
+}
+function workflowTaskRunTimestamp(taskRun) {
+  return taskRun.completedAt ?? taskRun.updatedAt ?? taskRun.createdAt;
+}
+function workflowContextTimestamp(context) {
+  return context.completedAt ?? context.updatedAt ?? context.createdAt;
+}
+function isTerminalOutputStatus(status) {
+  return status === "completed" || status === "failed" || status === "waiting_for_human";
+}
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value : void 0;
+}
 function latestVerificationResultForContext(state, context) {
   return [...state.verificationResults].reverse().find(
     (result) => result.runId === context.runId && (!result.attemptId || result.attemptId === context.attemptId)
@@ -30663,7 +30743,9 @@ var addArtifactSchema = external_exports.object({
 var completeRunSchema = external_exports.object({
   runId: external_exports.string().min(1),
   status: external_exports.enum(["completed", "failed"]).optional(),
-  pausedReason: immediatePausedReasonSchema.optional()
+  pausedReason: immediatePausedReasonSchema.optional(),
+  summary: external_exports.string().min(1).optional(),
+  result: external_exports.string().min(1).optional()
 });
 var markRunRepairingSchema = external_exports.object({
   runId: external_exports.string().min(1),
@@ -30773,14 +30855,23 @@ function createToolHandlers(service) {
     },
     record_validator_result: async (input) => {
       const args = recordValidatorResultSchema.parse(input);
-      return toToolResult(await service.recordValidatorResult(args.runId, {
+      const verification = await service.recordValidatorResult(args.runId, {
         workflowContextId: args.workflowContextId,
         attemptId: args.attemptId,
         sessionId: args.sessionId,
         validatorId: args.validatorId,
         idempotencyKey: args.idempotencyKey,
         result: args.result
-      }));
+      });
+      const detail = await service.getRunDetail(args.runId);
+      if (!isWorkflowSessionResultStatus(detail.run.status)) {
+        return toToolResult(verification);
+      }
+      return toToolResult({
+        ...verification,
+        run: detail.run,
+        sessionResult: buildWorkflowSessionResultEnvelope(detail, detail.run.status)
+      });
     },
     open_codex_session: async (input) => {
       const args = openCodexSessionSchema.parse(input);
@@ -30835,7 +30926,13 @@ function createToolHandlers(service) {
     },
     complete_run: async (input) => {
       const args = completeRunSchema.parse(input);
-      return toToolResult(await service.completeRun(args.runId, { status: args.status, pausedReason: args.pausedReason }));
+      const run = await service.completeRun(args.runId, {
+        status: args.status,
+        pausedReason: args.pausedReason,
+        summary: args.summary,
+        result: args.result
+      });
+      return toToolResult(await toWorkflowToolResponse(service, run));
     },
     mark_run_repairing: async (input) => {
       const args = markRunRepairingSchema.parse(input);
@@ -30899,9 +30996,9 @@ function buildWorkflowSessionResultEnvelope(detail, status) {
   const latestVerification = detail.verificationResults.at(-1);
   const latestAttempt = detail.attempts.at(-1);
   const latestOpenHumanRequest = [...detail.humanRequests].reverse().find((request) => request.status === "open");
-  const result = latestTaskRun?.result;
+  const result = detail.run.result ?? detail.run.summary ?? latestTaskRun?.result;
   const finalAnswer = status === "waiting_for_human" ? latestOpenHumanRequest?.question ?? result ?? latestVerification?.summary ?? latestAttempt?.summary ?? detail.run.goal : result ?? latestVerification?.summary ?? latestAttempt?.summary ?? detail.run.goal;
-  const summary = latestVerification?.summary ?? latestAttempt?.summary ?? result ?? finalAnswer;
+  const summary = result ?? finalAnswer ?? latestVerification?.summary ?? latestAttempt?.summary;
   return {
     status,
     finalAnswer,
@@ -30924,10 +31021,15 @@ function buildWorkflowSessionResultEnvelope(detail, status) {
   };
 }
 function latestCompletedTaskRunWithResult(detail) {
-  return detail.workflowContexts.flatMap((context) => context.taskRuns).filter((taskRun) => taskRun.status === "completed" && taskRun.result !== void 0).sort((left, right) => workflowTaskRunTimestamp(left).localeCompare(workflowTaskRunTimestamp(right))).at(-1);
+  return detail.workflowContexts.flatMap((context) => context.taskRuns).filter(
+    (taskRun) => taskRun.status === "completed" && taskRun.result !== void 0 && !isVerificationTaskStepId2(taskRun.stepId)
+  ).sort((left, right) => workflowTaskRunTimestamp2(left).localeCompare(workflowTaskRunTimestamp2(right))).at(-1);
 }
-function workflowTaskRunTimestamp(taskRun) {
+function workflowTaskRunTimestamp2(taskRun) {
   return taskRun.completedAt ?? taskRun.updatedAt ?? taskRun.createdAt;
+}
+function isVerificationTaskStepId2(stepId) {
+  return stepId?.startsWith("verification:") ?? false;
 }
 var toolDefinitions = [
   {

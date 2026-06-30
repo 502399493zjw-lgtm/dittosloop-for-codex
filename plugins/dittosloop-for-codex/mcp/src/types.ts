@@ -56,6 +56,8 @@ export interface LoopRun {
   status: RunStatus;
   goal: string;
   trigger: TriggerMode;
+  summary?: string;
+  result?: string;
   codexProjectId?: string;
   projectLabel?: string;
   projectPath?: string;

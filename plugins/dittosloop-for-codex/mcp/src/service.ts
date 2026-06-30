@@ -331,6 +331,8 @@ export interface AddArtifactInput {
 export interface CompleteRunInput {
   status?: Extract<RunStatus, "completed" | "failed">;
   pausedReason?: ImmediatePausedReason;
+  summary?: string;
+  result?: string;
 }
 
 export interface PauseLoopInput {
@@ -2472,9 +2474,11 @@ export class LoopService {
         resultInput.status === "passed" ? "completed" : resultInput.status === "needs_human" ? "waiting_for_human" : "failed";
       const attemptStatus: RunAttempt["status"] =
         resultInput.status === "failed" ? "failed" : resultInput.status === "needs_human" ? "running" : "completed";
+      const finalOutput = runFinalOutputFromSessionResult(resultInput);
       updatedRun = {
         ...run,
         status: runStatus,
+        ...finalOutput,
         codexSession,
         updatedAt: timestamp,
         ...(runStatus === "completed" || runStatus === "failed" ? { completedAt: timestamp } : {}),
@@ -3194,10 +3198,20 @@ export class LoopService {
               }))
             }
           : undefined;
+        const finalOutput = status === "completed"
+          ? runFinalOutputForState(state, runId, {
+              summary: input.summary,
+              result: input.result
+            })
+          : runFinalOutputFromFallback({
+              summary: input.summary,
+              result: input.result
+            });
 
         completedRun = {
           ...run,
           status,
+          ...finalOutput,
           ...(codexSession ? { codexSession } : {}),
           updatedAt: timestamp,
           completedAt: timestamp,
@@ -3236,9 +3250,10 @@ export class LoopService {
     const state = await this.options.store.readState();
     const run = requireRun(state, runId);
     const loop = requireLoop(state, run.loopId);
+    const workflowContexts = state.workflowContexts.filter((context) => context.runId === runId);
 
     return {
-      run,
+      run: runWithFinalOutputForRead(state, run),
       loop,
       attempts: state.attempts.filter((attempt) => attempt.runId === runId),
       events: state.events.filter((event) => event.runId === runId),
@@ -3247,7 +3262,7 @@ export class LoopService {
       memoryCommits: state.memoryCommits.filter((commit) => commit.runId === runId),
       artifacts: state.artifacts.filter((artifact) => artifact.runId === runId),
       workflowRevisions: state.workflowRevisions.filter((revision) => revision.runId === runId),
-      workflowContexts: state.workflowContexts.filter((context) => context.runId === runId)
+      workflowContexts
     };
   }
 
@@ -3277,6 +3292,7 @@ export class LoopService {
 
     return {
       ...state,
+      runs: state.runs.map((run) => runWithFinalOutputForRead(state, run)),
       previewUrl: this.getPreviewUrl(),
       codexProjects: this.options.codexProjects ?? []
     };
@@ -6371,6 +6387,111 @@ function latestWorkflowContextForRun(state: LoopState, runId: string): WorkflowC
   }
 
   return contexts.filter((context) => context.attemptId === latestAttempt.id).at(-1) ?? contexts.at(-1);
+}
+
+function runFinalOutputFromSessionResult(input: RecordSessionResultInput): Pick<LoopRun, "summary" | "result"> {
+  const result = nonEmptyString(input.result);
+  return runFinalOutputFromFallback({
+    summary: result ?? nonEmptyString(input.humanQuestion) ?? input.summary,
+    result
+  });
+}
+
+function runWithFinalOutputForRead(state: LoopState, run: LoopRun): LoopRun {
+  if (!isTerminalOutputStatus(run.status)) {
+    return run;
+  }
+
+  const hasSummary = nonEmptyString(run.summary) !== undefined;
+  const hasResult = nonEmptyString(run.result) !== undefined;
+  if (hasSummary && hasResult) {
+    return run;
+  }
+
+  const finalOutput = runFinalOutputForState(state, run.id, {
+    summary: run.summary,
+    result: run.result
+  });
+  if (!finalOutput.summary && !finalOutput.result) {
+    return run;
+  }
+
+  return {
+    ...run,
+    ...(!hasSummary && finalOutput.summary ? { summary: finalOutput.summary } : {}),
+    ...(!hasResult && finalOutput.result ? { result: finalOutput.result } : {})
+  };
+}
+
+function runFinalOutputForState(
+  state: LoopState,
+  runId: string,
+  fallback: { summary?: string; result?: string } = {}
+): Pick<LoopRun, "summary" | "result"> {
+  const contexts = state.workflowContexts.filter((context) => context.runId === runId);
+  const result =
+    latestCompletedWorkflowTaskRunWithResult(contexts)?.result ??
+    latestRuntimeScriptResult(contexts) ??
+    nonEmptyString(fallback.result);
+
+  return runFinalOutputFromFallback({
+    summary: result ?? nonEmptyString(fallback.summary),
+    result
+  });
+}
+
+function runFinalOutputFromFallback(
+  fallback: { summary?: string; result?: string }
+): Pick<LoopRun, "summary" | "result"> {
+  const summary = nonEmptyString(fallback.summary);
+  const result = nonEmptyString(fallback.result);
+
+  return {
+    ...(summary ? { summary } : {}),
+    ...(result ? { result } : {})
+  };
+}
+
+function latestCompletedWorkflowTaskRunWithResult(contexts: WorkflowContext[]): WorkflowTaskRun | undefined {
+  return contexts
+    .flatMap((context) => context.taskRuns)
+    .filter(
+      (taskRun) =>
+        taskRun.status === "completed" &&
+        taskRun.result !== undefined &&
+        !isVerificationTaskStepId(taskRun.stepId)
+    )
+    .sort((left, right) => workflowTaskRunTimestamp(left).localeCompare(workflowTaskRunTimestamp(right)))
+    .at(-1);
+}
+
+function latestRuntimeScriptResult(contexts: WorkflowContext[]): string | undefined {
+  return [...contexts]
+    .sort((left, right) => workflowContextTimestamp(left).localeCompare(workflowContextTimestamp(right)))
+    .reverse()
+    .map((context) => {
+      const runtimeScriptState = isRuntimeScriptContextState(context.vars.runtimeScript)
+        ? context.vars.runtimeScript
+        : undefined;
+      return runtimeScriptState?.status === "completed" ? nonEmptyString(runtimeScriptState.result) : undefined;
+    })
+    .find((result) => result !== undefined);
+}
+
+function workflowTaskRunTimestamp(taskRun: WorkflowTaskRun): string {
+  return taskRun.completedAt ?? taskRun.updatedAt ?? taskRun.createdAt;
+}
+
+function workflowContextTimestamp(context: WorkflowContext): string {
+  return context.completedAt ?? context.updatedAt ?? context.createdAt;
+}
+
+function isTerminalOutputStatus(status: RunStatus): boolean {
+  return status === "completed" || status === "failed" || status === "waiting_for_human";
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function latestVerificationResultForContext(

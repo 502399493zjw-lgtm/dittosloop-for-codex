@@ -3286,6 +3286,65 @@ test("records a targeted session result against the specified workflow context, 
   });
 });
 
+test("backfills terminal run read models from completed workflow task results", async () => {
+  const { bridge } = createPendingSessionBridge();
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+  const store = new LoopStore(dir);
+  const service = new LoopService({
+    store,
+    now: () => fixedTime,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: bridge
+  });
+  const loop = await createFormalLoop(service);
+  const launch = await service.startCodexSessionRun(loop.id, { goal: "Run checks" });
+  await service.executeWorkflowAttempt(launch.run.id, { attemptId: launch.attempt.id });
+  await service.recordSessionResult(launch.run.id, {
+    workflowContextId: "workflow_1",
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "run-worker",
+    idempotencyKey: "session_1:final",
+    status: "passed",
+    summary: "Worker result passed verification",
+    result: "Daily report body"
+  });
+  await store.updateState((state) => ({
+    ...state,
+    runs: state.runs.map((candidate) => {
+      if (candidate.id !== launch.run.id) {
+        return candidate;
+      }
+
+      const legacyRun = { ...candidate };
+      delete legacyRun.summary;
+      delete legacyRun.result;
+      return legacyRun;
+    })
+  }));
+
+  const detail = await service.getRunDetail(launch.run.id);
+  const snapshot = await service.getSnapshot();
+
+  expect(detail.run).toMatchObject({
+    id: launch.run.id,
+    status: "completed",
+    summary: "Daily report body",
+    result: "Daily report body"
+  });
+  expect(snapshot.runs.find((candidate) => candidate.id === launch.run.id)).toMatchObject({
+    summary: "Daily report body",
+    result: "Daily report body"
+  });
+});
+
 test("uses the workflow context attempt when precise writeback omits attemptId", async () => {
   const { bridge } = createPendingSessionBridge();
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-service-"));
@@ -4694,6 +4753,8 @@ test("records a Codex session result and completes the session-backed run", asyn
   expect(updated).toMatchObject({
     status: "completed",
     completedAt: fixedTime,
+    summary: "## AI 开发工具更新日报\n\n今日摘要...",
+    result: "## AI 开发工具更新日报\n\n今日摘要...",
     codexSession: {
       status: "completed",
       subagents: [
@@ -4706,6 +4767,11 @@ test("records a Codex session result and completes the session-backed run", asyn
     }
   });
   await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
+    run: {
+      status: "completed",
+      summary: "## AI 开发工具更新日报\n\n今日摘要...",
+      result: "## AI 开发工具更新日报\n\n今日摘要..."
+    },
     attempts: [
       {
         status: "completed",

@@ -558,7 +558,9 @@ const addArtifactSchema = z.object({
 const completeRunSchema = z.object({
   runId: z.string().min(1),
   status: z.enum(["completed", "failed"]).optional(),
-  pausedReason: immediatePausedReasonSchema.optional()
+  pausedReason: immediatePausedReasonSchema.optional(),
+  summary: z.string().min(1).optional(),
+  result: z.string().min(1).optional()
 });
 
 const markRunRepairingSchema = z.object({
@@ -672,14 +674,24 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     record_validator_result: async (input) => {
       const args = recordValidatorResultSchema.parse(input);
-      return toToolResult(await service.recordValidatorResult(args.runId, {
+      const verification = await service.recordValidatorResult(args.runId, {
         workflowContextId: args.workflowContextId,
         attemptId: args.attemptId,
         sessionId: args.sessionId,
         validatorId: args.validatorId,
         idempotencyKey: args.idempotencyKey,
         result: args.result
-      }));
+      });
+      const detail = await service.getRunDetail(args.runId);
+      if (!isWorkflowSessionResultStatus(detail.run.status)) {
+        return toToolResult(verification);
+      }
+
+      return toToolResult({
+        ...verification,
+        run: detail.run,
+        sessionResult: buildWorkflowSessionResultEnvelope(detail, detail.run.status)
+      });
     },
     open_codex_session: async (input) => {
       const args = openCodexSessionSchema.parse(input);
@@ -734,7 +746,13 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     complete_run: async (input) => {
       const args = completeRunSchema.parse(input);
-      return toToolResult(await service.completeRun(args.runId, { status: args.status, pausedReason: args.pausedReason }));
+      const run = await service.completeRun(args.runId, {
+        status: args.status,
+        pausedReason: args.pausedReason,
+        summary: args.summary,
+        result: args.result
+      });
+      return toToolResult(await toWorkflowToolResponse(service, run));
     },
     mark_run_repairing: async (input) => {
       const args = markRunRepairingSchema.parse(input);
@@ -810,12 +828,12 @@ function buildWorkflowSessionResultEnvelope(
   const latestVerification = detail.verificationResults.at(-1);
   const latestAttempt = detail.attempts.at(-1);
   const latestOpenHumanRequest = [...detail.humanRequests].reverse().find((request) => request.status === "open");
-  const result = latestTaskRun?.result;
+  const result = detail.run.result ?? detail.run.summary ?? latestTaskRun?.result;
   const finalAnswer =
     status === "waiting_for_human"
       ? latestOpenHumanRequest?.question ?? result ?? latestVerification?.summary ?? latestAttempt?.summary ?? detail.run.goal
       : result ?? latestVerification?.summary ?? latestAttempt?.summary ?? detail.run.goal;
-  const summary = latestVerification?.summary ?? latestAttempt?.summary ?? result ?? finalAnswer;
+  const summary = result ?? finalAnswer ?? latestVerification?.summary ?? latestAttempt?.summary;
 
   return {
     status,
@@ -846,13 +864,22 @@ function buildWorkflowSessionResultEnvelope(
 function latestCompletedTaskRunWithResult(detail: RunDetail): WorkflowTaskRun | undefined {
   return detail.workflowContexts
     .flatMap((context) => context.taskRuns)
-    .filter((taskRun) => taskRun.status === "completed" && taskRun.result !== undefined)
+    .filter(
+      (taskRun) =>
+        taskRun.status === "completed" &&
+        taskRun.result !== undefined &&
+        !isVerificationTaskStepId(taskRun.stepId)
+    )
     .sort((left, right) => workflowTaskRunTimestamp(left).localeCompare(workflowTaskRunTimestamp(right)))
     .at(-1);
 }
 
 function workflowTaskRunTimestamp(taskRun: WorkflowTaskRun): string {
   return taskRun.completedAt ?? taskRun.updatedAt ?? taskRun.createdAt;
+}
+
+function isVerificationTaskStepId(stepId: string | undefined): boolean {
+  return stepId?.startsWith("verification:") ?? false;
 }
 
 const toolDefinitions = [

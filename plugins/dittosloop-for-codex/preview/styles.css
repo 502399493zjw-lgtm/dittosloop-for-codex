@@ -1510,6 +1510,34 @@ a:focus-visible {
   line-height: 1.5;
 }
 
+.run-final-output {
+  display: grid;
+  gap: 8px;
+  margin: 0 22px 14px;
+  border-top: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+  background: #fffdf8;
+  padding: 14px 0;
+}
+
+.run-final-output-label {
+  color: var(--ink-4);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.run-final-output-body {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.58;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .run-board-body {
   display: flex;
   min-height: 0;

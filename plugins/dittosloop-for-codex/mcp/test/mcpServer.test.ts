@@ -278,7 +278,21 @@ test("record_validator_result is exposed through MCP", async () => {
     result: "candidate"
   });
 
-  const verification = readResult(await handlers.record_validator_result({
+  const verification = readResult<{
+    version: number;
+    runId: string;
+    attemptId: string;
+    status: string;
+    summary: string;
+    run?: { id: string; status: string; summary?: string; result?: string };
+    sessionResult?: {
+      status: string;
+      finalAnswer: string;
+      summary: string;
+      result?: string;
+      verification?: { status: string; summary: string };
+    };
+  }>(await handlers.record_validator_result({
     runId: launch.run.id,
     workflowContextId: launch.launchRequest.workflowContextId,
     attemptId: launch.attempt.id,
@@ -448,6 +462,46 @@ test("preserves budget stop metadata through the MCP complete_run writeback", as
   });
 });
 
+test("returns final output through the MCP complete_run writeback", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Manual final output",
+    goal: "Return the finished report body",
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: v2RubricAgentVerification()
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual report" }));
+
+  const completed = readResult(await handlers.complete_run({
+    runId: launch.run.id,
+    status: "completed",
+    summary: "Brief report summary",
+    result: "Full report body"
+  }));
+
+  expect(completed).toMatchObject({
+    id: launch.run.id,
+    status: "completed",
+    summary: "Full report body",
+    result: "Full report body",
+    run: {
+      id: launch.run.id,
+      status: "completed",
+      summary: "Full report body",
+      result: "Full report body"
+    },
+    sessionResult: {
+      status: "completed",
+      finalAnswer: "Full report body",
+      summary: "Full report body",
+      result: "Full report body"
+    }
+  });
+});
+
 test("rejects failure pausedReason at the MCP complete_run boundary", async () => {
   const handlers = await createHandlers();
 
@@ -578,11 +632,32 @@ test("exposes workflow execution and precise session result writeback as MCP con
     runId: launch.run.id,
     attemptId: launch.attempt.id,
     status: "passed",
-    summary: "Verification passed."
+    summary: "Verification passed.",
+    run: {
+      id: launch.run.id,
+      status: "completed",
+      summary: "Daily report body",
+      result: "Daily report body"
+    },
+    sessionResult: {
+      status: "completed",
+      finalAnswer: "Daily report body",
+      summary: "Daily report body",
+      result: "Daily report body",
+      verification: {
+        status: "passed",
+        summary: "Verification passed."
+      }
+    }
   });
   const snapshot = readResult(await handlers.get_snapshot({}));
   expect(snapshot.runs).toMatchObject([
-    { id: launch.run.id, status: "completed" }
+    {
+      id: launch.run.id,
+      status: "completed",
+      summary: "Daily report body",
+      result: "Daily report body"
+    }
   ]);
   expect(snapshot.workflowContexts).toMatchObject([
     {
@@ -592,6 +667,12 @@ test("exposes workflow execution and precise session result writeback as MCP con
       taskRuns: [{ stepId: "scan", sessionId: "session_1", status: "completed" }]
     }
   ]);
+  const detail = readResult(await handlers.get_run_detail({ runId: launch.run.id }));
+  expect(detail.run).toMatchObject({
+    status: "completed",
+    summary: "Daily report body",
+    result: "Daily report body"
+  });
 });
 
 test("does not relaunch existing pending workflow sessions through the MCP handler", async () => {
@@ -1080,7 +1161,20 @@ test("exposes codex session result writeback as MCP content", async () => {
     threadId: "019ef4c5-4a52-7653-a862-6f1372f88475"
   });
 
-  const run = readResult(await handlers.record_session_result({
+  const run = readResult<{
+    id: string;
+    status: string;
+    summary?: string;
+    result?: string;
+    codexSession?: { subagents?: Array<{ status: string }> };
+    sessionResult?: {
+      status: string;
+      finalAnswer: string;
+      summary: string;
+      result?: string;
+      verification?: { status: string; summary: string };
+    };
+  }>(await handlers.record_session_result({
     runId: launch.run.id,
     status: "passed",
     summary: "Worker result passed verification",
@@ -1091,8 +1185,20 @@ test("exposes codex session result writeback as MCP content", async () => {
   expect(run).toMatchObject({
     id: launch.run.id,
     status: "completed",
+    summary: "Daily report body",
+    result: "Daily report body",
     codexSession: {
       subagents: [{ status: "completed" }]
+    },
+    sessionResult: {
+      status: "completed",
+      finalAnswer: "Daily report body",
+      summary: "Daily report body",
+      result: "Daily report body",
+      verification: {
+        status: "passed",
+        summary: "Worker result passed verification"
+      }
     }
   });
 });

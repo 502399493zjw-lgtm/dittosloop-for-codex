@@ -1125,6 +1125,7 @@ function renderRunBoard({ detail, loop, loopRuns }) {
           el("p", "", activeHumanRequest.question)
         ])
       : null,
+    renderRunFinalOutput(detail),
     renderWorkflowRuntimePanel(detail, isDebugMode()),
     el("section", "run-board-body", [
       el("aside", "phase-rail", [
@@ -1147,6 +1148,41 @@ function renderRunBoard({ detail, loop, loopRuns }) {
       ] : [el("p", "detail-empty", "当前运行没有可展示的 agent 明细。")])
     ])
   ].filter(Boolean));
+}
+
+function renderRunFinalOutput(detail) {
+  const output = runFinalOutput(detail);
+  if (!output) return null;
+
+  return el("section", "run-final-output", [
+    el("div", "run-final-output-label", "最终结果"),
+    el("pre", "run-final-output-body", output)
+  ]);
+}
+
+function runFinalOutput(detail) {
+  const run = detail.run;
+  if (!["completed", "failed", "waiting_for_human"].includes(run.status)) {
+    return "";
+  }
+
+  const explicit = run.result || run.summary;
+  if (explicit) return explicit;
+
+  const taskRuns = (detail.workflowContexts ?? [])
+    .flatMap((context) => context.taskRuns ?? [])
+    .filter((taskRun) =>
+      taskRun.status === "completed" &&
+      taskRun.result &&
+      !taskRun.stepId?.startsWith("verification:")
+    )
+    .sort((left, right) => workflowTaskRunTimestamp(left).localeCompare(workflowTaskRunTimestamp(right)));
+
+  return taskRuns.at(-1)?.result ?? "";
+}
+
+function workflowTaskRunTimestamp(taskRun) {
+  return taskRun.completedAt ?? taskRun.updatedAt ?? taskRun.createdAt ?? "";
 }
 
 function renderWorkflowRuntimePanel(detail, showDebug) {
