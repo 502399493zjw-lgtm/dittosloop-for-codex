@@ -1,127 +1,85 @@
-# Create Loop
+# 创建 Loop
 
-Read this when the user wants a new Dittos loop or a new formal loop contract.
+当用户想创建 Dittos loop 或正式 loop 合同时，阅读此文件。
 
-## Creation Method
+## 创建前方法
 
-Before calling `create_loop_contract`, keep the interaction lightweight and explicit:
+调用 `create_loop_contract` 前，交互要轻量、明确：
 
-1. Restate the inferred loop goal, boundary, trigger, and expected outputs.
-2. Make reasonable defaults for low-risk details instead of asking for every missing field.
-3. Ask follow-up questions only for missing details that affect safety, permissions, cost, destructive actions, external side effects, project binding, or verification.
-4. When verification expectations are material, show a compact `Rubric Draft` before creating the contract. Include success criteria, `must` versus `should` severity, validators, evidence requirements, and failure handling.
-5. For obvious, low-risk loops, state the inferred rubric and continue with reasonable defaults. For vague or high-impact loops, ask the user to confirm or correct the rubric before creating the contract.
-6. If the request is vague but safe, propose a compact contract draft and ask the user to confirm or correct it.
-7. Convert the agreed or safely inferred shape into a formal loop contract.
+1. 先复述推断出的 loop 目标、边界、触发方式和预期输出。
+2. 对低风险细节使用合理默认值，不要为每个缺失字段都追问。
+3. 只对影响安全、权限、成本、破坏性操作、外部副作用、项目绑定或验证的缺失信息追问。
+4. 当验证预期重要时，先按 [define-rubric.md](define-rubric.md) 形成 `Rubric Draft`，再回到创建合同。
+5. 对明显低风险的 loop，说明推断出的验收要求，然后带着合理默认值继续。对模糊或高影响 loop，先请用户确认或修正验收要求，再创建合同。
+6. 如果请求模糊但安全，提出紧凑合同草稿，请用户确认或修正。
+7. 把已达成一致或可安全推断的形状转换成正式 loop 合同。
 
-Use a user-facing rubric draft instead of raw JSON:
+## 创建流程
 
-```text
-Rubric Draft
-- Must: the result satisfies the loop's primary goal with evidence.
-- Should: the result follows the user's preferred format and tone.
-- Validators: automated commands, script evaluators, rubric agents, human review, or a mix.
-- Evidence: command output, cited sources, artifact links, or reviewer notes.
-- Failure handling: repair, ask the user, or fail the run.
-```
+1. 塑造 loop 合同：标题、目标或意图、手动触发方式、脚本编排方式、runtime script 职责，以及已确认或可安全推断的 verification contract。
+2. 用 `workflowKind: "runtime_script"` 加 JavaScript 字符串 `script` 表达 workflow。
+3. 每个 loop 都使用 `create_loop_contract`。
+4. `create_loop_contract` 成功后，调用 `get_preview_url`，让用户能检查创建出的 loop。
+5. Loop 合同应是正式 runtime contract，即使 workflow 很小。
+6. 用 `agent()` 表达 Codex worker 工作；每次 worker 调用要有清晰 `label`，需要可预测 resume/cache 时要有稳定 `key`。
+7. 用 `args` 放可变输入，用 `limits` 放运行边界。
+8. DittosLoop 会记录预期并做 best-effort 本地检查；不要声称它能原生强制 Codex skill 或 tool allowlist。
 
-When the rubric draft needs a custom `script evaluator`, start a visible evaluator-builder subagent before calling `create_loop_contract`. The evaluator-builder subagent must create the evaluator script, create a fixture or dry-run sample, run a self-check, report the script checksum, and confirm that stdout uses the `verification_result_v1` JSON shape. Register the script validator only after the self-check passes; otherwise keep the loop as not created and tell the user what blocked evaluator setup.
+## 合同形状
 
-## Creation Flow
-
-1. Shape the loop contract: title, goal or intent, manual trigger, verification expectations, and whether it needs `body.steps`, legacy `script.build`, or a runtime script.
-2. Choose a workflow style before writing `body.steps`, a legacy `script.build`, or `workflowKind: "runtime_script"` plus a JavaScript `script`.
-3. Use `create_loop_contract` for every new loop.
-4. After `create_loop_contract` succeeds, call `get_preview_url` so the user can inspect the created loop.
-5. New loops should be formal runtime contracts, even when the workflow is compact.
-6. Prefer `task` steps with `runtime: "codex"`; old `agent` steps are compatibility aliases.
-7. Current task sessions only support omitted `sessionPolicy` or `sessionPolicy: "new"`.
-8. Prefer top-level `agentProfiles` plus per-task `agentProfileRef` for reusable Codex task guidance.
-9. Put required installed skills in `requiredSkills` on the profile and use `allowDegradedProfiles: true` only as an explicit escape hatch for real-world testing.
-10. Keep legacy `subagent` hints only for compatibility with older task shapes.
-11. DittosLoop records expectations and runs a best-effort local preflight; it does not claim native Codex skill enforcement or tool allowlist enforcement.
-
-## Contract Shape
-
-Keep the first formal contract small and actionable:
+第一版正式合同要小而可执行：
 
 ```text
-Title: short responsibility name
-Goal: what the loop is responsible for
-Workflow input: ordered `body.steps`, legacy `script.build`, or `workflowKind: "runtime_script"` with a JavaScript `script`
-Session policy: omit it or use sessionPolicy: "new"; reuse-run/reuse-step are not supported yet
-Agent profiles: optional reusable Codex task profiles keyed in `agentProfiles`
-Task binding: optional `agentProfileRef` on each Codex task step
-Required skills: optional `requiredSkills` on a profile; use `allowDegradedProfiles: true` only when degraded launch is acceptable
-Subagent: optional compatibility-only role/model/tools/permissions hints for Codex task sessions
-Runtime script args: optional `args` object for runtime script inputs
-Runtime script limits: optional `limits` object; approval defaults are required for runtime script workflows
-Verification: criteria, validators, decision policy
-Repair policy: whether failed verification should retry, ask the user, or fail
-Stop policy: when the loop should stop
-Project binding: optional Codex project id, label, and path
+Title: 简短职责名
+Goal: 这个 loop 负责什么
+Workflow: `workflowKind: "runtime_script"` 加 JavaScript 字符串 `script`
+Runtime script args: 可选，runtime script 输入 `args`
+Runtime script limits: 可选，`limits` 对象；runtime script workflow 默认需要审批
+Worker calls: `script` 内的 `agent()`、`parallel()`、`pipeline()` 调用
+Verification: 使用 `define-rubric.md` 形成的 criteria、validators、decision policy
+Verifier: 使用 `define-rubric.md` 形成的独立 verifier 或其他明确 validator
+Repair policy: 验证失败后 retry、ask the user，还是 fail
+Stop policy: loop 何时停止
+Project binding: 可选 Codex project id、label 和 path
 ```
 
-Prefer a compact contract shape like:
+动态 workflow script 优先使用下面这种形状：
 
 ```json
 {
-  "agentProfiles": {
-    "researcher": {
-      "id": "researcher",
-      "label": "Researcher",
-      "role": "Collect and verify source evidence",
-      "requiredSkills": [{ "id": "openai-docs", "source": "system" }],
-      "allowedTools": ["rg", "sed"]
-    }
+  "workflowKind": "runtime_script",
+  "script": "phase(\"review\");\nconst results = await parallel(args.files.map((file) => () => agent(`Review ${file}`, { key: `review:${file}`, label: file })));\nreturn { files: args.files, results };",
+  "args": {
+    "files": ["src/a.ts", "src/b.ts"]
   },
-  "body": {
-    "steps": [
-      {
-        "id": "scan",
-        "kind": "task",
-        "runtime": "codex",
-        "label": "Scan",
-        "prompt": "Collect source evidence.",
-        "agentProfileRef": "researcher"
-      }
-    ]
-  },
-  "verification": {
-    "version": 2,
-    "mode": "after_workflow",
-    "criteria": [
-      {
-        "id": "source-quality",
-        "label": "Source quality",
-        "description": "The result cites reliable source evidence.",
-        "severity": "must"
-      }
-    ],
-    "validators": [
-      {
-        "id": "quality-review",
-        "type": "rubric_agent",
-        "label": "Quality review",
-        "criteriaIds": ["source-quality"],
-        "scoreScale": { "min": 0, "max": 1 },
-        "passScore": 1,
-        "evidenceRequired": true,
-        "severity": "must"
-      }
-    ],
-    "decision": {
-      "requireAllMustCriteriaCovered": true,
-      "failOnMustValidatorFailure": true,
-      "failOnShouldValidatorFailure": false,
-      "requireEvidenceForAgentScores": true
-    }
+  "limits": {
+    "timeoutMs": 120000,
+    "maxAgentCalls": 20,
+    "maxParallelBranches": 8,
+    "maxPipelineItems": 50,
+    "maxLogChars": 20000
   }
 }
 ```
 
-Generated per-loop guidance lives at `skill/dittosloop-for-codex-loop.md`. It is a run-specific local skill guide, not a new installed marketplace skill.
+Runtime script 编写规则：
 
-The final response after creating a formal loop should state the created `loopId`, the local DittosLoop board URL from `get_preview_url`, the selected workflow style, the task names and responsibilities, the verification criteria, validators, decision policy, and repair/stop policy.
+- 使用字符串 `script`，并搭配 `workflowKind: "runtime_script"`。
+- 脚本内部使用注入 helpers：`phase()`、`agent()`、`parallel()`、`pipeline()`、`log()` 和 `args`。
+- 当 rerun/resume cache 需要可预测时，为 `agent()` 调用提供稳定的 `key`。
+- 保持脚本可复现，把可变输入放进 `args`，不要把用户特定状态硬编码进脚本。
+- Runtime script 默认需要审批；创建后如果仍是 pending approval，执行前调用 `approve_runtime_script`。
 
-If `get_preview_url` fails or is unavailable, still report the created `loopId` and state that the local board URL could not be retrieved.
+## 脚本编排提示
+
+- 有自然顺序或依赖时，用 `phase()` 标记阶段，按顺序调用 `agent()`，或用 `pipeline()` 串起同类处理。
+- 可按来源、模块、对象或领域拆分时，从 `args` 或上游 worker 输出计算 items，再用 `parallel()` 分发并汇总。
+- 需要判断、权衡、风险审查或主观质量评估时，用多个 `agent()` 或 `parallel()` 分支收集视角，再用 judge `agent()` 汇总。
+- 任务小、低风险且拆分没有收益时，用一个 `agent()`；只有在仍然需要脚本控制流、审批和统一验证时才创建 loop。
+- 当 loop 需要 JavaScript 控制流、条件分支、迭代计划、动态 fan-out、可复用脚本编排，或基于 journal 的 resume/cache 语义时，直接把这些逻辑写进 runtime script。
+
+每个 loop 生成的本地指导位于 `skill/dittosloop-for-codex-loop.md`。它是某次 loop session 的 runtime output，不是已安装 marketplace skill。
+
+创建正式 loop 后，最终回复要说明创建出的 `loopId`、来自 `get_preview_url` 的本地 DittosLoop 看板 URL、script 编排方式、script 职责、验证 criteria、validators、decision policy、repair/stop policy，以及 script approval 是 required 还是已经 granted。
+
+如果 `get_preview_url` 失败或不可用，仍然报告已创建的 `loopId`，并说明无法取得本地看板 URL。

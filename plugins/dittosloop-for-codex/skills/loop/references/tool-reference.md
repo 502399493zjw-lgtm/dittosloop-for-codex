@@ -1,57 +1,60 @@
-# Tool Reference
+# 工具参考
 
-Read this when exact MCP tool purpose, required fields, or call caveats matter.
+当需要精确 MCP 工具用途、必填字段或调用注意事项时，阅读此文件。
 
-## Tool Map
+## 工具地图
 
-| Need | Tool |
+| 需求 | 工具 |
 | --- | --- |
-| New formal runtime contract | `create_loop_contract` |
-| Existing loops | `list_loops` |
-| Request visible Codex thread for a loop run | `start_codex_session` |
-| Read durable loop memory | `read_loop_memory` |
-| Execute workflow in that session | `execute_workflow_attempt` |
-| Attach created Codex thread | `record_codex_thread` |
-| Write back exact Codex task result | `record_session_result` |
-| Draft a workflow change from the visible session | `propose_workflow_revision` |
-| Inspect workflow change history | `list_workflow_revisions` |
-| Make a workflow draft active | `promote_workflow_revision` |
-| Decline a workflow draft | `reject_workflow_revision` |
-| Start visible work under a run | `start_attempt` |
-| Finish an attempt | `complete_attempt` |
-| Progress note | `append_event` |
-| Check result | `record_verification` |
-| User decision | `record_human_request` |
-| Close user decision | `resolve_human_request` |
-| Durable summary | `commit_memory` |
-| File or URL reference | `add_artifact` |
-| Repair state | `mark_run_repairing` |
-| Finish run | `complete_run` |
-| Single run detail | `get_run_detail` |
-| Full state | `get_snapshot` |
-| Browser preview | `get_preview_url` |
+| 新建正式 runtime contract | `create_loop_contract` |
+| 查看已有 loops | `list_loops` |
+| 为 loop run 请求可见 Codex thread | `start_codex_session` |
+| 审批 runtime script workflow | `approve_runtime_script` |
+| 读取持久 loop memory | `read_loop_memory` |
+| 在该 session 中执行 workflow | `execute_workflow_attempt` |
+| 绑定已创建的 Codex thread | `record_codex_thread` |
+| 精确回写 Codex task 结果 | `record_session_result` |
+| 从可见 session 草拟 workflow 变更 | `propose_workflow_revision` |
+| 查看 workflow 变更历史 | `list_workflow_revisions` |
+| 让 workflow 草稿生效 | `promote_workflow_revision` |
+| 拒绝 workflow 草稿 | `reject_workflow_revision` |
+| 在 run 下开始可见工作 | `start_attempt` |
+| 完成 attempt | `complete_attempt` |
+| 进度记录 | `append_event` |
+| 检查结果 | `record_verification` |
+| 用户决策 | `record_human_request` |
+| 关闭用户决策 | `resolve_human_request` |
+| 持久摘要 | `commit_memory` |
+| 文件或 URL 引用 | `add_artifact` |
+| 修复状态 | `mark_run_repairing` |
+| 完成 run | `complete_run` |
+| 单个 run 详情 | `get_run_detail` |
+| 完整状态 | `get_snapshot` |
+| 浏览器预览 | `get_preview_url` |
 
-## Exact Caveats
+## 精确注意事项
 
-- Use `create_loop_contract` for every new loop.
-- `create_loop_contract` accepts fixed static workflows through `body.steps`, legacy compatibility workflows through `script.build`, and dynamic workflows through `workflowKind: "runtime_script"` with a string `script`.
-- Runtime script contract input may also include optional `args` and optional `limits`; runtime script approval defaults are required and should remain explicit in summaries.
-- Use `list_loops` before reusing an existing loop.
-- Use `start_codex_session` to create the visible run, attempt, host Codex thread request, workflow context, and bounded memory excerpt.
-- `start_codex_session` returns a launch request; if no visible Codex thread appears automatically, create one with the returned prompt and call `record_codex_thread`.
-- `open_codex_session` may return `launchRequest` and `recordThread` when the thread has not been attached yet; use them to recover by creating the Codex thread and recording its `threadId`.
-- When only a `threadId` is available, record `threadUrl` as `codex://thread/{threadId}` or let `record_codex_thread` synthesize it.
-- Do not confuse workflow task `sessionId` values with Codex thread ids. `sessionId` is only for `record_session_result` targeting.
-- A run can finish its local workflow before a real Codex thread is attached, but `codexSession.status` must not be treated as `completed` until `threadId` or `threadUrl` is recorded.
-- When `agentProfiles` are present, `start_codex_session` records the effective profile snapshot and runs best-effort local preflight only; it does not provide native Codex skill enforcement.
-- Required profile skills from `requiredSkills` with `missing` or `unknown` status block launch unless `allowDegradedProfiles: true` is passed.
-- Use `execute_workflow_attempt` with the returned `runId` and `attemptId` so run, attempt, workflow context, task runs, and result writeback stay on one path.
-- Use `record_session_result` with `workflowContextId`, `attemptId`, `taskRunId` or `sessionId` or `stepId`, and an `idempotencyKey` to write back exact Codex task results.
-- When multiple locators are provided, they must identify the same task run.
-- `needs_human` on `record_session_result` suspends the exact task and opens a linked human request when possible.
-- Use `record_verification` after checks or manual review; include `attemptId` when the result belongs to a specific attempt.
-- For runtime dynamic workflow validation, prefer a rubric-agent verifier sub-agent when independent review matters, and treat its recorded result as the visible verifier outcome.
-- Set `repair: true` on `record_verification` or call `mark_run_repairing` when failed verification needs repair work.
-- Use `complete_run` only after verification is recorded or the blocker is explicit.
-- Use `get_preview_url` and open that URL in Codex's in-app browser when the user wants the visual loop view.
-- The generated per-loop guide path is `skill/dittosloop-for-codex-loop.md`; treat it as runtime output, not an installed skill.
+- 每个 loop 都使用 `create_loop_contract`。
+- `create_loop_contract` 的 workflow 输入使用 `workflowKind: "runtime_script"` 加字符串 `script`。
+- Runtime script contract input 还可以包含可选 `args` 和可选 `limits`；runtime script 默认需要审批，最终摘要中应明确说明。
+- 字符串 `script` 必须搭配 `workflowKind: "runtime_script"`。
+- 当 runtime script 需要审批时，检查 active script 后使用 `approve_runtime_script`。
+- 复用已有 loop 前使用 `list_loops`。
+- 使用 `start_codex_session` 创建可见 run、attempt、host Codex thread request、workflow context 和有界 memory excerpt。
+- `start_codex_session` 返回 launch request；如果没有自动出现可见 Codex thread，用返回的 prompt 创建 thread，并调用 `record_codex_thread`。
+- 当 thread 尚未绑定时，`open_codex_session` 可能返回 `launchRequest` 和 `recordThread`；用它们创建 Codex thread 并记录 `threadId` 来恢复。
+- 只有 `threadId` 时，把 `threadUrl` 记录为 `codex://thread/{threadId}`，或让 `record_codex_thread` 自动生成。
+- 不要混淆 workflow task `sessionId` 和 Codex thread ids。`sessionId` 只用于 `record_session_result` 定位。
+- 本地 workflow 可以在真实 Codex thread 绑定前完成，但 `codexSession.status` 不应视为 `completed`，直到记录了 `threadId` 或 `threadUrl`。
+- 当存在 worker profile 信息时，`start_codex_session` 会记录有效 profile snapshot 并执行 best-effort 本地检查；它不提供原生 Codex skill enforcement。
+- Required profile skills 状态为 missing 或 unknown 时会阻止启动，除非传入 `allowDegradedProfiles: true`。
+- 使用返回的 `runId` 和 `attemptId` 调用 `execute_workflow_attempt`，让 run、attempt、workflow context、task runs 和 result writeback 保持在同一条路径。
+- 使用 `record_session_result` 并带上 `workflowContextId`、`attemptId`、`taskRunId` 或 `sessionId` 或 `stepId`，以及 `idempotencyKey`，以便精确回写 Codex task 结果。
+- 当提供多个定位符时，它们必须指向同一个 task run。
+- `record_session_result` 上的 `needs_human` 会挂起精确 task，并在可能时打开关联 human request。
+- 检查或人工 review 后使用 `record_verification`；当结果属于特定 attempt 时带上 `attemptId`。
+- 对 runtime dynamic workflow validation，如果独立审查重要，优先使用 rubric-agent verifier 子 agent，并把它记录成可见 verifier outcome。
+- 当验证失败需要修复工作时，在 `record_verification` 上设置 `repair: true`，或调用 `mark_run_repairing`。
+- 只有在验证已记录或 blocker 明确时，才使用 `complete_run`。
+- 当用户想看可视 loop 视图时，使用 `get_preview_url`，并在 Codex 的 in-app browser 中打开该 URL。
+- 每个 loop 生成的指导路径是 `skill/dittosloop-for-codex-loop.md`；把它当成 runtime output，不要当成已安装 skill。

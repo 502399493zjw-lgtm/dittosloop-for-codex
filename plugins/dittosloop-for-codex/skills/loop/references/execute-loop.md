@@ -1,44 +1,46 @@
-# Execute Loop
+# 执行 Loop
 
-Read this when running an existing loop or writing back task results from a visible workflow attempt.
+当运行已有 loop，或从可见 workflow attempt 回写 task 结果时，阅读此文件。
 
-## Visible Execution Flow
+## 可见执行流程
 
-1. Use `list_loops` before reusing an existing loop.
-2. Use `start_codex_session` to create the visible run, attempt, host Codex thread request, workflow context, and bounded memory excerpt.
-3. If the host has not already created a visible Codex thread, use the returned `launchRequest.prompt` to create one through Codex's thread tool, then immediately call `record_codex_thread` with the new `threadId` and `threadUrl` (`codex://thread/{threadId}`).
-4. Do not treat a workflow `sessionId` as a visible Codex thread. A `sessionId` only identifies a pending task session inside the loop runtime.
-5. When the workflow uses `agentProfiles`, expect `start_codex_session` to run a best-effort local profile preflight and record the effective profile snapshot on the pending or running task state.
-6. Required profile skills in `requiredSkills` block `start_codex_session` when they are missing or unknown unless the request explicitly sets `allowDegradedProfiles: true`.
-7. Advisory profile skill failures may warn, but they do not block launch.
-8. Use the injected memory excerpt first. When more durable context is useful, call `read_loop_memory` with `loopId`, `limit`, and `offset`.
-9. From that Codex session, use `execute_workflow_attempt` with the returned `runId` and `attemptId` to advance the local workflow scheduler in the same context. For graph-backed runs, this is a scheduler tick over durable node state, not a replay of completed work.
-10. Do not create new compatibility runs. Old compatibility runs may still appear in preview state, but new user-visible runs should start with a Codex thread request.
-11. A local workflow may complete before the host thread is attached; keep using `open_codex_session` and `record_codex_thread` to recover the missing thread instead of treating the workflow `sessionId` as a real Codex `threadId`.
-12. Use `start_attempt` only for substantive manual follow-up work outside the normal workflow attempt.
-13. Use `append_event` for meaningful progress notes.
-14. Use `complete_attempt` when a manual attempt completes or fails.
-15. Use `record_verification` after running checks or manual review; include `attemptId` when the result belongs to a specific attempt.
-16. When a runtime script loop needs dynamic workflow validation, prefer a separate verifier sub-agent so the JavaScript-driven worker result is reviewed by an independent visible session.
-17. Use `complete_run` only after verification is recorded or the blocker is explicit.
+1. 复用已有 loop 前，先使用 `list_loops`。
+2. 使用 `start_codex_session` 创建可见 run、attempt、host Codex thread request、workflow context 和有界 memory excerpt。
+3. 如果 host 没有自动创建可见 Codex thread，使用返回的 `launchRequest.prompt` 通过 Codex thread 工具创建 thread，然后立刻调用 `record_codex_thread`，写入新的 `threadId` 和 `threadUrl`（`codex://thread/{threadId}`）。
+4. 不要把 workflow `sessionId` 当成可见 Codex thread。`sessionId` 只标识 loop runtime 内部的 pending task session。
+5. 当 workflow 使用 worker profile 信息时，预期 `start_codex_session` 会执行 best-effort 本地检查，并把有效 profile snapshot 记录到 pending 或 running task state。
+6. Required profile skills 缺失或未知会阻止 `start_codex_session`，除非请求显式设置 `allowDegradedProfiles: true`。
+7. Advisory profile skill failures 可以警告，但不阻止启动。
+8. 优先使用注入的 memory excerpt。当需要更持久上下文时，用 `loopId`、`limit` 和 `offset` 调用 `read_loop_memory`。
+9. 在同一个 Codex session 中，使用返回的 `runId` 和 `attemptId` 调用 `execute_workflow_attempt`，推进 runtime script scheduler。
+10. 如果 loop contract 是 `workflow.kind = "runtime_script"` 且需要审批，先检查 active script，再调用 `approve_runtime_script`，然后执行 workflow attempt。
+11. 本地 workflow 可能在 host thread 绑定前完成；继续使用 `open_codex_session` 和 `record_codex_thread` 恢复缺失 thread，不要把 workflow `sessionId` 当成真实 Codex `threadId`。
+12. 只有在 normal workflow attempt 外有实质性手工跟进工作时，才使用 `start_attempt`。
+13. 用 `append_event` 记录有意义的进度。
+14. 手工 attempt 完成或失败时使用 `complete_attempt`。
+15. 运行检查或人工 review 后使用 `record_verification`；当结果属于特定 attempt 时带上 `attemptId`。
+16. 当 runtime script loop 需要动态 workflow 验证时，优先使用独立 verifier 子 agent，让 JavaScript 驱动的 worker 结果由另一个可见 session 审查。
+17. 只有在验证已记录或 blocker 明确时，才使用 `complete_run`。
 
-## Task Result Writeback
+runtime script 执行会运行 JavaScript 源码，使用 journal/cache 记录复用已完成的 `agent()` 调用，发出 runtime script events，并把 script 的最终返回值作为 workflow result。
 
-When a Codex task session finishes outside the immediate engine call, use `record_session_result` to write back the exact task result.
+## Task Result 回写
 
-Include:
+当 Codex task session 在 immediate engine call 之外完成时，使用 `record_session_result` 精确回写 task 结果。
+
+包含：
 
 - `workflowContextId`
 - `attemptId`
-- `taskRunId`, `sessionId`, or `stepId`
+- `taskRunId`、`sessionId` 或 `stepId`
 - `idempotencyKey`
 
-When multiple locators are provided, they must identify the same task run.
+当提供多个定位符时，它们必须指向同一个 task run。
 
-Use `needs_human` when the task must suspend for a user decision. `needs_human` suspends the exact task and opens a linked human request when possible.
+当 task 必须因为用户决策而挂起时，使用 `needs_human`。`needs_human` 会挂起精确 task，并在可能时打开关联的 human request。
 
-When a task result is recorded, the runtime updates the targeted node run and may continue newly runnable workflow nodes. For graph-backed runs, inspect the task board through run detail or preview `workflowView`; lifecycle events are audit/history entries and legacy fallback, not the source of task-board truth.
+记录 task result 后，runtime 会更新目标 node run，并可能继续变为 runnable 的 workflow nodes。对 graph-backed runs，应通过 run detail 或 preview 的 `workflowView` 检查 task board；lifecycle events 是审计和历史记录，不是 task-board truth 的来源。
 
-Workflow tasks may call `read_loop_memory` while working. They should return durable observations in task results rather than deciding long-term memory writes themselves.
+Workflow tasks 可以在工作时调用 `read_loop_memory`。它们应该在 task results 中返回持久观察，而不是自行决定长期 memory writes。
 
-The generated `skill/dittosloop-for-codex-loop.md` guide is runtime output for that loop session. Do not describe it as an installed skill.
+生成的 `skill/dittosloop-for-codex-loop.md` 指导是该 loop session 的 runtime output。不要把它描述成已安装 skill。
