@@ -381,13 +381,6 @@ test("resumes a suspended task workflow with subagent metadata through session w
     projectPath: "/Users/edisonzhong/Documents/dittos loop"
   });
 
-  await callTool(handlers.record_codex_thread, {
-    runId: launch.run.id,
-    threadId: "thread_suspended_subagents",
-    threadTitle: "Suspended subagent workflow",
-    threadUrl: "codex://thread/thread_suspended_subagents"
-  });
-
   expect(launch.launchRequest.workflowPlan.steps.find((step) => step.id === "collect")?.subagent).toEqual(
     researcherSubagent
   );
@@ -495,6 +488,8 @@ test("resumes a suspended task workflow with subagent metadata through session w
   workflowContext = detail.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
 
   expect(detail.run.status).toBe("completed");
+  expect(detail.run.codexSession?.threadId).toBeUndefined();
+  expect(detail.run.codexSession?.threadUrl).toBeUndefined();
   expect(detail.run.codexSession?.subagents?.map((agent) => agent.status)).toEqual(["completed", "completed"]);
   expect(detail.attempts[0]?.status).toBe("completed");
   expect(workflowContext?.status).toBe("completed");
@@ -503,10 +498,39 @@ test("resumes a suspended task workflow with subagent metadata through session w
   expect(detail.verificationResults[0]?.status).toBe("passed");
 
   const previewDetail = await fetchJson<RunDetail>(`${server.url}/api/runs/${launch.run.id}`);
+  const previewSnapshot = await fetchJson<any>(`${server.url}/api/snapshot`);
+  const openSession = await callTool(handlers.open_codex_session, { runId: launch.run.id });
   const previewContext = previewDetail.workflowContexts.find(
     (context) => context.id === launch.launchRequest.workflowContextId
   );
 
+  expect(previewDetail.run.status).toBe("completed");
+  expect(previewDetail.run.codexSession?.threadId).toBeUndefined();
+  expect(previewDetail.run.codexSession?.threadUrl).toBeUndefined();
+  expect(previewDetail.verificationResults[0]?.status).toBe("passed");
+  const snapshotRun = previewSnapshot.runs.find((run: { id: string }) => run.id === launch.run.id);
+  expect(snapshotRun).toMatchObject({
+    id: launch.run.id,
+    status: "completed"
+  });
+  expect(snapshotRun.codexSession?.threadId).toBeUndefined();
+  expect(snapshotRun.codexSession?.threadUrl).toBeUndefined();
+  expect(openSession).toMatchObject({
+    runId: launch.run.id,
+    status: "unavailable",
+    launchRequest: {
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
+      workflowContextId: launch.launchRequest.workflowContextId,
+      loopId: loop.id
+    },
+    recordThread: {
+      tool: "record_codex_thread",
+      runId: launch.run.id
+    }
+  });
+  expect(openSession.threadUrl).toBeUndefined();
+  expect(openSession.recordThread).not.toHaveProperty("threadUrlTemplate");
   expect(previewContext?.taskRuns.find((taskRun) => taskRun.stepId === "collect")?.subagent).toEqual(
     researcherSubagent
   );

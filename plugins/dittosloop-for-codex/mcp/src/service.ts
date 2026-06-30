@@ -164,7 +164,6 @@ export interface OpenCodexSessionResult {
   recordThread?: {
     tool: "record_codex_thread";
     runId: string;
-    threadUrlTemplate: "codex://thread/{threadId}";
   };
 }
 
@@ -1981,12 +1980,14 @@ export class LoopService {
         return state;
       }
 
-      const threadUrl = codexSession.threadUrl ?? codexThreadUrl(codexSession.threadId);
+      const threadUrl = codexSession.threadUrl;
       if (!threadUrl) {
         result = {
           runId,
           status: "unavailable",
-          message: "The Codex session has not been created by the host yet.",
+          message: "The Codex session does not have an openable host thread URL yet.",
+          threadId: codexSession.threadId,
+          threadTitle: codexSession.threadTitle,
           launchRequest: codexSessionLaunchRequestForRun(state, run),
           recordThread: recordCodexThreadInstruction(runId)
         };
@@ -2001,18 +2002,9 @@ export class LoopService {
         threadTitle: codexSession.threadTitle,
         threadUrl
       };
-      const normalizedRun =
-        codexSession.threadUrl === threadUrl
-          ? run
-          : {
-              ...run,
-              updatedAt: timestamp,
-              codexSession: normalizeCodexSessionThreadUrl(codexSession, threadUrl)
-            };
 
       return {
         ...state,
-        runs: normalizedRun === run ? state.runs : updateRun(state.runs, runId, normalizedRun),
         events: [
           ...state.events,
           lifecycleEvent(this.nextId("event"), runId, "note", "Codex session open requested", timestamp, {
@@ -2068,7 +2060,7 @@ export class LoopService {
       const codexThread = {
         threadId: input.threadId,
         threadTitle: input.threadTitle,
-        threadUrl: input.threadUrl ?? codexThreadUrl(input.threadId)
+        threadUrl: input.threadUrl
       };
       updatedRun = {
         ...run,
@@ -5180,30 +5172,10 @@ type CompletedCodexSessionRef = CodexSessionRef & {
 type CodexSubagentStatus = NonNullable<NonNullable<LoopRun["codexSession"]>["subagents"]>[number]["status"];
 type CodexSessionSubagent = NonNullable<NonNullable<LoopRun["codexSession"]>["subagents"]>[number];
 
-function codexThreadUrl(threadId: string | undefined): string | undefined {
-  return threadId ? `codex://thread/${threadId}` : undefined;
-}
-
 function recordCodexThreadInstruction(runId: string): NonNullable<OpenCodexSessionResult["recordThread"]> {
   return {
     tool: "record_codex_thread",
-    runId,
-    threadUrlTemplate: "codex://thread/{threadId}"
-  };
-}
-
-function normalizeCodexSessionThreadUrl(
-  codexSession: NonNullable<LoopRun["codexSession"]>,
-  threadUrl: string
-): NonNullable<LoopRun["codexSession"]> {
-  return {
-    ...codexSession,
-    threadUrl,
-    subagents: codexSession.subagents?.map((subagent) =>
-      subagent.threadId && !subagent.threadUrl
-        ? { ...subagent, threadUrl: codexThreadUrl(subagent.threadId) }
-        : subagent
-    )
+    runId
   };
 }
 

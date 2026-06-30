@@ -1060,6 +1060,8 @@ test("exposes codex thread writeback as MCP content", async () => {
       ]
     }
   });
+  expect(run.codexSession.threadUrl).toBeUndefined();
+  expect(run.codexSession.subagents?.[0]?.threadUrl).toBeUndefined();
 });
 
 test("exposes codex session result writeback as MCP content", async () => {

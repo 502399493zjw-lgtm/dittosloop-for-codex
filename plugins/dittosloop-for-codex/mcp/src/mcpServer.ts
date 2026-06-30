@@ -436,7 +436,7 @@ const recordCodexThreadSchema = z.object({
   runId: z.string().min(1),
   threadId: z.string().min(1),
   threadTitle: z.string().optional(),
-  threadUrl: z.string().optional()
+  threadUrl: z.string().min(1).optional()
 });
 
 const recordSessionResultSchema = z.object({
@@ -925,7 +925,8 @@ const toolDefinitions = [
   {
     name: "record_codex_thread",
     title: "Record Codex thread",
-    description: "Attach the real Codex thread id after the Codex App host creates the visible session.",
+    description:
+      "Attach the real Codex thread metadata after the Codex App host creates the visible session. Pass threadUrl only when the host has a real openable URL.",
     schema: recordCodexThreadSchema
   },
   {

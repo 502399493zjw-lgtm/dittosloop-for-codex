@@ -1856,6 +1856,32 @@ test("records a codex thread from the preview api", async () => {
       ]
     }
   });
+  expect(run.codexSession.threadUrl).toBeUndefined();
+  expect(run.codexSession.subagents?.[0]?.threadUrl).toBeUndefined();
+
+  const openResponse = await fetch(`${server.url}/api/runs/${launch.run.id}/open-codex-session`, {
+    method: "POST"
+  });
+  const opened = await openResponse.json();
+
+  expect(openResponse.status).toBe(200);
+  expect(opened).toMatchObject({
+    runId: launch.run.id,
+    status: "unavailable",
+    threadId: "019ef4c5-4a52-7653-a862-6f1372f88475",
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+    launchRequest: {
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
+      loopId: loop.id
+    },
+    recordThread: {
+      tool: "record_codex_thread",
+      runId: launch.run.id
+    }
+  });
+  expect(opened.threadUrl).toBeUndefined();
+  expect(opened.recordThread).not.toHaveProperty("threadUrlTemplate");
 });
 
 test("opens a codex session from the preview api when the host thread is attached", async () => {

@@ -4784,7 +4784,8 @@ test("keeps a completed run's Codex session pending until a real thread is attac
 
   const attached = await service.recordCodexThread(launch.run.id, {
     threadId: "019ef8fb-5f34-7d4c-bfb2-5ffcf2f5e1b8",
-    threadTitle: "DittosLoop: AI Dev Tools Update Monitor"
+    threadTitle: "DittosLoop: AI Dev Tools Update Monitor",
+    threadUrl: "codex://thread/019ef8fb-5f34-7d4c-bfb2-5ffcf2f5e1b8"
   });
 
   expect(attached).toMatchObject({
@@ -4935,7 +4936,7 @@ test("opens a Codex session backed run without creating a new run", async () => 
   });
 });
 
-test("opens a recorded Codex thread when only the thread id is provided", async () => {
+test("does not open a recorded Codex thread when only the thread id is provided", async () => {
   const service = await createService();
   const formal = await service.createLoopContract({
     title: "Thread Id Link",
@@ -4955,13 +4956,24 @@ test("opens a recorded Codex thread when only the thread id is provided", async 
   });
   const opened = await service.openCodexSession(launch.run.id);
 
-  expect(updated.codexSession?.threadUrl).toBe("codex://thread/019ef4e5-21f0-7131-be8c-708f720e49de");
+  expect(updated.codexSession?.threadId).toBe("019ef4e5-21f0-7131-be8c-708f720e49de");
+  expect(updated.codexSession?.threadUrl).toBeUndefined();
   expect(opened).toMatchObject({
     runId: launch.run.id,
-    status: "ready",
+    status: "unavailable",
     threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
-    threadUrl: "codex://thread/019ef4e5-21f0-7131-be8c-708f720e49de"
+    launchRequest: {
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
+      loopId: formal.id
+    },
+    recordThread: {
+      tool: "record_codex_thread",
+      runId: launch.run.id
+    }
   });
+  expect(opened.threadUrl).toBeUndefined();
+  expect(opened.recordThread).not.toHaveProperty("threadUrlTemplate");
 });
 
 test("returns a host launch request when a Codex session has not been created yet", async () => {
@@ -4997,6 +5009,7 @@ test("returns a host launch request when a Codex session has not been created ye
       runId: launch.run.id
     }
   });
+  expect(opened.recordThread).not.toHaveProperty("threadUrlTemplate");
 });
 
 test("records a default subagent when older session runs have none", async () => {
@@ -5033,7 +5046,7 @@ test("records a default subagent when older session runs have none", async () =>
       status: "running",
       threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
       threadTitle: undefined,
-      threadUrl: "codex://thread/019ef4e5-21f0-7131-be8c-708f720e49de"
+      threadUrl: undefined
     }
   ]);
 });
@@ -5832,7 +5845,7 @@ test("profile preflight keeps the launched run on the same contract snapshot use
   ]);
 });
 
-test("synthesizes an openable Codex URL when a recorded thread only has an id", async () => {
+test("keeps Codex session unavailable when a recorded thread only has an id", async () => {
   const service = await createService();
   const loop = await service.createLoopContract({
     title: "Session Link Check",
@@ -5852,10 +5865,17 @@ test("synthesizes an openable Codex URL when a recorded thread only has an id", 
 
   await expect(service.openCodexSession(launch.run.id)).resolves.toMatchObject({
     runId: launch.run.id,
-    status: "ready",
-    message: "Codex session is ready to open.",
+    status: "unavailable",
     threadId: "019ef4e5-21f0-7131-be8c-708f720e49de",
-    threadUrl: "codex://thread/019ef4e5-21f0-7131-be8c-708f720e49de"
+    launchRequest: {
+      runId: launch.run.id,
+      attemptId: launch.attempt.id,
+      loopId: loop.id
+    },
+    recordThread: {
+      tool: "record_codex_thread",
+      runId: launch.run.id
+    }
   });
 });
 

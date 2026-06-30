@@ -26317,12 +26317,14 @@ ${priorOutput}`;
         };
         return state;
       }
-      const threadUrl = codexSession.threadUrl ?? codexThreadUrl(codexSession.threadId);
+      const threadUrl = codexSession.threadUrl;
       if (!threadUrl) {
         result = {
           runId,
           status: "unavailable",
-          message: "The Codex session has not been created by the host yet.",
+          message: "The Codex session does not have an openable host thread URL yet.",
+          threadId: codexSession.threadId,
+          threadTitle: codexSession.threadTitle,
           launchRequest: codexSessionLaunchRequestForRun(state, run),
           recordThread: recordCodexThreadInstruction(runId)
         };
@@ -26336,14 +26338,8 @@ ${priorOutput}`;
         threadTitle: codexSession.threadTitle,
         threadUrl
       };
-      const normalizedRun = codexSession.threadUrl === threadUrl ? run : {
-        ...run,
-        updatedAt: timestamp2,
-        codexSession: normalizeCodexSessionThreadUrl(codexSession, threadUrl)
-      };
       return {
         ...state,
-        runs: normalizedRun === run ? state.runs : updateRun(state.runs, runId, normalizedRun),
         events: [
           ...state.events,
           lifecycleEvent(this.nextId("event"), runId, "note", "Codex session open requested", timestamp2, {
@@ -26391,7 +26387,7 @@ ${priorOutput}`;
       const codexThread = {
         threadId: input.threadId,
         threadTitle: input.threadTitle,
-        threadUrl: input.threadUrl ?? codexThreadUrl(input.threadId)
+        threadUrl: input.threadUrl
       };
       updatedRun = {
         ...run,
@@ -28809,23 +28805,10 @@ function verificationCriterionLabel(verification, criterionId) {
   }
   return verification.criteria.find((candidate) => candidate.id === criterionId)?.label;
 }
-function codexThreadUrl(threadId) {
-  return threadId ? `codex://thread/${threadId}` : void 0;
-}
 function recordCodexThreadInstruction(runId) {
   return {
     tool: "record_codex_thread",
-    runId,
-    threadUrlTemplate: "codex://thread/{threadId}"
-  };
-}
-function normalizeCodexSessionThreadUrl(codexSession, threadUrl) {
-  return {
-    ...codexSession,
-    threadUrl,
-    subagents: codexSession.subagents?.map(
-      (subagent) => subagent.threadId && !subagent.threadUrl ? { ...subagent, threadUrl: codexThreadUrl(subagent.threadId) } : subagent
-    )
+    runId
   };
 }
 function hasCodexSessionThread(codexSession) {
@@ -30574,7 +30557,7 @@ var recordCodexThreadSchema = external_exports.object({
   runId: external_exports.string().min(1),
   threadId: external_exports.string().min(1),
   threadTitle: external_exports.string().optional(),
-  threadUrl: external_exports.string().optional()
+  threadUrl: external_exports.string().min(1).optional()
 });
 var recordSessionResultSchema = external_exports.object({
   runId: external_exports.string().min(1),
@@ -31016,7 +30999,7 @@ var toolDefinitions = [
   {
     name: "record_codex_thread",
     title: "Record Codex thread",
-    description: "Attach the real Codex thread id after the Codex App host creates the visible session.",
+    description: "Attach the real Codex thread metadata after the Codex App host creates the visible session. Pass threadUrl only when the host has a real openable URL.",
     schema: recordCodexThreadSchema
   },
   {
