@@ -31437,7 +31437,7 @@ function buildTimeline(detail, engineEvents = extractEngineEvents(detail)) {
     sections.push({ id: "workflow", title: "\u5DE5\u4F5C\u6D41", items: workflow2 });
   }
   const verificationEvents = engineEvents.map(verificationEventToTimelineItem).filter((item) => Boolean(item));
-  const verification = verificationEvents.length > 0 ? verificationEvents : detail.verificationResults.flatMap(verificationToTimelineItems);
+  const verification = mergeVerificationTimelineItems(verificationEvents, detail.verificationResults);
   if (verification.length > 0) {
     sections.push({ id: "verification", title: "\u9A8C\u8BC1", items: verification });
   }
@@ -31628,6 +31628,17 @@ function verificationToTimelineItems(result) {
     createdAt: result.createdAt,
     message: result.checks.map((check2) => `${check2.name ?? check2.rubricId ?? "check"}: ${check2.status}`).join("\n") || void 0
   }];
+}
+function mergeVerificationTimelineItems(verificationEvents, verificationResults) {
+  const resultItems = verificationResults.flatMap(verificationToTimelineItems);
+  if (!verificationEvents.length) return resultItems;
+  if (!resultItems.length) return verificationEvents;
+  return [...verificationEvents, ...resultItems].sort(compareTimelineItems);
+}
+function compareTimelineItems(left, right) {
+  const createdAt = (left.createdAt ?? "").localeCompare(right.createdAt ?? "");
+  if (createdAt !== 0) return createdAt;
+  return (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER);
 }
 function repairItems(runStatus, results) {
   const failed = results.find((result) => result.status === "failed");
