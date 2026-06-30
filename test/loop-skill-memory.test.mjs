@@ -116,6 +116,38 @@ test("loop skill docs only describe the current runtime script workflow", async 
   }
 });
 
+test("rubric guidance covers construction modes and evaluator fit", async () => {
+  const defineRubric = await readSkillFile("references/define-rubric.md");
+
+  for (const mode of ["strict-audit", "discovery-radar", "action-runner", "creative-output", "code-change"]) {
+    assert.match(defineRubric, new RegExp(`\\b${mode}\\b`));
+  }
+
+  assert.match(defineRubric, /Rubric strategy|judgment mode/);
+  assert.match(defineRubric, /not.*JSON `verification\.mode`|不是.*JSON.*`verification\.mode`/);
+  assert.match(defineRubric, /workflow requirement/);
+  assert.match(defineRubric, /rubric criterion/);
+  assert.match(defineRubric, /validator evidence contract/);
+  assert.match(defineRubric, /failure risks|失败风险/);
+
+  assert.match(defineRubric, /Weak leads are allowed\. Miscalibrated certainty is not\./);
+  assert.match(defineRubric, /no-confidence-inflation/);
+  assert.match(defineRubric, /source-or-limitation-recorded/);
+  assert.match(defineRubric, /fact-judgment-separated/);
+  assert.match(defineRubric, /noise-not-promoted/);
+  assert.match(defineRubric, /confirmed|已确认/);
+  assert.match(defineRubric, /pending verification|待核验/);
+  assert.match(defineRubric, /low confidence|低置信/);
+
+  assert.match(defineRubric, /required fields|必填字段/);
+  assert.match(defineRubric, /counts|数量/);
+  assert.match(defineRubric, /cross-reference|交叉引用/);
+  assert.match(defineRubric, /unsupported claims|无证据主张/);
+  assert.match(defineRubric, /Do not use scripts[\s\S]*domain judgment|不要.*脚本.*领域判断/);
+  assert.match(defineRubric, /scripts as the only validator|脚本.*唯一 validator/);
+  assert.match(defineRubric, /hybrid verification|混合验证/);
+});
+
 test("create loop guidance describes clarification, creation, and preview handoff", async () => {
   const createLoop = await readSkillFile("references/create-loop.md");
   const defineRubric = await readSkillFile("references/define-rubric.md");
