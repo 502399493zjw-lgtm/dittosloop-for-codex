@@ -55,6 +55,18 @@ test("loop skill references preserve memory, execution, and writeback rules", as
   assert.match(toolReference, /multiple locators.*same task run|多个定位.*同一个 task run/i);
 });
 
+test("loop skill requires direct delivery of verified workflow results", async () => {
+  const skill = await readFile(skillPath, "utf8");
+  const execution = await readSkillFile("references/execute-loop.md");
+  const combined = `${skill}\n${execution}`;
+
+  assert.match(combined, /sessionResult\.finalAnswer/);
+  assert.match(combined, /验证后.*workflow result|已验证.*workflow 结果/);
+  assert.match(combined, /直接.*主答案|主答案.*直接/);
+  assert.match(combined, /不得.*摘要|不要.*摘要|summary-only/);
+  assert.match(combined, /文件链接.*附后|链接.*次要|artifacts.*secondary/i);
+});
+
 test("loop skill docs describe runtime script workflows and the generated local skill guide", async () => {
   const skill = await readFile(skillPath, "utf8");
   const createLoop = await readSkillFile("references/create-loop.md");

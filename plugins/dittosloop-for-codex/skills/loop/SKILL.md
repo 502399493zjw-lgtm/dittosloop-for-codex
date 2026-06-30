@@ -54,6 +54,7 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 预览界面仅用于展示；不要把它当成可编辑状态。
 - task session 结果回写要使用精确定位符，并在可用时使用 `idempotencyKey`。
 - 当前 task session 仅支持省略 `sessionPolicy` 或 `sessionPolicy: "new"`。
+- 如果 workflow 工具返回 `sessionResult`，最终回复必须把 `sessionResult.result` 或 `sessionResult.finalAnswer` 作为主答案直接给用户；verification 说明、artifacts 和文件链接只能附后，不得用摘要、报告位置或链接替代验证后的 workflow result。
 
 ## 偏好捕获
 
