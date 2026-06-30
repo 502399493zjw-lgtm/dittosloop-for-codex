@@ -502,6 +502,66 @@ test("returns final output through the MCP complete_run writeback", async () => 
   });
 });
 
+test("session result envelope prefers workflow task result over run summary", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "Verified report handoff",
+    goal: "Return the verified workflow result",
+    body: {
+      steps: [{ id: "scan", kind: "task", runtime: "codex", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: v2RubricAgentVerification()
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual report" }));
+
+  await handlers.execute_workflow_attempt({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+  await handlers.record_session_result({
+    runId: launch.run.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    attemptId: launch.attempt.id,
+    sessionId: "session_1",
+    stepId: "scan",
+    idempotencyKey: "session_1:verified-result",
+    status: "passed",
+    summary: "Worker summary",
+    result: "Verified workflow report body"
+  });
+
+  const completed = readResult<{
+    id: string;
+    status: string;
+    summary?: string;
+    result?: string;
+    sessionResult?: {
+      status: string;
+      finalAnswer: string;
+      summary: string;
+      result?: string;
+    };
+  }>(await handlers.complete_run({
+    runId: launch.run.id,
+    status: "completed",
+    summary: "Brief run summary"
+  }));
+
+  expect(completed).toMatchObject({
+    id: launch.run.id,
+    status: "completed",
+    summary: "Brief run summary",
+    sessionResult: {
+      status: "completed",
+      finalAnswer: "Verified workflow report body",
+      summary: "Verified workflow report body",
+      result: "Verified workflow report body"
+    }
+  });
+  expect(completed.result).toBeUndefined();
+});
+
 test("rejects failure pausedReason at the MCP complete_run boundary", async () => {
   const handlers = await createHandlers();
 

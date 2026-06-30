@@ -211,6 +211,17 @@ test("preview script renders run detail as phase rail and agent cards", async ()
   expect(app).not.toContain("阶段暂无 agent 明细");
 });
 
+test("preview script prefers canonical verification results and direct workflow output", async () => {
+  const app = await readFile(join(previewDir, "app.js"), "utf8");
+
+  expect(app).toContain("canonicalVerificationAgents(detail.verificationResults)");
+  expect(app).toContain("canonicalVerificationPhase(verificationAgents)");
+  expect(app).toContain('section.id === "verification" && verificationAgents.length');
+  expect(app).toContain("if (run.result) return run.result;");
+  expect(app).toContain("return taskRuns.at(-1)?.result ?? run.summary ?? \"\";");
+  expect(app).not.toContain("const explicit = run.result || run.summary;");
+});
+
 test("preview prefers workflowView for workflow phase display", async () => {
   const app = await readFile(join(previewDir, "app.js"), "utf8");
 

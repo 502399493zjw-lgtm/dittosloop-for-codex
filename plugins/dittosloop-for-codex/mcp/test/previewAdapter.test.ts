@@ -228,3 +228,63 @@ test("keeps static workflow timeline output unchanged", () => {
     }
   ]);
 });
+
+test("keeps persisted passed verification after stale lifecycle events", () => {
+  const baseDetail = runDetailWithEvents([
+    event({ type: "verification_started", sequence: 1, attemptId: "attempt_1" }),
+    event({
+      type: "validator_started",
+      sequence: 2,
+      attemptId: "attempt_1",
+      validatorId: "independent-fde-monitor-review",
+      validatorType: "rubric_agent"
+    }),
+    event({
+      type: "verification_decided",
+      sequence: 3,
+      attemptId: "attempt_1",
+      decision: {
+        status: "needs_human",
+        summary: "Verification needs_human",
+        failedValidatorIds: [],
+        needsHumanValidatorIds: ["independent-fde-monitor-review"],
+        failedCriterionIds: [],
+        uncoveredMustCriterionIds: [],
+        warnings: [],
+        humanQuestion: "Review the report manually."
+      }
+    })
+  ]);
+  const detail = enrichRunDetail({
+    ...baseDetail,
+    run: {
+      ...baseDetail.run,
+      status: "completed",
+      result: "Verified workflow report body"
+    },
+    verificationResults: [
+      {
+        id: "verification_1",
+        runId: "run_1",
+        attemptId: "attempt_1",
+        status: "passed",
+        summary: "Independent review passed",
+        checks: [{ name: "Independent review", status: "passed", evidence: "Report is complete." }],
+        createdAt: "2026-06-23T00:05:00.000Z"
+      }
+    ]
+  });
+
+  const verification = detail.timeline.find((section) => section.id === "verification");
+  const terminalItems = [...(verification?.items ?? [])]
+    .reverse()
+    .filter((item) => ["passed", "failed", "needs_human", "skipped"].includes(item.status));
+
+  expect(verification?.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ label: "开始验证", status: "started" }),
+    expect.objectContaining({ label: "Validator independent-fde-monitor-review started", status: "started" }),
+    expect.objectContaining({ label: "Verification needs_human", status: "needs_human" }),
+    expect.objectContaining({ label: "Independent review passed", status: "passed" })
+  ]));
+  expect(terminalItems[0]).toMatchObject({ label: "Independent review passed", status: "passed" });
+});

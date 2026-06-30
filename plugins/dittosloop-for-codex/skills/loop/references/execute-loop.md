@@ -22,6 +22,15 @@
 16. 当 runtime script loop 需要动态 workflow 验证时，优先使用独立 verifier 子 agent，让 JavaScript 驱动的 worker 结果由另一个可见 session 审查。
 17. 只有在验证已记录或 blocker 明确时，才使用 `complete_run`。
 
+## 验证后结果交付
+
+当 `execute_workflow_attempt`、`record_session_result`、`record_validator_result` 或 `complete_run` 返回 `sessionResult` 时，当前可见 Codex session 的最终回复必须直接使用该 envelope。
+
+- `sessionResult.status === "completed"` 时，把 `sessionResult.result` 或 `sessionResult.finalAnswer` 作为主答案直接输出给用户。
+- `sessionResult.status === "waiting_for_human"` 时，输出打开的 `humanRequest.question` 或 `sessionResult.finalAnswer`，不要把候选结果称为最终结果。
+- `sessionResult.artifacts`、文件链接和 verification 状态只能放在主答案之后。
+- 不得用 summary-only、报告位置说明、文件链接或重新改写的摘要替代验证后的 workflow result。
+
 runtime script 执行会运行 JavaScript 源码，使用 journal/cache 记录复用已完成的 `agent()` 调用，发出 runtime script events，并把 script 的最终返回值作为 workflow result。
 
 ## Task Result 回写

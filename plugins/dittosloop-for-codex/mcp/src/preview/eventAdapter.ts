@@ -57,7 +57,7 @@ export function buildTimeline(detail: RunDetail, engineEvents: EngineEvent[] = e
   const verificationEvents = engineEvents
     .map(verificationEventToTimelineItem)
     .filter((item): item is PreviewTimelineItem => Boolean(item));
-  const verification = verificationEvents.length > 0 ? verificationEvents : detail.verificationResults.flatMap(verificationToTimelineItems);
+  const verification = mergeVerificationTimelineItems(verificationEvents, detail.verificationResults);
   if (verification.length > 0) {
     sections.push({ id: "verification", title: "验证", items: verification });
   }
@@ -285,6 +285,22 @@ function verificationToTimelineItems(result: VerificationResultRecord): PreviewT
     createdAt: result.createdAt,
     message: result.checks.map((check) => `${check.name ?? check.rubricId ?? "check"}: ${check.status}`).join("\n") || undefined
   }];
+}
+
+function mergeVerificationTimelineItems(
+  verificationEvents: PreviewTimelineItem[],
+  verificationResults: VerificationResultRecord[]
+): PreviewTimelineItem[] {
+  const resultItems = verificationResults.flatMap(verificationToTimelineItems);
+  if (!verificationEvents.length) return resultItems;
+  if (!resultItems.length) return verificationEvents;
+  return [...verificationEvents, ...resultItems].sort(compareTimelineItems);
+}
+
+function compareTimelineItems(left: PreviewTimelineItem, right: PreviewTimelineItem): number {
+  const createdAt = (left.createdAt ?? "").localeCompare(right.createdAt ?? "");
+  if (createdAt !== 0) return createdAt;
+  return (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER);
 }
 
 function repairItems(runStatus: RunStatus, results: VerificationResultRecord[]): PreviewTimelineItem[] {
