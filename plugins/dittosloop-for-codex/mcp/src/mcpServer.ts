@@ -752,7 +752,14 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
         summary: args.summary,
         result: args.result
       });
-      return toToolResult(await toWorkflowToolResponse(service, run));
+      const detail = await service.getRunDetail(run.id);
+      return toToolResult({
+        ...detail.run,
+        summary: args.result ?? args.summary ?? detail.run.summary,
+        result: args.result,
+        run: detail.run,
+        sessionResult: buildWorkflowSessionResultEnvelope(detail, (run.status as WorkflowSessionResultStatus))
+      });
     },
     mark_run_repairing: async (input) => {
       const args = markRunRepairingSchema.parse(input);
@@ -828,7 +835,7 @@ function buildWorkflowSessionResultEnvelope(
   const latestVerification = detail.verificationResults.at(-1);
   const latestAttempt = detail.attempts.at(-1);
   const latestOpenHumanRequest = [...detail.humanRequests].reverse().find((request) => request.status === "open");
-  const result = detail.run.result ?? detail.run.summary ?? latestTaskRun?.result;
+  const result = detail.run.result ?? latestTaskRun?.result ?? detail.run.summary;
   const finalAnswer =
     status === "waiting_for_human"
       ? latestOpenHumanRequest?.question ?? result ?? latestVerification?.summary ?? latestAttempt?.summary ?? detail.run.goal
