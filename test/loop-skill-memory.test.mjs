@@ -55,7 +55,7 @@ test("loop skill references preserve memory, execution, and writeback rules", as
   assert.match(toolReference, /multiple locators.*same task run|多个定位.*同一个 task run/i);
 });
 
-test("loop skill docs describe runtime script workflows and the generated local skill guide", async () => {
+test("loop skill docs describe runtime script workflows without a generated local skill guide", async () => {
   const skill = await readFile(skillPath, "utf8");
   const createLoop = await readSkillFile("references/create-loop.md");
   const executeLoop = await readSkillFile("references/execute-loop.md");
@@ -66,8 +66,11 @@ test("loop skill docs describe runtime script workflows and the generated local 
   assert.match(createLoop, /字符串 `script`/);
   assert.match(createLoop, /agent\(\)/);
   assert.match(createLoop, /parallel\(\)/);
-  assert.match(createLoop, /skill\/dittosloop-for-codex-loop\.md/);
+  assert.doesNotMatch(createLoop, /skill\/dittosloop-for-codex-loop\.md/);
   assert.doesNotMatch(createLoop, /runtime\/dittosloop-for-codex-loop\.md/);
+  assert.doesNotMatch(createLoop, /每个 loop 生成的本地指导/);
+  assert.doesNotMatch(executeLoop, /skill\/dittosloop-for-codex-loop\.md/);
+  assert.doesNotMatch(toolReference, /skill\/dittosloop-for-codex-loop\.md/);
   assert.match(executeLoop, /approve_runtime_script/);
   assert.match(executeLoop, /allowDegradedProfiles/);
   assert.match(toolReference, /workflowKind/);

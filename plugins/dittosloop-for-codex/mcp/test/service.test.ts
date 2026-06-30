@@ -916,8 +916,7 @@ test("renders workspace loop directory files from stored loop state", async () =
     "workflow.json",
     "verification.md",
     "status.json",
-    "contract.json",
-    "skill/dittosloop-for-codex-loop.md"
+    "contract.json"
   ]);
   expect(files.map((file) => file.path)).not.toContain("rubrics.md");
   expect(files.every((file) => file.size === Buffer.byteLength(file.content, "utf8"))).toBe(true);
@@ -926,9 +925,7 @@ test("renders workspace loop directory files from stored loop state", async () =
   expect(files.find((file) => file.path === "tool-list.md")).toBeUndefined();
   expect(files.find((file) => file.path === "session.json")).toBeUndefined();
   expect(files.find((file) => file.path === "memory.md")?.content).toContain("保留昨天的来源筛选规则。");
-  expect(files.find((file) => file.path === "skill/dittosloop-for-codex-loop.md")?.content).toContain(
-    "Loop: AI 开发工具日报"
-  );
+  expect(files.find((file) => file.path === "skill/dittosloop-for-codex-loop.md")).toBeUndefined();
   expect(files.find((file) => file.path === "status.json")?.content).toContain("\"latestRun\"");
   expect(files.find((file) => file.path === "contract.json")?.content).toContain("\"formalContract\"");
   const verificationFile = files.find((file) => file.path === "verification.md")?.content ?? "";
@@ -965,9 +962,9 @@ test("renders workspace loop directory files from stored loop state", async () =
   await expect(readFile(join(loopDir, "memory.md"), "utf8")).resolves.toContain("保留昨天的来源筛选规则。");
   await expect(readFile(join(loopDir, "workflow.json"), "utf8")).resolves.toContain("AI 开发工具日报");
   await expect(readFile(join(loopDir, "verification.md"), "utf8")).resolves.toContain("## Criteria");
-  await expect(readFile(join(loopDir, "skill", "dittosloop-for-codex-loop.md"), "utf8")).resolves.toContain(
-    "dittosloop-for-codex:loop"
-  );
+  await expect(readFile(join(loopDir, "skill", "dittosloop-for-codex-loop.md"), "utf8")).rejects.toMatchObject({
+    code: "ENOENT"
+  });
   await expect(readFile(join(loopDir, "flow.js"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(join(loopDir, "session.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   await expect(readFile(join(loopDir, "skill", "old.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });

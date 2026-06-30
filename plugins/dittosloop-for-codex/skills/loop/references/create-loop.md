@@ -78,8 +78,6 @@ Runtime script 编写规则：
 - 任务小、低风险且拆分没有收益时，用一个 `agent()`；只有在仍然需要脚本控制流、审批和统一验证时才创建 loop。
 - 当 loop 需要 JavaScript 控制流、条件分支、迭代计划、动态 fan-out、可复用脚本编排，或基于 journal 的 resume/cache 语义时，直接把这些逻辑写进 runtime script。
 
-每个 loop 生成的本地指导位于 `skill/dittosloop-for-codex-loop.md`。它是某次 loop session 的 runtime output，不是已安装 marketplace skill。
-
 创建正式 loop 后，最终回复要说明创建出的 `loopId`、来自 `get_preview_url` 的本地 DittosLoop 看板 URL、script 编排方式、script 职责、验证 criteria、validators、decision policy、repair/stop policy，以及 script approval 是 required 还是已经 granted。
 
 如果 `get_preview_url` 失败或不可用，仍然报告已创建的 `loopId`，并说明无法取得本地看板 URL。

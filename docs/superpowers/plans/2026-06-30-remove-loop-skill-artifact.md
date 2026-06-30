@@ -28,6 +28,8 @@
 - Modify: `plugins/dittosloop-for-codex/mcp/src/workspaceFiles.ts`
 - Modify: `plugins/dittosloop-for-codex/mcp/src/types.ts`
 - Modify: `plugins/dittosloop-for-codex/skills/loop/references/create-loop.md`
+- Modify: `plugins/dittosloop-for-codex/skills/loop/references/execute-loop.md`
+- Modify: `plugins/dittosloop-for-codex/skills/loop/references/tool-reference.md`
 
 **Interfaces:**
 - Consumes: `loopWorkspaceFiles(state: LoopState, loopId: string): LoopWorkspaceFile[]`.
@@ -89,6 +91,8 @@ In `test/loop-skill-memory.test.mjs`, rename the runtime-script documentation te
 assert.doesNotMatch(createLoop, /skill\/dittosloop-for-codex-loop\.md/);
 assert.doesNotMatch(createLoop, /runtime\/dittosloop-for-codex-loop\.md/);
 assert.doesNotMatch(createLoop, /每个 loop 生成的本地指导/);
+assert.doesNotMatch(executeLoop, /skill\/dittosloop-for-codex-loop\.md/);
+assert.doesNotMatch(toolReference, /skill\/dittosloop-for-codex-loop\.md/);
 ```
 
 - [ ] **Step 4: Run focused tests and confirm they fail for the expected reason**
@@ -132,6 +136,8 @@ In `plugins/dittosloop-for-codex/skills/loop/references/create-loop.md`, delete 
 ```md
 每个 loop 生成的本地指导位于 `skill/dittosloop-for-codex-loop.md`。它是某次 loop session 的 runtime output，不是已安装 marketplace skill。
 ```
+
+In `plugins/dittosloop-for-codex/skills/loop/references/execute-loop.md` and `plugins/dittosloop-for-codex/skills/loop/references/tool-reference.md`, remove the sentences that mention `skill/dittosloop-for-codex-loop.md`.
 
 - [ ] **Step 7: Run focused tests and confirm they pass**
 

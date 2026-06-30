@@ -23319,9 +23319,6 @@ function sortLoopWorkspaceFiles(files) {
     ["contract.json", 6]
   ]);
   return [...files].sort((left, right) => {
-    const leftIsSkill = left.path.startsWith("skill/");
-    const rightIsSkill = right.path.startsWith("skill/");
-    if (leftIsSkill !== rightIsSkill) return leftIsSkill ? 1 : -1;
     const leftRank = rootOrder.get(left.path) ?? 100;
     const rightRank = rootOrder.get(right.path) ?? 100;
     if (leftRank !== rightRank) return leftRank - rightRank;
@@ -23389,12 +23386,6 @@ function formalLoopDirectoryFiles(input) {
         content: input.contract.workflow.source
       })
     ] : [],
-    withSize({
-      path: "skill/dittosloop-for-codex-loop.md",
-      kind: "skill",
-      language: "markdown",
-      content: loopSkillFile(input.contract)
-    }),
     verificationFileEntry,
     withSize({
       path: "status.json",
@@ -23450,23 +23441,6 @@ function formalLoopDirectoryFiles(input) {
 `
     })
   ];
-}
-function loopSkillFile(contract) {
-  return [
-    "# dittosloop-for-codex:loop",
-    "",
-    `Loop: ${contract.title}`,
-    "",
-    "\u8FD9\u4E2A loop \u4F7F\u7528 DittosLoop For Codex \u7684 loop skill \u6765\u521B\u5EFA\u6B63\u5F0F contract\u3001\u542F\u52A8\u53EF\u89C1 Codex worker session\u3001\u6267\u884C workflow\u3001\u5199\u56DE\u7ED3\u679C\uFF0C\u5E76\u6309 criteria\u3001validators\u3001decision \u505A\u6700\u7EC8\u9A8C\u8BC1\u3002",
-    "",
-    "## Runtime role",
-    "",
-    "- Codex worker session \u672C\u8EAB\u627F\u62C5 orchestrator\u3002",
-    "- workflow body \u53EA\u63CF\u8FF0\u771F\u6B63\u88AB\u8C03\u5EA6\u7684 specialist/editor/checker agents\u3002",
-    "- agentProfiles/agentProfileRef \u63CF\u8FF0\u53EF\u590D\u7528\u7684 Codex task guidance \u548C skill expectations\u3002",
-    "- verification criteria/validators/decision \u5C5E\u4E8E\u5916\u90E8\u6700\u7EC8\u9A8C\u8BC1\uFF0C\u4E0D\u4F5C\u4E3A\u666E\u901A agent \u6587\u4EF6\u5939\u5C42\u7EA7\u5C55\u793A\u3002",
-    ""
-  ].join("\n");
 }
 function contractFile(input) {
   const runIds = new Set(input.loopRuns.map((run) => run.id));

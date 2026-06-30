@@ -49,10 +49,6 @@ function sortLoopWorkspaceFiles(files: LoopWorkspaceFile[]): LoopWorkspaceFile[]
   ]);
 
   return [...files].sort((left, right) => {
-    const leftIsSkill = left.path.startsWith("skill/");
-    const rightIsSkill = right.path.startsWith("skill/");
-    if (leftIsSkill !== rightIsSkill) return leftIsSkill ? 1 : -1;
-
     const leftRank = rootOrder.get(left.path) ?? 100;
     const rightRank = rootOrder.get(right.path) ?? 100;
     if (leftRank !== rightRank) return leftRank - rightRank;
@@ -138,12 +134,6 @@ function formalLoopDirectoryFiles(input: {
           })
         ]
       : []),
-    withSize({
-      path: "skill/dittosloop-for-codex-loop.md",
-      kind: "skill",
-      language: "markdown",
-      content: loopSkillFile(input.contract)
-    }),
     verificationFileEntry,
     withSize({
       path: "status.json",
@@ -204,24 +194,6 @@ function formalLoopDirectoryFiles(input: {
       )}\n`
     })
   ];
-}
-
-function loopSkillFile(contract: FormalLoopContract): string {
-  return [
-    "# dittosloop-for-codex:loop",
-    "",
-    `Loop: ${contract.title}`,
-    "",
-    "这个 loop 使用 DittosLoop For Codex 的 loop skill 来创建正式 contract、启动可见 Codex worker session、执行 workflow、写回结果，并按 criteria、validators、decision 做最终验证。",
-    "",
-    "## Runtime role",
-    "",
-    "- Codex worker session 本身承担 orchestrator。",
-    "- workflow body 只描述真正被调度的 specialist/editor/checker agents。",
-    "- agentProfiles/agentProfileRef 描述可复用的 Codex task guidance 和 skill expectations。",
-    "- verification criteria/validators/decision 属于外部最终验证，不作为普通 agent 文件夹层级展示。",
-    ""
-  ].join("\n");
 }
 
 function contractFile(input: {
