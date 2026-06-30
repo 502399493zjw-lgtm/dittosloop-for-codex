@@ -38,8 +38,13 @@ export function resolveEffectiveProfilesByStep(
   contract: FormalLoopContract
 ): Map<string, EffectiveAgentProfile> {
   const profiles = new Map<string, EffectiveAgentProfile>();
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : undefined);
 
-  visitSteps(contract.body.steps, (step) => {
+  if (!body) {
+    return profiles;
+  }
+
+  visitSteps(body.steps, (step) => {
     if (step.kind !== "agent" && step.kind !== "task") return;
 
     const profile = resolveEffectiveAgentProfile(contract, step);

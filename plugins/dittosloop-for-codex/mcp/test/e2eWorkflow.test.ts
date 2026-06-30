@@ -665,6 +665,7 @@ test("multi-agent workflow requires separate rubric-agent validator before compl
           id: "quality-review",
           type: "rubric_agent",
           label: "Quality review",
+          prompt: "Review the worker candidate and write the result with record_validator_result.",
           criteriaIds: ["quality"],
           scoreScale: { min: 0, max: 1 },
           passScore: 1,

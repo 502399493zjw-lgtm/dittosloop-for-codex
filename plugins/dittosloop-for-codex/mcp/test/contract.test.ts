@@ -5,7 +5,7 @@ import {
   resolveEffectiveAgentProfile,
   resolveEffectiveProfilesByStep
 } from "../src/contract/agentProfiles.js";
-import { compileContract } from "../src/contract/compileContract.js";
+import { compileContract, recompileFormalContract } from "../src/contract/compileContract.js";
 import { migrateLegacyContract } from "../src/contract/migrateLegacyContract.js";
 import type { VerificationScriptValidator } from "../src/contract/types.js";
 import { validateContract } from "../src/contract/validateContract.js";
@@ -67,6 +67,225 @@ function passingLegacyVerification() {
 }
 
 describe("formal loop contracts", () => {
+  test("accepts static body steps as a static workflow", () => {
+    const contract = compileContract(
+      {
+        id: "loop_static_body",
+        title: "Static workflow",
+        goal: "Run known steps",
+        body: {
+          steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan official updates" }]
+        },
+        verification: passingLegacyVerification()
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+    expect(contract.workflow).toEqual({
+      kind: "static_steps",
+      body: contract.body
+    });
+    expect(contract.body?.steps).toHaveLength(1);
+  });
+
+  test("accepts legacy script build input as a static workflow", () => {
+    const contract = compileContract(
+      {
+        id: "loop_legacy_script",
+        title: "Legacy script workflow",
+        goal: "Build steps through the script AST",
+        script: {
+          build: [
+            { fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Write the draft." }] }
+          ]
+        },
+        verification: passingLegacyVerification()
+      } as any,
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+    expect(contract.workflow.kind).toBe("static_steps");
+    expect(contract.body?.steps).toEqual([
+      { id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Write the draft." }
+    ]);
+  });
+
+  test("accepts runtime string script only with explicit runtime workflow kind", () => {
+    const contract = compileContract(
+      {
+        id: "loop_runtime_script",
+        workflowKind: "runtime_script",
+        title: "Runtime script workflow",
+        goal: "Run dynamic orchestration",
+        script: "const result = await agent('Review risky files'); return result;",
+        args: { maxFiles: 3 },
+        limits: { maxAgentCalls: 4, timeoutMs: 120000 },
+        verification: passingLegacyVerification()
+      } as any,
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+    expect(contract.workflow).toMatchObject({
+      kind: "runtime_script",
+      language: "javascript",
+      source: "const result = await agent('Review risky files'); return result;",
+      args: { maxFiles: 3 },
+      limits: { maxAgentCalls: 4, timeoutMs: 120000 },
+      approval: { required: true }
+    });
+    expect(contract).not.toHaveProperty("body.steps");
+    expect(contract.body).toBeUndefined();
+  });
+
+  test("rejects runtime workflow objects as external contract input", () => {
+    expect(() =>
+      compileContract(
+        {
+          id: "loop_runtime_workflow_object",
+          title: "Runtime workflow object",
+          goal: "Reject non-explicit runtime input",
+          workflow: {
+            kind: "runtime_script",
+            language: "javascript",
+            source: "return await agent('Review the latest result');",
+            approval: { required: true }
+          },
+          verification: passingLegacyVerification()
+        } as any,
+        fixedTime
+      )
+    ).toThrow(/workflowKind.*runtime_script.*string script/i);
+  });
+
+  test("preserves stored runtime workflow objects on internal recompile", () => {
+    const contract = recompileFormalContract(
+      {
+        id: "loop_runtime_recompile",
+        title: "Runtime workflow object",
+        goal: "Keep runtime workflow authoritative",
+        workflow: {
+          kind: "runtime_script",
+          language: "javascript",
+          source: "return await agent('Review the latest result');",
+          approval: { required: true }
+        },
+        body: {
+          steps: [{ id: "legacy", kind: "agent", label: "Legacy", prompt: "Legacy static body." }]
+        },
+        verification: passingLegacyVerification()
+      } as any,
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+    expect(contract.workflow).toMatchObject({
+      kind: "runtime_script",
+      source: "return await agent('Review the latest result');",
+      approval: { required: true }
+    });
+    expect(contract.body).toBeUndefined();
+  });
+
+  test("rejects string script without explicit runtime workflow kind", () => {
+    expect(() =>
+      compileContract(
+        {
+          id: "loop_implicit_runtime",
+          title: "Implicit runtime",
+          goal: "Reject implicit runtime scripts",
+          script: "return await agent('Review');",
+          verification: passingLegacyVerification()
+        } as any,
+        fixedTime
+      )
+    ).toThrow(/workflowKind.*runtime_script/i);
+  });
+
+  test("rejects body plus any script input", () => {
+    expect(() =>
+      compileContract(
+        {
+          id: "loop_mixed_static_script",
+          title: "Mixed workflow",
+          goal: "Reject ambiguous workflow inputs",
+          body: { steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan." }] },
+          script: { build: [{ fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Draft." }] }] },
+          verification: passingLegacyVerification()
+        } as any,
+        fixedTime
+      )
+    ).toThrow(/body.*script/i);
+  });
+
+  test("rejects legacy script build input with runtime workflow kind", () => {
+    expect(() =>
+      compileContract(
+        {
+          id: "loop_runtime_builder",
+          workflowKind: "runtime_script",
+          title: "Runtime builder",
+          goal: "Reject builder AST as runtime script",
+          script: { build: [{ fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Draft." }] }] },
+          verification: passingLegacyVerification()
+        } as any,
+        fixedTime
+      )
+    ).toThrow(/script\.build.*static/i);
+  });
+
+  test("rubric agent validator accepts verifier subagent controls", () => {
+    const contract = compileContract(
+      {
+        id: "loop_verifier_subagent",
+        title: "Verifier subagent workflow",
+        goal: "Verify through a separate reviewer",
+        body: {
+          steps: [{ id: "draft", kind: "task", runtime: "codex", label: "Draft", prompt: "Draft." }]
+        },
+        verification: {
+          version: 2,
+          mode: "after_workflow",
+          criteria: [
+            { id: "quality", label: "Quality", description: "Meets the quality bar.", severity: "must" }
+          ],
+          validators: [
+            {
+              id: "verifier-subagent",
+              type: "rubric_agent",
+              label: "Verifier sub-agent",
+              criteriaIds: ["quality"],
+              prompt: "Verify the workflow result and cite evidence.",
+              scoreScale: { min: 0, max: 1 },
+              passScore: 1,
+              evidenceRequired: true,
+              allowSelfReview: false,
+              subagent: { ref: "reviewer", role: "code-reviewer", tools: ["rg"] },
+              severity: "must"
+            }
+          ],
+          decision: {
+            requireAllMustCriteriaCovered: true,
+            failOnMustValidatorFailure: true,
+            failOnShouldValidatorFailure: false,
+            requireEvidenceForAgentScores: true
+          }
+        }
+      },
+      fixedTime
+    );
+
+    expect(() => validateContract(contract)).not.toThrow();
+    expect(contract.verification.validators[0]).toMatchObject({
+      type: "rubric_agent",
+      prompt: "Verify the workflow result and cite evidence.",
+      allowSelfReview: false,
+      subagent: { ref: "reviewer", role: "code-reviewer", tools: ["rg"] }
+    });
+  });
+
   test("compiles defaults for a one-step manual contract", () => {
     const contract = compileContract(
       {

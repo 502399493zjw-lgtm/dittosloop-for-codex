@@ -1,4 +1,5 @@
 import type { CodexSubagentSpec, EffectiveAgentProfile } from "../contract/types.js";
+import type { RuntimeScriptTaskRunState } from "../types.js";
 import type {
   AggregatedVerificationDecision,
   ValidatorResult,
@@ -19,6 +20,7 @@ export interface AgentRequest {
   workflowRuntime?: "dittosloop-local-workflow";
   workflowContractId?: string;
   workflowPlan?: WorkflowExecutionPlan;
+  runtimeScript?: RuntimeScriptTaskRunState;
 }
 
 export interface WorkflowExecutionPlanStep {
@@ -76,6 +78,19 @@ export type EngineEvent =
   | EngineEventBase<"run_completed", { status: "completed"; result?: unknown }>
   | EngineEventBase<"run_failed", { status: "failed"; error: string }>
   | EngineEventBase<"run_done", { status: "completed" | "failed" | "waiting_for_human"; summary?: string }>
+  | EngineEventBase<"runtime_script_started", { contractId: string }>
+  | EngineEventBase<"runtime_script_done", { contractId: string; status: "completed" | "failed"; result?: unknown; error?: string }>
+  | EngineEventBase<"agent:start", { label?: string; prompt: string; callSite: string; session?: unknown }>
+  | EngineEventBase<"agent:done", { label?: string; callSite: string; result?: string; session?: unknown }>
+  | EngineEventBase<"agent:error", { label?: string; callSite: string; error: string; session?: unknown }>
+  | EngineEventBase<"agent:cached", { label?: string; callSite: string }>
+  | EngineEventBase<"runtime_parallel_started", { label?: string; count: number }>
+  | EngineEventBase<"runtime_parallel_completed", { label?: string; count: number }>
+  | EngineEventBase<"runtime_pipeline_started", { label?: string; count: number }>
+  | EngineEventBase<"runtime_pipeline_completed", { label?: string; count: number }>
+  | EngineEventBase<"runtime_phase_started", { label: string }>
+  | EngineEventBase<"runtime_phase_done", { label: string; status: "ok" | "failed" }>
+  | EngineEventBase<"runtime_log", { message: string }>
   | EngineEventBase<"phase_started", { label?: string; title?: string; phaseId?: string; pipeline?: boolean }>
   | EngineEventBase<"phase_done", { phaseId: string; title?: string; status: "ok" | "failed"; pipeline?: boolean }>
   | EngineEventBase<"agent_started", { label?: string; prompt: string; stepId?: string; nodeId?: string; phaseId?: string; pipeline?: boolean; human?: boolean; session?: unknown }>

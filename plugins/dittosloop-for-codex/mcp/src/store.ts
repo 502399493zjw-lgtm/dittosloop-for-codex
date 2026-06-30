@@ -22,7 +22,8 @@ export function createEmptyState(): LoopState {
     humanRequests: [],
     memoryCommits: [],
     loopMemories: [],
-    artifacts: []
+    artifacts: [],
+    runtimeScriptJournals: []
   };
 }
 
@@ -100,7 +101,8 @@ function normalizeState(value: Partial<LoopState> | undefined): LoopState {
     })),
     memoryCommits: value?.memoryCommits ?? [],
     loopMemories: deriveLoopMemories(value?.loopMemories ?? [], value?.memoryCommits ?? []),
-    artifacts: value?.artifacts ?? []
+    artifacts: value?.artifacts ?? [],
+    runtimeScriptJournals: value?.runtimeScriptJournals ?? []
   };
 
   return {

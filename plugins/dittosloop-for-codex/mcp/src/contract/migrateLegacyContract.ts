@@ -1,5 +1,5 @@
 import type { LoopContract } from "../types.js";
-import { compileContract } from "./compileContract.js";
+import { compileContract, recompileFormalContract } from "./compileContract.js";
 import type { FormalLoopContract, VerificationCriterion, VerificationValidator } from "./types.js";
 
 type MaybeFormalLoopContract = FormalLoopContract | LoopContract;
@@ -25,7 +25,7 @@ function commandValidatorForCheck(check: string, id: string) {
 
 export function migrateLegacyContract(loop: MaybeFormalLoopContract): FormalLoopContract {
   if (isFormalContract(loop)) {
-    return compileContract(loop, loop.updatedAt);
+    return recompileFormalContract(loop, loop.updatedAt);
   }
 
   const goal = loop.intent || loop.title;
@@ -59,7 +59,7 @@ export function migrateLegacyContract(loop: MaybeFormalLoopContract): FormalLoop
 }
 
 function isFormalContract(loop: MaybeFormalLoopContract): loop is FormalLoopContract {
-  return "goal" in loop && "body" in loop && "repairPolicy" in loop && "stopPolicy" in loop;
+  return "goal" in loop && ("workflow" in loop || "body" in loop) && "repairPolicy" in loop && "stopPolicy" in loop;
 }
 
 function migrateLegacyVerificationChecks(checks: string[]): FormalLoopContract["verification"] {
@@ -89,6 +89,7 @@ function migrateLegacyVerificationChecks(checks: string[]): FormalLoopContract["
       type: "rubric_agent" as const,
       label: "Legacy rubric review",
       criteriaIds: criteria.map((criterion) => criterion.id),
+      prompt: "Review the workflow result against the verification criteria.",
       scoreScale: { min: 0, max: 1 },
       passScore: 1,
       evidenceRequired: true,

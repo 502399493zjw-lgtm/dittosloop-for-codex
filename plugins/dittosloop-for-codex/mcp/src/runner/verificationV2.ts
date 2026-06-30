@@ -269,7 +269,7 @@ export function recordedRubricAgentResultToValidatorResult(
   validator: VerificationRubricAgentValidator,
   input: RecordedRubricAgentResultInput
 ): RubricAgentValidatorResult {
-  const hasRequiredEvidence = !validator.evidenceRequired || Boolean(input.evidence?.trim());
+  const hasRequiredEvidence = validator.evidenceRequired === false || Boolean(input.evidence?.trim());
   const hasScore = typeof input.score === "number" && Number.isFinite(input.score);
   const status = rubricAgentStatusFromInput(validator, input.status, input.score, hasScore, hasRequiredEvidence);
 
@@ -799,7 +799,7 @@ function enforceRubricAgentPolicy(policy: VerificationPolicyV2, result: Validato
     candidate.id === result.validatorId && candidate.type === "rubric_agent"
   );
   const requiresEvidence = policy.decision.requireEvidenceForAgentScores
-    || (validator?.type === "rubric_agent" && validator.evidenceRequired);
+    || (validator?.type === "rubric_agent" && validator.evidenceRequired !== false);
   const hasRequiredEvidence = !requiresEvidence || Boolean(result.evidence?.trim());
   const hasScore = typeof result.score === "number" && Number.isFinite(result.score);
 
@@ -813,7 +813,7 @@ function enforceRubricAgentPolicy(policy: VerificationPolicyV2, result: Validato
     };
   }
 
-  if (validator?.type === "rubric_agent" && result.score !== undefined && result.score < validator.passScore) {
+  if (validator?.type === "rubric_agent" && result.score !== undefined && result.score < rubricAgentPassScore(validator)) {
     return {
       ...result,
       status: "failed",
@@ -879,7 +879,7 @@ function rubricAgentStatusFromInput(
   if (!hasScore || !hasRequiredEvidence) {
     return "needs_human";
   }
-  return score! >= validator.passScore ? "passed" : "failed";
+  return score! >= rubricAgentPassScore(validator) ? "passed" : "failed";
 }
 
 function decisionSummary(decision: AggregatedVerificationDecision): string {
@@ -900,9 +900,13 @@ function rubricAgentSummary(
   if (!hasRequiredEvidence) {
     return "Rubric agent result requires evidence.";
   }
-  return score >= validator.passScore
+  return score >= rubricAgentPassScore(validator)
     ? `${validator.label} passed with score ${score}.`
     : `${validator.label} failed with score ${score}.`;
+}
+
+function rubricAgentPassScore(validator: VerificationRubricAgentValidator): number {
+  return validator.passScore ?? validator.scoreScale?.max ?? 1;
 }
 
 function resolveCommandCwd(validator: VerificationCommandValidator, input: RunVerificationV2Input): string | undefined {

@@ -1,73 +1,55 @@
 # Task 2 Report
 
-## What I implemented
+## Status
 
-- Extended the MCP Zod schemas in `plugins/dittosloop-for-codex/mcp/src/mcpServer.ts` to accept:
-  - `agentProfiles` on `create_loop_contract`
-  - `agentProfileRef` on executable `agent` and `task` steps
-  - `allowDegradedProfiles` on `start_codex_session`
-- Added shared `skillRequirementSchema` and `agentProfileSchema` using the exact field set from the task brief.
-- Passed `allowDegradedProfiles` from the `start_codex_session` MCP handler into `service.startCodexSessionRun`.
-- Added the optional `allowDegradedProfiles` field to `StartCodexSessionRunInput` in `plugins/dittosloop-for-codex/mcp/src/service.ts` for type plumbing only.
-- Added focused MCP tests covering the new schema acceptance and the `startCodexSessionRun` passthrough while keeping the existing subagent passthrough test unchanged.
+DONE
 
-## Tests run and exact results
+## Summary of changes
 
-1. `npm --prefix plugins/dittosloop-for-codex/mcp test -- mcpServer.test.ts`
-   - Initial RED run: failed with 2 expected failures
-   - Final GREEN run: `✓ test/mcpServer.test.ts (24 tests) 62ms`
-2. `npm --prefix plugins/dittosloop-for-codex/mcp run typecheck`
-   - Passed: `tsc -p tsconfig.json --noEmit`
+- Added runtime script default limits in `plugins/dittosloop-for-codex/mcp/src/runtimeScript/defaults.ts`.
+- Added runtime script execution boundary types in `plugins/dittosloop-for-codex/mcp/src/runtimeScript/types.ts`.
+- Added static source validation in `plugins/dittosloop-for-codex/mcp/src/runtimeScript/validateScript.ts`.
+- Added focused validation tests in `plugins/dittosloop-for-codex/mcp/test/runtimeScript/validateScript.test.ts`.
+- After independent review, extended validation to reject `Date`, `Math.random`, `crypto`, and `performance`.
+- After independent review, added a service guard so runtime script launch contexts do not compile static execution graphs before the runtime script executor exists.
 
-## TDD Evidence
+## Tests
 
-### RED command
-
-```bash
-npm --prefix plugins/dittosloop-for-codex/mcp test -- mcpServer.test.ts
-```
-
-### Relevant failing output
-
-```text
-FAIL  test/mcpServer.test.ts > accepts agent profile fields through the MCP schema boundary
-AssertionError: expected { … } to match object { agentProfiles: { … }, … }
-
-FAIL  test/mcpServer.test.ts > passes allowDegradedProfiles into startCodexSessionRun
-AssertionError: expected "spy" to be called with arguments: [ 'loop_1', … ]
-```
-
-### Why the RED failure was expected
-
-- `create_loop_contract` was stripping `agentProfiles` and `agentProfileRef` because those fields were not in the MCP schemas yet.
-- `start_codex_session` was stripping `allowDegradedProfiles` before calling `service.startCodexSessionRun`.
-
-### GREEN command
-
-```bash
-npm --prefix plugins/dittosloop-for-codex/mcp test -- mcpServer.test.ts
-```
-
-### Relevant passing output
-
-```text
-✓ test/mcpServer.test.ts (24 tests) 62ms
-Test Files  1 passed (1)
-Tests  24 passed (24)
-```
+- RED before implementation:
+  - `npm test -- --run test/runtimeScript/validateScript.test.ts`
+  - Failed as expected because `src/runtimeScript/validateScript.js` did not exist.
+- First GREEN after implementation:
+  - `npm test -- --run test/runtimeScript/validateScript.test.ts`
+  - Passed: 1 file, 7 tests.
+- Combined first-slice verification after Task 1 landed:
+  - `npm test -- --run test/contract.test.ts test/mcpServer.test.ts test/runtimeScript/validateScript.test.ts`
+  - Passed: 3 files, 69 tests.
+  - `npm run typecheck`
+  - Passed.
+- Review-fix RED cases:
+  - `npm test -- --run test/runtimeScript/validateScript.test.ts`
+  - Failed as expected because nondeterministic globals were still accepted.
+  - `npm test -- --run test/service.test.ts -t "runtime script workflow context"`
+  - Failed as expected with `Execution graph compilation requires body.steps`.
+- Review-fix GREEN verification:
+  - `npm test -- --run test/runtimeScript/validateScript.test.ts`
+  - Passed: 1 file, 8 tests.
+  - `npm test -- --run test/service.test.ts -t "runtime script workflow context"`
+  - Passed: 1 selected test.
+  - `npm test -- --run test/contract.test.ts test/mcpServer.test.ts test/runtimeScript/validateScript.test.ts test/service.test.ts`
+  - Passed: 4 files, 170 tests.
+  - `npm run typecheck`
+  - Passed.
 
 ## Files changed
 
-- `plugins/dittosloop-for-codex/mcp/src/mcpServer.ts`
+- `plugins/dittosloop-for-codex/mcp/src/runtimeScript/defaults.ts`
+- `plugins/dittosloop-for-codex/mcp/src/runtimeScript/types.ts`
+- `plugins/dittosloop-for-codex/mcp/src/runtimeScript/validateScript.ts`
 - `plugins/dittosloop-for-codex/mcp/src/service.ts`
-- `plugins/dittosloop-for-codex/mcp/test/mcpServer.test.ts`
+- `plugins/dittosloop-for-codex/mcp/test/runtimeScript/validateScript.test.ts`
+- `plugins/dittosloop-for-codex/mcp/test/service.test.ts`
 
-## Self-review findings
+## Concerns or follow-ups
 
-- Kept the change inside the MCP boundary and the single optional service input type addition allowed by the brief.
-- Did not add preflight logic, runtime behavior, session propagation, preview changes, workspace-file generation, or skill doc updates.
-- The `allowDegradedProfiles` test verifies handler-to-service plumbing directly, which matches the current task scope better than asserting persisted run behavior.
-
-## Any concerns
-
-- None for Task 2 scope.
+- Runtime VM execution, replay journal persistence, service execution, approval enforcement, preview events, and verifier sub-agent behavior remain in later tasks.

@@ -1,0 +1,149 @@
+# Task 8 Report: Runtime Script Approval Gate
+
+## RED Evidence
+
+- Added focused coverage in `plugins/dittosloop-for-codex/mcp/test/runtimeScript/approval.test.ts` before changing service or MCP code.
+- Initial run:
+
+  ```bash
+  cd plugins/dittosloop-for-codex/mcp
+  npm test -- --run test/runtimeScript/approval.test.ts
+  ```
+
+- Failure symptoms:
+  - `unapproved runtime script is blocked before execution and verification` failed because execution fell through into runtime verification logic instead of stopping before the VM.
+  - `approval tool persists approval and allows runtime script execution` failed because `approve_runtime_script` did not exist.
+  - `approval state is persisted on the active runtime script contract` failed because `LoopService.approveRuntimeScript()` did not exist.
+  - `static workflows do not require runtime script approval` exposed a bad test executor shape, which I corrected to match the repository's `Executor` interface before continuing.
+
+## Changed Files
+
+- `plugins/dittosloop-for-codex/mcp/src/service.ts`
+  - Added `approveRuntimeScript()` to persist `approvedAt` / `approvedBy` on the active runtime-script contract.
+  - Propagates approval metadata into non-terminal runtime-script `workflowContext.contractSnapshot` records so a run started before approval can continue after approval.
+  - Gates `executeRuntimeScriptWorkflowAttempt()` before VM execution when approval is required but absent.
+  - Marks the workflow context as waiting for human input and records a single reusable approval request instead of entering execution.
+- `plugins/dittosloop-for-codex/mcp/src/mcpServer.ts`
+  - Added MCP-visible `approve_runtime_script` with the preferred `{ loopId, approvedBy }` input shape.
+- `plugins/dittosloop-for-codex/mcp/test/runtimeScript/approval.test.ts`
+  - Covers blocked unapproved execution, approval-driven execution, approval persistence, and static workflow non-regression.
+- `plugins/dittosloop-for-codex/mcp/dist/index.js`
+  - Rebuilt generated MCP bundle.
+
+## Verification
+
+Required commands run:
+
+```bash
+cd plugins/dittosloop-for-codex/mcp
+npm test -- --run test/runtimeScript/approval.test.ts
+npm run typecheck
+npm run build
+cd ../..
+git diff --check
+```
+
+Observed results:
+
+- `test/runtimeScript/approval.test.ts`: 4 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed and refreshed `dist/index.js`.
+- `git diff --check`: passed with no whitespace errors.
+
+## Remaining Risks
+
+- The approval request is persisted as a human request on the run, but there is not yet a dedicated "approval resolved" helper; the current flow expects approval to happen through `approve_runtime_script`, after which re-running `execute_workflow_attempt` continues normally.
+- Static workflow behavior is covered by the focused regression in this task, but I did not run the broader MCP or service suites beyond the commands required by the brief.
+
+## Follow-up Fix: MCP Tool Surface Test
+
+- Main-controller revalidation exposed one missed MCP assertion:
+  - `npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts`
+  - `test/mcpServer.test.ts > registers the DittosLoop tool surface`
+  - The registered tool list did not include the newly added `approve_runtime_script` entry.
+- Updated `plugins/dittosloop-for-codex/mcp/test/mcpServer.test.ts` to:
+  - include `approve_runtime_script` in the exact registered tool order;
+  - assert that `client.listTools()` exposes the new tool with `loopId` and `approvedBy` input schema properties.
+
+### Follow-up Verification
+
+Commands run:
+
+```bash
+cd plugins/dittosloop-for-codex/mcp
+npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts
+npm run typecheck
+npm run build
+cd ../..
+git diff --check
+```
+
+Observed results:
+
+- `test/runtimeScript/approval.test.ts test/mcpServer.test.ts`: 36 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed; `dist/index.js` content was unchanged.
+- `git diff --check`: passed with no whitespace errors.
+
+## Follow-up Fix: Service Runtime Script Scenarios
+
+- Main-controller second-pass revalidation exposed older runtime-script service tests that still assumed execution could begin immediately after contract creation:
+  - `npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts`
+  - three `test/service.runtimeScript.test.ts` scenarios received `waiting_for_human` under the new default `approval.required === true` behavior.
+- Updated `plugins/dittosloop-for-codex/mcp/test/service.runtimeScript.test.ts` so the existing execution, resume, and rubric-validator-writeback scenarios explicitly call the public service approval path:
+  - `await service.approveRuntimeScript(contract.id, { approvedBy: "test" })`
+- This keeps the approval-specific regression in `test/runtimeScript/approval.test.ts` as the place that proves unapproved runtime scripts remain blocked.
+
+### Follow-up Verification
+
+Commands run:
+
+```bash
+cd plugins/dittosloop-for-codex/mcp
+npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts
+npm test -- --run test/service.runtimeScript.test.ts test/service.test.ts
+npm run typecheck
+npm run build
+cd ../..
+git diff --check
+```
+
+Observed results:
+
+- `test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts`: 41 tests passed.
+- `test/service.runtimeScript.test.ts test/service.test.ts`: 105 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed; `dist/index.js` content was unchanged.
+- `git diff --check`: passed with no whitespace errors.
+
+## Follow-up Fix: Resolve Runtime Script Approval Requests
+
+- Reviewer follow-up exposed one important cleanup gap and one missing regression around the new approval gate:
+  - `approveRuntimeScript()` persisted approval but left the open runtime-script approval `humanRequest` unresolved, so a successful rerun could still show a stale open approval request.
+  - The runtime-script approval request dedupe path existed, but there was no regression test proving repeated blocked executions do not create duplicates.
+- Updated `plugins/dittosloop-for-codex/mcp/src/service.ts` to:
+  - persist approval requests with `attemptId` and `workflowContextId` when `executeWorkflowAttempt()` blocks on runtime-script approval;
+  - resolve matching open approval requests for nonterminal runtime-script runs on the approved loop as part of `approveRuntimeScript()`, recording a concrete approval response and `resolvedAt` timestamp.
+- Updated `plugins/dittosloop-for-codex/mcp/test/runtimeScript/approval.test.ts` to add:
+  - a stale-request regression proving `block -> approve -> rerun -> complete` leaves no open approval request for that run;
+  - a dedupe regression proving repeated blocked `executeWorkflowAttempt()` calls still leave exactly one open approval request.
+
+### Follow-up Verification
+
+Commands run:
+
+```bash
+cd plugins/dittosloop-for-codex/mcp
+npm test -- --run test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts test/service.test.ts
+npm run typecheck
+npm run build
+cd ../..
+git diff --check
+```
+
+Observed results:
+
+- `test/runtimeScript/approval.test.ts test/mcpServer.test.ts test/service.runtimeScript.test.ts test/service.test.ts`: 142 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed and refreshed `dist/index.js`.
+- `git diff --check`: passed with no whitespace errors.

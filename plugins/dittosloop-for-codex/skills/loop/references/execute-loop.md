@@ -19,7 +19,8 @@ Read this when running an existing loop or writing back task results from a visi
 13. Use `append_event` for meaningful progress notes.
 14. Use `complete_attempt` when a manual attempt completes or fails.
 15. Use `record_verification` after running checks or manual review; include `attemptId` when the result belongs to a specific attempt.
-16. Use `complete_run` only after verification is recorded or the blocker is explicit.
+16. When a runtime script loop needs dynamic workflow validation, prefer a separate verifier sub-agent so the JavaScript-driven worker result is reviewed by an independent visible session.
+17. Use `complete_run` only after verification is recorded or the blocker is explicit.
 
 ## Task Result Writeback
 
@@ -40,4 +41,4 @@ When a task result is recorded, the runtime updates the targeted node run and ma
 
 Workflow tasks may call `read_loop_memory` while working. They should return durable observations in task results rather than deciding long-term memory writes themselves.
 
-The generated `runtime/dittosloop-for-codex-loop.md` guide is runtime output for that loop session. Do not describe it as an installed skill.
+The generated `skill/dittosloop-for-codex-loop.md` guide is runtime output for that loop session. Do not describe it as an installed skill.

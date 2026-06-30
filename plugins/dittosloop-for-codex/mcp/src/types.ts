@@ -208,6 +208,45 @@ export interface ArtifactRef {
   createdAt: string;
 }
 
+export interface RuntimeScriptJournalRecord {
+  id: string;
+  loopId: string;
+  runId: string;
+  attemptId: string;
+  workflowContextId: string;
+  contractId: string;
+  scriptHash: string;
+  argsHash: string;
+  key: string;
+  callSite: string;
+  promptHash: string;
+  optionsHash: string;
+  status: "completed" | "failed";
+  output?: string;
+  error?: string;
+  sessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuntimeScriptContextState {
+  scriptHash: string;
+  argsHash: string;
+  status: "not_started" | "running" | "waiting_for_session" | "completed" | "failed";
+  result?: unknown;
+  error?: string;
+  updatedAt: string;
+}
+
+export interface RuntimeScriptTaskRunState {
+  key: string;
+  callSite: string;
+  scriptHash: string;
+  argsHash: string;
+  promptHash: string;
+  optionsHash: string;
+}
+
 export interface LoopWorkspaceFile {
   path: string;
   kind: "memory" | "contract" | "workflow" | "runtime" | "skill" | "rubrics" | "verification" | "status" | "runs";
@@ -275,6 +314,7 @@ export interface WorkflowTaskRun {
   result?: string;
   error?: string;
   idempotencyKey?: string;
+  runtimeScript?: RuntimeScriptTaskRunState;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -329,6 +369,7 @@ export interface LoopState {
   memoryCommits: MemoryCommit[];
   loopMemories: LoopMemory[];
   artifacts: ArtifactRef[];
+  runtimeScriptJournals: RuntimeScriptJournalRecord[];
 }
 
 export interface RunDetail {

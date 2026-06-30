@@ -34,6 +34,8 @@ Read this when exact MCP tool purpose, required fields, or call caveats matter.
 ## Exact Caveats
 
 - Use `create_loop_contract` for every new loop.
+- `create_loop_contract` accepts fixed static workflows through `body.steps`, legacy compatibility workflows through `script.build`, and dynamic workflows through `workflowKind: "runtime_script"` with a string `script`.
+- Runtime script contract input may also include optional `args` and optional `limits`; runtime script approval defaults are required and should remain explicit in summaries.
 - Use `list_loops` before reusing an existing loop.
 - Use `start_codex_session` to create the visible run, attempt, host Codex thread request, workflow context, and bounded memory excerpt.
 - `start_codex_session` returns a launch request; if no visible Codex thread appears automatically, create one with the returned prompt and call `record_codex_thread`.
@@ -48,7 +50,8 @@ Read this when exact MCP tool purpose, required fields, or call caveats matter.
 - When multiple locators are provided, they must identify the same task run.
 - `needs_human` on `record_session_result` suspends the exact task and opens a linked human request when possible.
 - Use `record_verification` after checks or manual review; include `attemptId` when the result belongs to a specific attempt.
+- For runtime dynamic workflow validation, prefer a rubric-agent verifier sub-agent when independent review matters, and treat its recorded result as the visible verifier outcome.
 - Set `repair: true` on `record_verification` or call `mark_run_repairing` when failed verification needs repair work.
 - Use `complete_run` only after verification is recorded or the blocker is explicit.
 - Use `get_preview_url` and open that URL in Codex's in-app browser when the user wants the visual loop view.
-- The generated per-loop guide path is `runtime/dittosloop-for-codex-loop.md`; treat it as runtime output, not an installed skill.
+- The generated per-loop guide path is `skill/dittosloop-for-codex-loop.md`; treat it as runtime output, not an installed skill.

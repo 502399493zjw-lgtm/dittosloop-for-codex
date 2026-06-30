@@ -10,7 +10,8 @@ export type IdPrefix =
   | "revision"
   | "workflow"
   | "graph"
-  | "task";
+  | "task"
+  | "journal";
 
 export function createId(prefix: IdPrefix): string {
   const timestamp = Date.now().toString(36);

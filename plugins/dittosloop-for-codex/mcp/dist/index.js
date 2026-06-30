@@ -21275,9 +21275,10 @@ var defaultDecision = {
   failOnShouldValidatorFailure: false,
   requireEvidenceForAgentScores: true
 };
+var defaultRubricAgentPrompt = "Review the workflow result against the verification criteria.";
 function migrateVerificationToV2(input) {
   if ("version" in input && input.version === 2) {
-    return input;
+    return normalizeVerificationV2(input);
   }
   const legacy = input;
   const criteria = legacy.rubrics.map((rubric) => ({
@@ -21286,7 +21287,7 @@ function migrateVerificationToV2(input) {
     description: rubric.requirement,
     severity: rubric.severity
   }));
-  return {
+  return normalizeVerificationV2({
     version: 2,
     mode: legacy.mode === "after_each_agent" ? "after_each_step" : "after_workflow",
     criteria,
@@ -21296,6 +21297,7 @@ function migrateVerificationToV2(input) {
         type: "rubric_agent",
         label: "Rubric review",
         criteriaIds: criteria.map((criterion) => criterion.id),
+        prompt: defaultRubricAgentPrompt,
         scoreScale: { min: 0, max: 1 },
         passScore: 1,
         evidenceRequired: true,
@@ -21303,18 +21305,112 @@ function migrateVerificationToV2(input) {
       }
     ] : [],
     decision: defaultDecision
+  });
+}
+function normalizeVerificationV2(policy) {
+  return {
+    ...policy,
+    validators: policy.validators.map((validator) => {
+      if (validator.type !== "rubric_agent") {
+        return validator;
+      }
+      return {
+        ...validator,
+        prompt: validator.prompt ?? defaultRubricAgentPrompt,
+        scoreScale: validator.scoreScale ?? { min: 0, max: 1 },
+        passScore: validator.passScore ?? validator.scoreScale?.max ?? 1,
+        evidenceRequired: validator.evidenceRequired ?? true,
+        allowSelfReview: validator.allowSelfReview ?? false
+      };
+    })
   };
 }
 function compileContract(input, now = (/* @__PURE__ */ new Date()).toISOString()) {
+  return compileContractInternal(input, now, { allowRuntimeWorkflowObject: false });
+}
+function compileContractInternal(input, now, options) {
+  const { workflowKind, workflow: workflow2, body, script, args, limits, approval, journal, verification, ...contractInput } = input;
+  const normalizedWorkflow = normalizeWorkflowDefinition({
+    workflowKind,
+    workflow: workflow2,
+    body,
+    script,
+    args,
+    limits,
+    approval,
+    journal
+  }, options);
   return {
-    ...input,
-    verification: migrateVerificationToV2(input.verification),
-    trigger: input.trigger ?? { mode: "manual" },
-    repairPolicy: input.repairPolicy ?? { maxAttempts: 1, strategy: "repair_then_retry" },
-    stopPolicy: input.stopPolicy ?? { rule: "user cancels" },
-    status: input.status ?? "active",
-    createdAt: input.createdAt ?? now,
-    updatedAt: input.updatedAt ?? now
+    ...contractInput,
+    workflow: normalizedWorkflow.workflow,
+    body: normalizedWorkflow.workflow.kind === "runtime_script" ? void 0 : normalizedWorkflow.body,
+    verification: migrateVerificationToV2(verification),
+    trigger: contractInput.trigger ?? { mode: "manual" },
+    repairPolicy: contractInput.repairPolicy ?? { maxAttempts: 1, strategy: "repair_then_retry" },
+    stopPolicy: contractInput.stopPolicy ?? { rule: "user cancels" },
+    status: contractInput.status ?? "active",
+    createdAt: contractInput.createdAt ?? now,
+    updatedAt: contractInput.updatedAt ?? now,
+    ...normalizedWorkflow.budgetUsd !== void 0 && contractInput.budgetUsd === void 0 ? { budgetUsd: normalizedWorkflow.budgetUsd } : {}
+  };
+}
+function normalizeWorkflowDefinition(input, options) {
+  if (input.body && input.script !== void 0) {
+    throw new Error("Loop contract cannot include both body and script");
+  }
+  if (input.workflow?.kind === "runtime_script" && !options.allowRuntimeWorkflowObject) {
+    throw new Error('Runtime script workflow objects are internal; use workflowKind: "runtime_script" with a string script');
+  }
+  if (typeof input.script === "string") {
+    if (input.workflowKind !== "runtime_script") {
+      throw new Error('String script requires workflowKind: "runtime_script"');
+    }
+    return {
+      workflow: normalizeRuntimeScriptWorkflow(input, input.script)
+    };
+  }
+  if (input.script !== void 0) {
+    if (input.workflowKind === "runtime_script") {
+      throw new Error("script.build is a static_steps builder script and cannot be used with workflowKind runtime_script");
+    }
+    const built = evalScriptAst(input.script);
+    const body2 = { steps: built.steps };
+    return {
+      workflow: { kind: "static_steps", body: body2 },
+      body: body2,
+      ...built.budgetUsd !== void 0 ? { budgetUsd: built.budgetUsd } : {}
+    };
+  }
+  if (input.workflow?.kind === "runtime_script") {
+    return {
+      workflow: normalizeRuntimeScriptWorkflow(input, input.workflow.source)
+    };
+  }
+  if (input.body) {
+    if (input.workflowKind === "runtime_script") {
+      throw new Error("body.steps cannot be used with workflowKind runtime_script");
+    }
+    return {
+      workflow: { kind: "static_steps", body: input.body },
+      body: input.body
+    };
+  }
+  const body = input.workflow?.body;
+  return {
+    workflow: { kind: "static_steps", body },
+    body
+  };
+}
+function normalizeRuntimeScriptWorkflow(input, source) {
+  const workflow2 = input.workflow?.kind === "runtime_script" ? input.workflow : void 0;
+  return {
+    kind: "runtime_script",
+    language: "javascript",
+    source,
+    ...input.args !== void 0 || workflow2?.args !== void 0 ? { args: input.args ?? workflow2?.args } : {},
+    ...input.limits !== void 0 || workflow2?.limits !== void 0 ? { limits: input.limits ?? workflow2?.limits } : {},
+    approval: input.approval ?? workflow2?.approval ?? { required: true },
+    ...input.journal !== void 0 || workflow2?.journal !== void 0 ? { journal: input.journal ?? workflow2?.journal } : {}
   };
 }
 
@@ -21338,7 +21434,11 @@ function resolveEffectiveAgentProfile(contract, step) {
 }
 function resolveEffectiveProfilesByStep(contract) {
   const profiles = /* @__PURE__ */ new Map();
-  visitSteps(contract.body.steps, (step) => {
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : void 0);
+  if (!body) {
+    return profiles;
+  }
+  visitSteps(body.steps, (step) => {
     if (step.kind !== "agent" && step.kind !== "task") return;
     const profile = resolveEffectiveAgentProfile(contract, step);
     if (profile) {
@@ -21654,6 +21754,7 @@ function isPlainObject3(value) {
 
 // src/contract/validateContract.ts
 import path from "node:path";
+var MAX_RUNTIME_SCRIPT_SOURCE_CHARS = 1e5;
 var scoreOperators = /* @__PURE__ */ new Set([">=", ">", "<=", "<", "==", "!="]);
 function validateContract(contract) {
   const errors = [];
@@ -21662,11 +21763,18 @@ function validateContract(contract) {
   required2(contract.title, "title", errors);
   required2(contract.goal, "goal", errors);
   validateAgentProfiles(contract, errors);
-  if (!contract.body || !Array.isArray(contract.body.steps) || contract.body.steps.length === 0) {
-    errors.push("body.steps must contain at least one step");
+  if (!contract.workflow) {
+    errors.push("workflow is required");
+  } else if (contract.workflow.kind === "runtime_script") {
+    validateRuntimeScriptWorkflow(contract.workflow, contract.body, errors);
   } else {
-    for (const step of contract.body.steps) {
-      validateStep(contract, step, stepIds, errors);
+    const body = contract.body ?? contract.workflow.body;
+    if (!body || !Array.isArray(body.steps) || body.steps.length === 0) {
+      errors.push("body.steps must contain at least one step");
+    } else {
+      for (const step of body.steps) {
+        validateStep(contract, step, stepIds, errors);
+      }
     }
   }
   validateVerificationV2(contract.verification, contract.projectBinding, errors);
@@ -21760,20 +21868,53 @@ function required2(value, label, errors) {
   }
 }
 function validateSubagent(subagent, step, errors) {
+  validateCodexSubagentSpec(subagent, `${step.kind} step ${step.id || "<missing>"} subagent`, errors);
+}
+function validateCodexSubagentSpec(subagent, label, errors) {
   if (!subagent) return;
   if (subagent.timeoutMs !== void 0 && (!Number.isInteger(subagent.timeoutMs) || subagent.timeoutMs <= 0)) {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.timeoutMs must be a positive integer`);
+    errors.push(`${label}.timeoutMs must be a positive integer`);
   }
   if (subagent.tools !== void 0) {
     if (!Array.isArray(subagent.tools) || subagent.tools.some((tool) => !tool || tool.trim().length === 0)) {
-      errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.tools must contain non-empty strings`);
+      errors.push(`${label}.tools must contain non-empty strings`);
     }
   }
   if (subagent.permissions?.filesystem !== void 0 && !["read-only", "workspace-write", "danger-full-access"].includes(subagent.permissions.filesystem)) {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.filesystem is invalid`);
+    errors.push(`${label}.permissions.filesystem is invalid`);
   }
   if (subagent.permissions?.network !== void 0 && subagent.permissions.network !== "enabled" && subagent.permissions.network !== "disabled") {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.network is invalid`);
+    errors.push(`${label}.permissions.network is invalid`);
+  }
+}
+function validateRuntimeScriptWorkflow(workflow2, body, errors) {
+  if (workflow2.language !== "javascript") {
+    errors.push("runtime_script workflow language must be javascript");
+  }
+  if (!workflow2.source || workflow2.source.trim().length === 0) {
+    errors.push("runtime_script workflow source is required");
+  } else if (workflow2.source.length > MAX_RUNTIME_SCRIPT_SOURCE_CHARS) {
+    errors.push(`runtime_script workflow source must be at most ${MAX_RUNTIME_SCRIPT_SOURCE_CHARS} characters`);
+  }
+  if (body?.steps !== void 0) {
+    errors.push("runtime_script workflow must not include body.steps");
+  }
+  validateRuntimeScriptLimits(workflow2.limits, errors);
+  if (!workflow2.approval) {
+    errors.push("runtime_script workflow approval policy is required");
+  } else if (typeof workflow2.approval.required !== "boolean") {
+    errors.push("runtime_script workflow approval.required must be a boolean");
+  }
+  if (workflow2.journal !== void 0 && typeof workflow2.journal.enabled !== "boolean") {
+    errors.push("runtime_script workflow journal.enabled must be a boolean");
+  }
+}
+function validateRuntimeScriptLimits(limits, errors) {
+  if (!limits) return;
+  for (const [key, value] of Object.entries(limits)) {
+    if (value !== void 0 && (!Number.isInteger(value) || value <= 0)) {
+      errors.push(`runtime_script workflow limits.${key} must be a positive integer`);
+    }
   }
 }
 function validateAgentProfile(profileId, profile, errors) {
@@ -22053,12 +22194,21 @@ function validateRubricAgentValidator(validator, errors) {
   if (!Array.isArray(validator.criteriaIds) || validator.criteriaIds.length === 0) {
     errors.push("rubric_agent validator criteriaIds must contain at least one criterion");
   }
-  const scoreValues = [validator.scoreScale.min, validator.scoreScale.max, validator.passScore];
+  if (!validator.prompt || validator.prompt.trim().length === 0) {
+    errors.push("rubric_agent validator prompt is required");
+  }
+  if (validator.allowSelfReview !== void 0 && typeof validator.allowSelfReview !== "boolean") {
+    errors.push("rubric_agent validator allowSelfReview must be a boolean");
+  }
+  validateCodexSubagentSpec(validator.subagent, `rubric_agent validator ${validator.id || "<missing>"} subagent`, errors);
+  const scoreScale = validator.scoreScale ?? { min: 0, max: 1 };
+  const passScore = validator.passScore ?? scoreScale.max;
+  const scoreValues = [scoreScale.min, scoreScale.max, passScore];
   if (scoreValues.some((value) => !Number.isFinite(value))) {
     errors.push("score validator threshold must be finite");
     return;
   }
-  if (validator.passScore < validator.scoreScale.min || validator.passScore > validator.scoreScale.max) {
+  if (passScore < scoreScale.min || passScore > scoreScale.max) {
     errors.push("rubric_agent validator passScore must be inside scoreScale");
   }
 }
@@ -22315,7 +22465,7 @@ function aggregateVerificationDecision(policy, validatorResults) {
   };
 }
 function recordedRubricAgentResultToValidatorResult(validator, input) {
-  const hasRequiredEvidence = !validator.evidenceRequired || Boolean(input.evidence?.trim());
+  const hasRequiredEvidence = validator.evidenceRequired === false || Boolean(input.evidence?.trim());
   const hasScore = typeof input.score === "number" && Number.isFinite(input.score);
   const status = rubricAgentStatusFromInput(validator, input.status, input.score, hasScore, hasRequiredEvidence);
   return {
@@ -22742,7 +22892,7 @@ function enforceRubricAgentPolicy(policy, result) {
   const validator = policy.validators.find(
     (candidate) => candidate.id === result.validatorId && candidate.type === "rubric_agent"
   );
-  const requiresEvidence = policy.decision.requireEvidenceForAgentScores || validator?.type === "rubric_agent" && validator.evidenceRequired;
+  const requiresEvidence = policy.decision.requireEvidenceForAgentScores || validator?.type === "rubric_agent" && validator.evidenceRequired !== false;
   const hasRequiredEvidence = !requiresEvidence || Boolean(result.evidence?.trim());
   const hasScore = typeof result.score === "number" && Number.isFinite(result.score);
   if (!hasScore || !hasRequiredEvidence) {
@@ -22752,7 +22902,7 @@ function enforceRubricAgentPolicy(policy, result) {
       summary: !hasScore ? "Rubric agent result requires a finite score." : "Rubric agent result requires evidence."
     };
   }
-  if (validator?.type === "rubric_agent" && result.score !== void 0 && result.score < validator.passScore) {
+  if (validator?.type === "rubric_agent" && result.score !== void 0 && result.score < rubricAgentPassScore(validator)) {
     return {
       ...result,
       status: "failed",
@@ -22802,7 +22952,7 @@ function rubricAgentStatusFromInput(validator, requestedStatus, score, hasScore,
   if (!hasScore || !hasRequiredEvidence) {
     return "needs_human";
   }
-  return score >= validator.passScore ? "passed" : "failed";
+  return score >= rubricAgentPassScore(validator) ? "passed" : "failed";
 }
 function decisionSummary(decision) {
   if (decision.status === "passed" && decision.warnings.length > 0) {
@@ -22817,7 +22967,10 @@ function rubricAgentSummary(validator, score, hasRequiredEvidence) {
   if (!hasRequiredEvidence) {
     return "Rubric agent result requires evidence.";
   }
-  return score >= validator.passScore ? `${validator.label} passed with score ${score}.` : `${validator.label} failed with score ${score}.`;
+  return score >= rubricAgentPassScore(validator) ? `${validator.label} passed with score ${score}.` : `${validator.label} failed with score ${score}.`;
+}
+function rubricAgentPassScore(validator) {
+  return validator.passScore ?? validator.scoreScale?.max ?? 1;
 }
 function resolveCommandCwd(validator, input) {
   const cwd = validator.cwd;
@@ -23022,8 +23175,9 @@ var LoopRunner = class {
         sequence: ++sequence
       });
     };
+    const body = requireStaticWorkflowBody(request.contract);
     const flowResult = await runFlow(
-      (api) => runBody(request.contract.body, api, resolveEffectiveProfilesByStep(request.contract)),
+      (api) => runBody(body, api, resolveEffectiveProfilesByStep(request.contract)),
       {
         runId: request.runId,
         executor: this.options.executor,
@@ -23079,17 +23233,25 @@ var LoopRunner = class {
 };
 function buildWorkflowExecutionPlan(contract) {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+  const body = requireStaticWorkflowBody(contract);
   return {
     runtime: "dittosloop-local-workflow",
     contractId: contract.id,
     goal: contract.goal,
-    steps: flattenWorkflowSteps(contract.body.steps, effectiveProfilesByStep),
+    steps: flattenWorkflowSteps(body.steps, effectiveProfilesByStep),
     verification: contract.verification,
     repairPolicy: contract.repairPolicy,
     stopPolicy: contract.stopPolicy,
     budgetUsd: contract.budgetUsd,
     escalation: contract.escalation
   };
+}
+function requireStaticWorkflowBody(contract) {
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : void 0);
+  if (!body) {
+    throw new Error("Static workflow execution requires body.steps");
+  }
+  return body;
 }
 function flattenWorkflowSteps(steps, effectiveProfilesByStep, phaseId, depth = 0) {
   return steps.flatMap((step) => {
@@ -23149,11 +23311,12 @@ function sortLoopWorkspaceFiles(files) {
   const rootOrder = /* @__PURE__ */ new Map([
     ["memory.md", 0],
     ["workflow.json", 1],
-    ["verification.md", 2],
-    ["rubrics.md", 2],
-    ["status.json", 3],
-    ["runs.json", 4],
-    ["contract.json", 5]
+    ["runtime.js", 2],
+    ["verification.md", 3],
+    ["rubrics.md", 3],
+    ["status.json", 4],
+    ["runs.json", 5],
+    ["contract.json", 6]
   ]);
   return [...files].sort((left, right) => {
     const leftIsSkill = left.path.startsWith("skill/");
@@ -23206,6 +23369,7 @@ function formalLoopDirectoryFiles(input) {
           latestRunStatus: latestRun?.status ?? null,
           latestAttemptStatus: latestAttempt?.status ?? null,
           latestVerificationStatus: latestVerification?.status ?? null,
+          workflow: input.contract.workflow,
           body: input.contract.body,
           agentProfiles: input.contract.agentProfiles ?? {},
           repairPolicy: input.contract.repairPolicy,
@@ -23217,6 +23381,14 @@ function formalLoopDirectoryFiles(input) {
       )}
 `
     }),
+    ...input.contract.workflow.kind === "runtime_script" ? [
+      withSize({
+        path: "runtime.js",
+        kind: "runtime",
+        language: "javascript",
+        content: input.contract.workflow.source
+      })
+    ] : [],
     withSize({
       path: "skill/dittosloop-for-codex-loop.md",
       kind: "skill",
@@ -23563,11 +23735,817 @@ function isNodeError(error2) {
   return error2 instanceof Error && "code" in error2;
 }
 
-// src/workflowGraph/compileGraph.ts
+// src/runtimeScript/defaults.ts
+var DEFAULT_RUNTIME_SCRIPT_LIMITS = {
+  timeoutMs: 12e4,
+  maxAgentCalls: 20,
+  maxParallelBranches: 8,
+  maxPipelineItems: 50,
+  maxLogChars: 2e4
+};
+
+// src/runtimeScript/hash.ts
 import { createHash as createHash2 } from "node:crypto";
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record2 = value;
+    return `{${Object.keys(record2).filter((key) => record2[key] !== void 0).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record2[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function sha256(value) {
+  return createHash2("sha256").update(value).digest("hex");
+}
+function hashRuntimeScriptSource(source) {
+  return sha256(source);
+}
+function hashRuntimeScriptArgs(args) {
+  return sha256(stableStringify(args ?? {}));
+}
+function hashRuntimeScriptPrompt(prompt) {
+  return sha256(prompt);
+}
+function hashRuntimeScriptOptions(options) {
+  return sha256(stableStringify(options ?? {}));
+}
+function runtimeAgentJournalKey(input) {
+  return sha256(
+    stableStringify({
+      contractId: input.contractId,
+      scriptHash: input.scriptHash,
+      argsHash: input.argsHash,
+      callSite: input.callSite,
+      promptHash: hashRuntimeScriptPrompt(input.prompt),
+      optionsHash: hashRuntimeScriptOptions(input.options)
+    })
+  );
+}
+
+// src/runtimeScript/journal.ts
+var LoopStoreRuntimeScriptJournal = class {
+  constructor(store, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
+    this.store = store;
+    this.now = now;
+  }
+  store;
+  now;
+  async get(key) {
+    const state = await this.store.readState();
+    return state.runtimeScriptJournals.find((record2) => record2.key === key);
+  }
+  async recordCompleted(input) {
+    return this.upsert({
+      ...input,
+      status: "completed"
+    });
+  }
+  async recordFailed(input) {
+    return this.upsert({
+      ...input,
+      status: "failed"
+    });
+  }
+  async upsert(input) {
+    const timestamp2 = this.now();
+    let storedRecord;
+    await this.store.updateState((state) => {
+      const existing = state.runtimeScriptJournals.find((record2) => record2.key === input.key);
+      storedRecord = {
+        ...input,
+        id: existing?.id ?? createId("journal"),
+        createdAt: existing?.createdAt ?? timestamp2,
+        updatedAt: timestamp2
+      };
+      return {
+        ...state,
+        runtimeScriptJournals: existing ? state.runtimeScriptJournals.map((record2) => record2.key === input.key ? storedRecord : record2) : [...state.runtimeScriptJournals, storedRecord]
+      };
+    });
+    return storedRecord;
+  }
+};
+function createLoopStoreRuntimeScriptJournal(store) {
+  return new LoopStoreRuntimeScriptJournal(store);
+}
+
+// src/runtimeScript/sandbox.ts
+import { Worker } from "node:worker_threads";
+
+// src/runtimeScript/scheduler.ts
+var RuntimeScriptAgentError = class extends Error {
+  status;
+  session;
+  constructor(message, status, session) {
+    super(message);
+    this.name = "RuntimeScriptAgentError";
+    this.status = status;
+    this.session = session;
+  }
+};
+function createRuntimeScriptScheduler(input) {
+  const scriptHash = hashRuntimeScriptSource(input.source);
+  const argsHash = hashRuntimeScriptArgs(input.args);
+  let agentSequence = 0;
+  let logChars = 0;
+  const emit = (type, data) => {
+    input.emit?.({
+      type,
+      runId: input.runId,
+      attemptId: input.attemptId,
+      workflowContextId: input.workflowContextId,
+      contractId: input.contractId,
+      timestamp: input.now(),
+      data
+    });
+  };
+  const buildJournalRecord = (params) => ({
+    loopId: input.loopId ?? input.contractId,
+    runId: input.runId,
+    attemptId: input.attemptId,
+    workflowContextId: input.workflowContextId,
+    contractId: input.contractId,
+    scriptHash,
+    argsHash,
+    key: params.key,
+    callSite: params.callSite,
+    promptHash: hashRuntimeScriptPrompt(params.prompt),
+    optionsHash: hashRuntimeScriptOptions(params.options),
+    status: params.status,
+    output: params.output,
+    error: params.error,
+    sessionId: params.sessionId
+  });
+  const agent2 = async (prompt, options) => {
+    if (typeof prompt !== "string" || prompt.trim().length === 0) {
+      throw new Error("Runtime script agent prompt must be non-empty");
+    }
+    agentSequence += 1;
+    if (agentSequence > input.limits.maxAgentCalls) {
+      throw new Error(`Runtime script exceeded maxAgentCalls (${input.limits.maxAgentCalls})`);
+    }
+    const explicitKey = options?.key?.trim();
+    const labelOrPromptHash = options?.label?.trim() || hashRuntimeScriptPrompt(prompt);
+    const callSite = explicitKey || `agent:${agentSequence}:${labelOrPromptHash}`;
+    const key = runtimeAgentJournalKey({
+      contractId: input.contractId,
+      scriptHash,
+      argsHash,
+      callSite,
+      prompt,
+      options
+    });
+    const cached2 = await input.journal.get(key);
+    if (cached2?.status === "completed") {
+      emit("agent:cached", {
+        callSite,
+        key,
+        label: options?.label,
+        sessionId: cached2.sessionId
+      });
+      return cached2.output ?? "";
+    }
+    emit("agent:start", {
+      callSite,
+      key,
+      label: options?.label,
+      prompt
+    });
+    const result = await input.subagentBridge.runAgent({
+      prompt,
+      label: options?.label,
+      callSite,
+      idempotencyKey: key,
+      options
+    });
+    if (result.status === "completed") {
+      const output = result.output ?? "";
+      await input.journal.recordCompleted(buildJournalRecord({
+        key,
+        callSite,
+        prompt,
+        options,
+        status: "completed",
+        output,
+        sessionId: result.session?.sessionId
+      }));
+      emit("agent:done", {
+        callSite,
+        key,
+        label: options?.label,
+        result: output,
+        status: result.status,
+        session: result.session,
+        sessionId: result.session?.sessionId
+      });
+      return output;
+    }
+    if (result.status === "needs_human") {
+      emit("agent:error", {
+        callSite,
+        key,
+        label: options?.label,
+        status: result.status,
+        sessionId: result.session?.sessionId,
+        error: result.error ?? "Sub-agent needs human input"
+      });
+      throw new RuntimeScriptAgentError(
+        result.error ?? "Runtime script sub-agent needs human input",
+        "needs_human",
+        result.session
+      );
+    }
+    await input.journal.recordFailed(buildJournalRecord({
+      key,
+      callSite,
+      prompt,
+      options,
+      status: "failed",
+      error: result.error ?? "Sub-agent failed",
+      sessionId: result.session?.sessionId
+    }));
+    emit("agent:error", {
+      callSite,
+      key,
+      label: options?.label,
+      status: result.status,
+      sessionId: result.session?.sessionId,
+      error: result.error ?? "Sub-agent failed"
+    });
+    throw new RuntimeScriptAgentError(result.error ?? "Runtime script sub-agent failed", "failed", result.session);
+  };
+  const parallel3 = async (...args) => {
+    const { tasks, options } = normalizeParallelArgs(args);
+    emit("runtime_parallel_started", {
+      label: options?.label,
+      count: tasks.length,
+      branches: tasks.length
+    });
+    const results = await mapWithConcurrencyLimit(tasks, input.limits.maxParallelBranches, async (task2) => {
+      try {
+        return await task2();
+      } catch (error2) {
+        if (isHandledBranchFailure(error2)) {
+          return null;
+        }
+        throw error2;
+      }
+    });
+    emit("runtime_parallel_completed", {
+      label: options?.label,
+      count: tasks.length,
+      branches: tasks.length
+    });
+    return results;
+  };
+  const pipeline2 = async (items, ...args) => {
+    const { stages, options } = normalizePipelineArgs(items, args);
+    if (items.length > input.limits.maxPipelineItems) {
+      throw new Error(`Runtime script exceeded maxPipelineItems (${input.limits.maxPipelineItems})`);
+    }
+    emit("runtime_pipeline_started", {
+      label: options?.label,
+      count: items.length,
+      items: items.length,
+      stages: stages.length
+    });
+    const results = await mapWithConcurrencyLimit(items, input.limits.maxParallelBranches, async (item, index) => {
+      try {
+        let current = item;
+        for (const stage of stages) {
+          current = await stage(current, item, index);
+        }
+        return current;
+      } catch (error2) {
+        if (isHandledBranchFailure(error2)) {
+          return null;
+        }
+        throw error2;
+      }
+    });
+    emit("runtime_pipeline_completed", {
+      label: options?.label,
+      count: items.length,
+      items: items.length,
+      stages: stages.length
+    });
+    return results;
+  };
+  const phase2 = (label) => {
+    emit("runtime_phase_started", { label });
+    return {
+      done(status = "ok") {
+        emit("runtime_phase_done", { label, status });
+      }
+    };
+  };
+  const log2 = (message) => {
+    const text = String(message);
+    logChars += text.length;
+    if (logChars > input.limits.maxLogChars) {
+      throw new Error(`Runtime script exceeded maxLogChars (${input.limits.maxLogChars})`);
+    }
+    emit("runtime_log", { message: text });
+  };
+  return {
+    agent: agent2,
+    parallel: parallel3,
+    pipeline: pipeline2,
+    phase: phase2,
+    log: log2
+  };
+}
+function normalizeParallelArgs(args) {
+  const [first, second, ...rest] = args;
+  if (Array.isArray(first)) {
+    if (!areFunctions(first)) {
+      throw new Error("Runtime script parallel() expects branch functions");
+    }
+    const options2 = normalizeOptions(second, rest, "parallel");
+    return { tasks: first, options: options2 };
+  }
+  const options = tryTakeTrailingOptions(args);
+  const taskArgs = options ? args.slice(0, -1) : args;
+  if (taskArgs.length === 0 || !areFunctions(taskArgs)) {
+    throw new Error("Runtime script parallel() expects branch functions");
+  }
+  return { tasks: taskArgs, options };
+}
+function normalizePipelineArgs(items, args) {
+  if (!Array.isArray(items)) {
+    throw new Error("Runtime script pipeline() expects an array of input items");
+  }
+  const [first, second, ...rest] = args;
+  if (Array.isArray(first)) {
+    if (!areFunctions(first)) {
+      throw new Error("Runtime script pipeline() expects stage functions");
+    }
+    const options2 = normalizeOptions(second, rest, "pipeline");
+    return { stages: first, options: options2 };
+  }
+  const options = tryTakeTrailingOptions(args);
+  const stageArgs = options ? args.slice(0, -1) : args;
+  if (stageArgs.length === 0 || !areFunctions(stageArgs)) {
+    throw new Error("Runtime script pipeline() expects stage functions");
+  }
+  return { stages: stageArgs, options };
+}
+function normalizeOptions(candidate, remaining, helperName) {
+  if (remaining.length > 0) {
+    throw new Error(`Runtime script ${helperName}() received too many arguments`);
+  }
+  if (candidate === void 0) {
+    return void 0;
+  }
+  if (!isRuntimeWorkflowOptions(candidate)) {
+    throw new Error(`Runtime script ${helperName}() options must be an object`);
+  }
+  return candidate;
+}
+function tryTakeTrailingOptions(args) {
+  const last = args.at(-1);
+  return isRuntimeWorkflowOptions(last) ? last : void 0;
+}
+function isRuntimeWorkflowOptions(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function areFunctions(values) {
+  return values.every((value) => typeof value === "function");
+}
+function isHandledBranchFailure(error2) {
+  return typeof error2 === "object" && error2 !== null && error2.status === "failed";
+}
+async function mapWithConcurrencyLimit(items, limit, mapper) {
+  if (limit < 1) {
+    throw new Error(`Runtime script maxParallelBranches must be at least 1 (received ${limit})`);
+  }
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+  const runWorker = async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  };
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
+// src/runtimeScript/validateScript.ts
+var deniedRuntimeScriptPatterns = [
+  { label: "require", pattern: /\brequire\s*\(/ },
+  { label: "import", pattern: /\bimport\s*(?:\(|{|[A-Za-z_*])/ },
+  { label: "process", pattern: /\bprocess\b/ },
+  { label: "globalThis", pattern: /\bglobalThis\b/ },
+  { label: "fetch", pattern: /\bfetch\s*\(/ },
+  { label: "fs", pattern: /\bfs\b/ },
+  { label: "child_process", pattern: /\bchild_process\b/ },
+  { label: "net", pattern: /\bnet\b/ },
+  { label: "http", pattern: /\bhttp\b/ },
+  { label: "https", pattern: /\bhttps\b/ },
+  { label: "os", pattern: /\bos\b/ },
+  { label: "vm", pattern: /\bvm\b/ },
+  { label: "eval", pattern: /\beval\s*\(/ },
+  { label: "Function", pattern: /\bFunction\s*\(/ },
+  { label: "constructor", pattern: /\bconstructor\b/ },
+  { label: "__proto__", pattern: /__proto__/ },
+  { label: "Date", pattern: /\bDate\b/ },
+  { label: "Math.random", pattern: /\bMath\s*\.\s*random\s*\(/ },
+  { label: "crypto", pattern: /\bcrypto\b/ },
+  { label: "performance", pattern: /\bperformance\b/ }
+];
+function validateRuntimeScript(source) {
+  const errors = deniedRuntimeScriptPatterns.flatMap(
+    ({ label, pattern }) => pattern.test(source) ? [`Runtime script cannot access ${label}`] : []
+  );
+  return {
+    ok: errors.length === 0,
+    errors
+  };
+}
+
+// src/runtimeScript/sandbox.ts
+async function runRuntimeScriptInVm(input) {
+  const validation = validateRuntimeScript(input.source);
+  if (!validation.ok) {
+    throw new Error(`Runtime script failed validation: ${validation.errors.join("; ")}`);
+  }
+  const clonedArgs = cloneRuntimeScriptArgs(input.args);
+  const api = createRuntimeScriptScheduler(input);
+  return await new Promise((resolve, reject) => {
+    const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(runtimeScriptWorkerSource)}`), {
+      workerData: {
+        source: input.source,
+        args: clonedArgs,
+        limits: input.limits,
+        contractId: input.contractId
+      }
+    });
+    let settled = false;
+    const timeout = setTimeout(() => {
+      settle(reject, new Error(`Runtime script timed out after ${input.limits.timeoutMs}ms`));
+      void worker.terminate();
+    }, input.limits.timeoutMs);
+    const settle = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      worker.removeAllListeners();
+      callback(value);
+    };
+    worker.on("message", (message) => {
+      void handleWorkerMessage(message);
+    });
+    worker.on("error", (error2) => {
+      settle(reject, error2);
+    });
+    worker.on("exit", (code) => {
+      if (!settled && code !== 0) {
+        settle(reject, new Error(`Runtime script worker exited with code ${code}`));
+      }
+    });
+    const emit = (type, data) => {
+      input.emit?.({
+        type,
+        runId: input.runId,
+        attemptId: input.attemptId,
+        workflowContextId: input.workflowContextId,
+        contractId: input.contractId,
+        timestamp: input.now(),
+        data
+      });
+    };
+    const handleWorkerMessage = async (message) => {
+      if (settled) {
+        return;
+      }
+      if (message.kind === "done") {
+        settle(resolve, message.value);
+        return;
+      }
+      if (message.kind === "error") {
+        settle(reject, deserializeWorkerError(message.error));
+        return;
+      }
+      if (message.kind === "event") {
+        emit(message.type, message.data);
+        return;
+      }
+      if (message.kind === "request" && message.api === "agent") {
+        try {
+          const output = await api.agent(message.prompt, message.options);
+          worker.postMessage({ kind: "response", id: message.id, ok: true, value: output });
+        } catch (error2) {
+          worker.postMessage({ kind: "response", id: message.id, ok: false, error: serializeWorkerError(error2) });
+        }
+      }
+    };
+  });
+}
+function cloneRuntimeScriptArgs(args) {
+  try {
+    return structuredClone(args);
+  } catch (error2) {
+    throw new Error(
+      `Runtime script args must be structured-cloneable JSON values: ${error2 instanceof Error ? error2.message : String(error2)}`
+    );
+  }
+}
+function serializeWorkerError(error2) {
+  if (error2 instanceof Error) {
+    const withRuntimeFields = error2;
+    return {
+      name: error2.name,
+      message: error2.message,
+      status: withRuntimeFields.status,
+      session: withRuntimeFields.session
+    };
+  }
+  return {
+    message: String(error2)
+  };
+}
+function deserializeWorkerError(error2) {
+  const deserialized = new Error(error2.message);
+  deserialized.name = error2.name ?? "RuntimeScriptWorkerError";
+  const withRuntimeFields = deserialized;
+  withRuntimeFields.status = error2.status;
+  withRuntimeFields.session = error2.session;
+  return deserialized;
+}
+var runtimeScriptWorkerSource = String.raw`
+import { parentPort, workerData } from "node:worker_threads";
+import vm from "node:vm";
+
+let nextRequestId = 1;
+let logChars = 0;
+const pendingRequests = new Map();
+
+parentPort.on("message", (message) => {
+  if (message.kind !== "response") {
+    return;
+  }
+  const pending = pendingRequests.get(message.id);
+  if (!pending) {
+    return;
+  }
+  pendingRequests.delete(message.id);
+  if (message.ok) {
+    pending.resolve(message.value);
+  } else {
+    const error = new Error(message.error?.message ?? "Runtime script parent request failed");
+    error.name = message.error?.name ?? "RuntimeScriptParentRequestError";
+    error.status = message.error?.status;
+    error.session = message.error?.session;
+    pending.reject(error);
+  }
+});
+
+function callParent(api, payload) {
+  const id = nextRequestId++;
+  return new Promise((resolve, reject) => {
+    pendingRequests.set(id, { resolve, reject });
+    parentPort.postMessage({ kind: "request", id, api, ...payload });
+  });
+}
+
+function emit(type, data) {
+  parentPort.postMessage({ kind: "event", type, data });
+}
+
+function finish(message) {
+  parentPort.postMessage(message);
+  parentPort.close();
+}
+
+function deepFreeze(value, seen = new WeakSet()) {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    deepFreeze(value[key], seen);
+  }
+  return Object.freeze(value);
+}
+
+async function agent(prompt, options) {
+  return await callParent("agent", { prompt, options });
+}
+
+function isWorkflowOptions(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function areFunctions(values) {
+  return values.every((value) => typeof value === "function");
+}
+
+function normalizeOptions(candidate, remaining, helperName) {
+  if (remaining.length > 0) {
+    throw new Error("Runtime script " + helperName + "() received too many arguments");
+  }
+  if (candidate === undefined) {
+    return undefined;
+  }
+  if (!isWorkflowOptions(candidate)) {
+    throw new Error("Runtime script " + helperName + "() options must be an object");
+  }
+  return candidate;
+}
+
+function tryTakeTrailingOptions(args) {
+  const last = args.at(-1);
+  return isWorkflowOptions(last) ? last : undefined;
+}
+
+function normalizeParallelArgs(args) {
+  const [first, second, ...rest] = args;
+  if (Array.isArray(first)) {
+    if (!areFunctions(first)) {
+      throw new Error("Runtime script parallel() expects branch functions");
+    }
+    return { tasks: first, options: normalizeOptions(second, rest, "parallel") };
+  }
+
+  const options = tryTakeTrailingOptions(args);
+  const tasks = options ? args.slice(0, -1) : args;
+  if (tasks.length === 0 || !areFunctions(tasks)) {
+    throw new Error("Runtime script parallel() expects branch functions");
+  }
+  return { tasks, options };
+}
+
+function normalizePipelineArgs(items, args) {
+  if (!Array.isArray(items)) {
+    throw new Error("Runtime script pipeline() expects an array of input items");
+  }
+
+  const [first, second, ...rest] = args;
+  if (Array.isArray(first)) {
+    if (!areFunctions(first)) {
+      throw new Error("Runtime script pipeline() expects stage functions");
+    }
+    return { stages: first, options: normalizeOptions(second, rest, "pipeline") };
+  }
+
+  const options = tryTakeTrailingOptions(args);
+  const stages = options ? args.slice(0, -1) : args;
+  if (stages.length === 0 || !areFunctions(stages)) {
+    throw new Error("Runtime script pipeline() expects stage functions");
+  }
+  return { stages, options };
+}
+
+function isHandledBranchFailure(error) {
+  return Boolean(error && typeof error === "object" && error.status === "failed");
+}
+
+async function mapWithConcurrencyLimit(items, limit, mapper) {
+  if (limit < 1) {
+    throw new Error(` + `\`Runtime script maxParallelBranches must be at least 1 (received \${limit})\`);
+  }
+
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+
+  const runWorker = async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
+async function parallel(...args) {
+  const { tasks, options } = normalizeParallelArgs(args);
+
+  emit("runtime_parallel_started", {
+    label: options?.label,
+    count: tasks.length,
+    branches: tasks.length
+  });
+  const results = await mapWithConcurrencyLimit(tasks, workerData.limits.maxParallelBranches, async (task) => {
+    try {
+      return await task();
+    } catch (error) {
+      if (isHandledBranchFailure(error)) {
+        return null;
+      }
+      throw error;
+    }
+  });
+  emit("runtime_parallel_completed", {
+    label: options?.label,
+    count: tasks.length,
+    branches: tasks.length
+  });
+  return results;
+}
+
+async function pipeline(items, ...args) {
+  const { stages, options } = normalizePipelineArgs(items, args);
+  if (items.length > workerData.limits.maxPipelineItems) {
+    throw new Error(\`Runtime script exceeded maxPipelineItems (\${workerData.limits.maxPipelineItems})\`);
+  }
+
+  emit("runtime_pipeline_started", {
+    label: options?.label,
+    count: items.length,
+    items: items.length,
+    stages: stages.length
+  });
+  const results = await mapWithConcurrencyLimit(items, workerData.limits.maxParallelBranches, async (item, index) => {
+    try {
+      let current = item;
+      for (const stage of stages) {
+        current = await stage(current, item, index);
+      }
+      return current;
+    } catch (error) {
+      if (isHandledBranchFailure(error)) {
+        return null;
+      }
+      throw error;
+    }
+  });
+  emit("runtime_pipeline_completed", {
+    label: options?.label,
+    count: items.length,
+    items: items.length,
+    stages: stages.length
+  });
+  return results;
+}
+
+function phase(label) {
+  emit("runtime_phase_started", { label });
+  return {
+    done(status = "ok") {
+      emit("runtime_phase_done", { label, status });
+    }
+  };
+}
+
+function log(message) {
+  const text = String(message);
+  logChars += text.length;
+  if (logChars > workerData.limits.maxLogChars) {
+    throw new Error(\`Runtime script exceeded maxLogChars (\${workerData.limits.maxLogChars})\`);
+  }
+  emit("runtime_log", { message: text });
+}
+
+(async () => {
+  try {
+    const context = vm.createContext(Object.freeze({
+      agent,
+      parallel,
+      pipeline,
+      phase,
+      log,
+      args: deepFreeze(workerData.args),
+      budget: Object.freeze({ limits: deepFreeze(workerData.limits) })
+    }));
+    const script = new vm.Script(\`"use strict"; (async () => {\\n\${workerData.source}\\n})()\`, {
+      filename: \`dittosloop-runtime-script:\${workerData.contractId}\`
+    });
+    const value = await script.runInContext(context);
+    finish({ kind: "done", value });
+  } catch (error) {
+    finish({
+      kind: "error",
+      error: {
+        name: error?.name,
+        message: error instanceof Error ? error.message : String(error),
+        status: error?.status,
+        session: error?.session
+      }
+    });
+  }
+})();
+`;
+
+// src/workflowGraph/compileGraph.ts
+import { createHash as createHash3 } from "node:crypto";
 var compilerVersion = 1;
 function compileExecutionGraph(input) {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(input.contract);
+  const body = requireStaticWorkflowBody2(input.contract);
   const nodes = [
     {
       nodeId: "root",
@@ -23579,7 +24557,7 @@ function compileExecutionGraph(input) {
   ];
   const edges = [];
   const topLevelNodeIds = [];
-  input.contract.body.steps.forEach((step, index) => {
+  body.steps.forEach((step, index) => {
     const node = appendStepNode({
       step,
       parentNodeId: "root",
@@ -23620,6 +24598,13 @@ function compileExecutionGraph(input) {
     nodes,
     edges
   };
+}
+function requireStaticWorkflowBody2(contract) {
+  const body = contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : void 0);
+  if (!body) {
+    throw new Error("Execution graph compilation requires body.steps");
+  }
+  return body;
 }
 function appendStepNode(input) {
   const nodeKind = graphNodeKindForStep(input.step);
@@ -23710,15 +24695,15 @@ function addPipelineEdges(edges, step, nodeIds) {
   }
 }
 function hashGraph(input) {
-  return createHash2("sha256").update(stableStringify(input)).digest("hex");
+  return createHash3("sha256").update(stableStringify2(input)).digest("hex");
 }
-function stableStringify(value) {
+function stableStringify2(value) {
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    return `[${value.map((item) => stableStringify2(item)).join(",")}]`;
   }
   if (value && typeof value === "object") {
     const record2 = value;
-    return `{${Object.keys(record2).filter((key) => record2[key] !== void 0).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record2[key])}`).join(",")}}`;
+    return `{${Object.keys(record2).filter((key) => record2[key] !== void 0).sort().map((key) => `${JSON.stringify(key)}:${stableStringify2(record2[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -23978,9 +24963,8 @@ var LoopService = class {
   previewBaseUrl;
   async createLoopContract(input) {
     const timestamp2 = this.now();
-    const resolvedInput = resolveScriptContractInput(input);
     const contract = compileContractWithVerificationInputKind(
-      normalizeFormalContractInput(resolvedInput, resolvedInput.id ?? this.nextId("loop")),
+      normalizeFormalContractInput(input, input.id ?? this.nextId("loop")),
       timestamp2
     );
     validateContract(contract);
@@ -24068,6 +25052,57 @@ var LoopService = class {
     });
     return update;
   }
+  async approveRuntimeScript(loopId, input) {
+    const timestamp2 = this.now();
+    let approvedContract;
+    const approvalQuestion = runtimeScriptApprovalQuestion(loopId);
+    const approvalResponse = `Approved by ${input.approvedBy} at ${timestamp2}.`;
+    await this.options.store.updateState((state) => {
+      const contract = requireFormalContract(state, loopId);
+      if (contract.workflow.kind !== "runtime_script") {
+        throw new Error(`Runtime script approval is only available for runtime_script workflows: ${loopId}`);
+      }
+      approvedContract = {
+        ...contract,
+        updatedAt: timestamp2,
+        workflow: {
+          ...contract.workflow,
+          approval: {
+            ...contract.workflow.approval,
+            required: true,
+            approvedAt: timestamp2,
+            approvedBy: input.approvedBy
+          }
+        }
+      };
+      const nonterminalRuntimeScriptRunIds = new Set(
+        state.workflowContexts.filter(
+          (context) => context.loopId === loopId && context.contractSnapshot?.workflow.kind === "runtime_script" && context.status !== "completed" && context.status !== "failed"
+        ).map((context) => context.runId)
+      );
+      return {
+        ...state,
+        formalContracts: state.formalContracts.map((candidate) => candidate.id === loopId ? approvedContract : candidate),
+        loops: state.loops.map((loop) => loop.id === loopId ? formalContractToLoop(approvedContract) : loop),
+        workflowContexts: state.workflowContexts.map(
+          (context) => context.loopId === loopId && context.contractSnapshot?.workflow.kind === "runtime_script" && context.status !== "completed" && context.status !== "failed" ? {
+            ...context,
+            contractSnapshot: approvedContract,
+            updatedAt: timestamp2
+          } : context
+        ),
+        humanRequests: state.humanRequests.map(
+          (request) => request.status === "open" && request.question === approvalQuestion && nonterminalRuntimeScriptRunIds.has(request.runId) ? {
+            ...request,
+            status: "resolved",
+            response: approvalResponse,
+            resolvedAt: timestamp2
+          } : request
+        )
+      };
+    });
+    return approvedContract;
+  }
   async deleteLoop(loopId) {
     let deletedLoop;
     await this.options.store.updateState((state) => {
@@ -24114,15 +25149,18 @@ var LoopService = class {
     if (existingContext?.status === "failed") {
       throw new Error(`Workflow context already failed: ${existingContext.id}`);
     }
-    if (existingContext && hasOpenWorkflowSessions(existingContext)) {
+    const activeContract = existingContext?.contractSnapshot ?? requireFormalContract(initialState, run.loopId);
+    if (existingContext && hasOpenWorkflowSessions(existingContext) && activeContract.workflow.kind !== "runtime_script") {
       return run;
     }
-    const activeContract = existingContext?.contractSnapshot ?? requireFormalContract(initialState, run.loopId);
     const workflowContext = await this.prepareWorkflowContext(run.id, attempt.id, activeContract);
     const contract = workflowContext.contractSnapshot ?? activeContract;
     const usesV2Verification = usesVerificationV2Runtime(contract.verification);
     const usesExternalV2Verification = usesExternalV2ValidatorWriteback(contract.verification);
     const runnerContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
+    if (contract.workflow.kind === "runtime_script") {
+      return this.executeRuntimeScriptWorkflowAttempt(run, attempt, workflowContext, contract, input);
+    }
     const attemptNumber = Math.max(1, attemptsForRun.findIndex((candidate) => candidate.id === attempt.id) + 1);
     if (usesExternalV2Verification && !hasRemainingExecutableSteps(contract, workflowContext) && !hasOpenWorkflowSessions(workflowContext) && pendingRubricAgentValidatorIds(contract.verification, workflowContext).length > 0) {
       await this.startPendingRubricAgentValidators(run, workflowContext, contract.verification);
@@ -24207,6 +25245,202 @@ var LoopService = class {
     });
     finalRun = await this.completeRun(runId, { status: "failed" });
     return finalRun;
+  }
+  async executeRuntimeScriptWorkflowAttempt(run, attempt, workflowContext, contract, input) {
+    if (contract.workflow.kind !== "runtime_script") {
+      throw new Error(`Expected runtime_script workflow contract: ${contract.id}`);
+    }
+    validateRuntimeScriptApprovalPolicy(contract);
+    if (runtimeScriptApprovalRequired(contract) && !runtimeScriptApprovalGranted(contract)) {
+      await this.markWorkflowContextWaitingForHuman(workflowContext.id);
+      await this.ensureRuntimeScriptApprovalRequest(run.id, contract.id, workflowContext.id, attempt.id);
+      return (await this.getRunDetail(run.id)).run;
+    }
+    let sequence = latestEngineEventSequence((await this.getRunDetail(run.id)).events);
+    const nextEngineEvent = (event) => ({
+      ...event,
+      runId: run.id,
+      createdAt: this.now(),
+      sequence: ++sequence
+    });
+    const engineEvents = [];
+    const emitRuntimeEvent = (event) => {
+      const engineEvent = runtimeScriptEventToEngineEvent(event);
+      if (engineEvent) {
+        engineEvents.push(nextEngineEvent(engineEvent));
+      }
+    };
+    const emitEngineEvent = (event) => {
+      engineEvents.push(nextEngineEvent(event));
+    };
+    await this.updateRuntimeScriptContextState(workflowContext.id, {
+      status: "running",
+      result: void 0,
+      error: void 0
+    });
+    emitEngineEvent({
+      type: "runtime_script_started",
+      contractId: contract.id
+    });
+    let runtimeResult;
+    try {
+      runtimeResult = await runRuntimeScriptInVm({
+        loopId: run.loopId,
+        runId: run.id,
+        attemptId: attempt.id,
+        workflowContextId: workflowContext.id,
+        contractId: contract.id,
+        source: contract.workflow.source,
+        args: contract.workflow.args ?? {},
+        limits: {
+          ...DEFAULT_RUNTIME_SCRIPT_LIMITS,
+          ...contract.workflow.limits ?? {}
+        },
+        journal: createLoopStoreRuntimeScriptJournal(this.options.store),
+        subagentBridge: this.createRuntimeScriptSubagentBridge(this.options.sessionBridge, run, attempt, workflowContext, contract),
+        emit: emitRuntimeEvent,
+        now: this.now
+      });
+    } catch (error2) {
+      const pendingSession = pendingCodexSessionFromError(error2);
+      if (pendingSession) {
+        await this.updateRuntimeScriptContextState(workflowContext.id, {
+          status: "waiting_for_session",
+          error: void 0
+        });
+        await this.recordEngineEvents(run.id, engineEvents);
+        await this.suspendWorkflowContextForSession(workflowContext.id, pendingSession);
+        return this.markRunWaitingForCodexSession(run.id, pendingSession);
+      }
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      emitEngineEvent({
+        type: "runtime_script_done",
+        contractId: contract.id,
+        status: "failed",
+        error: message
+      });
+      await this.updateRuntimeScriptContextState(workflowContext.id, {
+        status: "failed",
+        error: message
+      });
+      await this.recordEngineEvents(run.id, engineEvents);
+      await this.failWorkflowContext(workflowContext.id, message);
+      await this.completeAttempt(attempt.id, {
+        status: "failed",
+        summary: message
+      });
+      await this.completeRun(run.id, { status: "failed" });
+      throw error2;
+    }
+    emitEngineEvent({
+      type: "runtime_script_done",
+      contractId: contract.id,
+      status: "completed",
+      result: runtimeResult
+    });
+    await this.updateRuntimeScriptContextState(workflowContext.id, {
+      status: "completed",
+      result: runtimeResult,
+      error: void 0
+    });
+    const usesV2Verification = usesVerificationV2Runtime(contract.verification);
+    const runtimeScriptCompletionContext = runtimeScriptContextWithResult(
+      workflowContext,
+      contract,
+      runtimeResult,
+      this.now()
+    );
+    if (usesExternalV2ValidatorWriteback(contract.verification) && pendingRubricAgentValidatorIds(contract.verification, runtimeScriptCompletionContext).length > 0) {
+      await this.recordCompletedCodexSessions(run.id, engineEvents);
+      await this.recordEngineEvents(run.id, engineEvents);
+      await this.startPendingRubricAgentValidators(run, runtimeScriptCompletionContext, contract.verification);
+      return (await this.getRunDetail(run.id)).run;
+    }
+    const verificationContract = usesV2Verification ? contract : legacyCompatibleRunnerContract(contract);
+    emitEngineEvent({
+      type: "verification_started",
+      attemptId: attempt.id
+    });
+    const verification = await runContractVerification({
+      contract: verificationContract,
+      result: runtimeResult,
+      runId: run.id,
+      attemptId: attempt.id,
+      now: this.now,
+      verifier: input.verifier,
+      emit: emitEngineEvent
+    });
+    emitEngineEvent({
+      type: "verification_done",
+      attemptId: attempt.id,
+      decision: verification
+    });
+    const attemptNumber = Math.max(
+      1,
+      (await this.getRunDetail(run.id)).attempts.findIndex((candidate) => candidate.id === attempt.id) + 1
+    );
+    const shouldRepairRun = shouldRepair(verification, contract.repairPolicy, attemptNumber);
+    const finalStatus = verification.status === "passed" ? "completed" : verification.status === "needs_human" ? "waiting_for_human" : "failed";
+    if (shouldRepairRun) {
+      emitEngineEvent({
+        type: "repair_started",
+        attemptId: attempt.id,
+        reason: verification.repairInstructions ?? verification.summary
+      });
+    } else {
+      if (verification.status === "needs_human") {
+        emitEngineEvent({
+          type: "human_request",
+          question: verification.humanQuestion ?? verification.summary
+        });
+      }
+      emitEngineEvent({
+        type: "run_done",
+        status: finalStatus,
+        summary: verification.summary
+      });
+    }
+    await this.recordCompletedCodexSessions(run.id, engineEvents);
+    await this.recordEngineEvents(run.id, engineEvents);
+    if (usesV2Verification && isVerificationResultV22(verification)) {
+      return this.finalizeV2Verification(run.id, workflowContext.id, verification);
+    }
+    await this.recordVerification(run.id, {
+      attemptId: attempt.id,
+      status: verificationDecisionToResultStatus(verification.status),
+      summary: verification.summary,
+      checks: verificationDecisionChecksToResults(verificationContract, verification),
+      repair: shouldRepairRun
+    });
+    if (shouldRepairRun) {
+      await this.markWorkflowContextRepairing(workflowContext.id, verification.repairInstructions ?? verification.summary);
+      return (await this.getRunDetail(run.id)).run;
+    }
+    if (verification.status === "passed") {
+      await this.completeWorkflowContext(workflowContext.id);
+      await this.completeAttempt(attempt.id, {
+        status: "completed",
+        summary: verification.summary
+      });
+      return this.completeRun(run.id, { status: "completed" });
+    }
+    if (verification.status === "needs_human") {
+      await this.completeWorkflowContext(workflowContext.id);
+      await this.completeAttempt(attempt.id, {
+        status: "completed",
+        summary: verification.summary
+      });
+      await this.recordHumanRequest(run.id, {
+        question: verification.humanQuestion ?? verification.summary
+      });
+      return (await this.getRunDetail(run.id)).run;
+    }
+    await this.failWorkflowContext(workflowContext.id, verification.summary);
+    await this.completeAttempt(attempt.id, {
+      status: "failed",
+      summary: verification.summary
+    });
+    return this.completeRun(run.id, { status: "failed" });
   }
   async executeGraphWorkflowAttempt(run, attempt, workflowContext, contract, input) {
     let sequence = latestEngineEventSequence((await this.getRunDetail(run.id)).events);
@@ -24566,6 +25800,73 @@ var LoopService = class {
     });
     return this.completeRun(run.id, { status: "failed" });
   }
+  createRuntimeScriptSubagentBridge(bridge, run, attempt, workflowContext, contract) {
+    if (contract.workflow.kind !== "runtime_script") {
+      throw new Error(`Expected runtime_script workflow contract: ${contract.id}`);
+    }
+    const runtimeWorkflow = contract.workflow;
+    return {
+      runAgent: async (input) => {
+        if (!bridge) {
+          throw new Error("No workflow executor or Codex session bridge is configured.");
+        }
+        return this.runRuntimeScriptCodexSessionStep(
+          bridge,
+          run,
+          {
+            prompt: input.prompt,
+            label: input.label ?? input.options?.label,
+            stepId: runtimeScriptStepId(input.callSite),
+            phaseId: input.options?.phaseId,
+            subagent: input.options?.subagent ?? effectiveProfileToSubagent(input.options?.agentProfile),
+            agentProfile: input.options?.agentProfile,
+            attemptId: attempt.id,
+            workflowContextId: workflowContext.id,
+            workflowRuntime: "dittosloop-local-workflow",
+            workflowContractId: contract.id,
+            runtimeScript: {
+              key: input.idempotencyKey,
+              callSite: input.callSite,
+              scriptHash: hashRuntimeScriptSource(runtimeWorkflow.source),
+              argsHash: hashRuntimeScriptArgs(runtimeWorkflow.args ?? {}),
+              promptHash: hashRuntimeScriptPrompt(input.prompt),
+              optionsHash: hashRuntimeScriptOptions(input.options)
+            }
+          }
+        );
+      }
+    };
+  }
+  async updateRuntimeScriptContextState(workflowContextId, patch) {
+    const timestamp2 = this.now();
+    let updatedContext;
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      const contract = context.contractSnapshot;
+      if (!contract || contract.workflow.kind !== "runtime_script") {
+        updatedContext = context;
+        return state;
+      }
+      const runtimeScript = {
+        ...ensureRuntimeScriptContextStateValue(context, contract, timestamp2),
+        ...patch,
+        updatedAt: timestamp2
+      };
+      updatedContext = {
+        ...context,
+        vars: {
+          ...context.vars,
+          runtimeScript
+        },
+        updatedAt: timestamp2
+      };
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, updatedContext)
+      };
+    });
+    return updatedContext;
+  }
   createWorkflowContextExecutor(run, attemptId, workflowContextId) {
     const bridge = this.options.sessionBridge;
     if (!bridge) {
@@ -24604,7 +25905,8 @@ var LoopService = class {
       return request.prompt;
     }
     const contract = context.contractSnapshot;
-    const phase2 = contract ? findPipelinePhase(contract.body.steps, request.phaseId) : void 0;
+    const contractBody = contract ? staticWorkflowBody(contract) : void 0;
+    const phase2 = contractBody ? findPipelinePhase(contractBody.steps, request.phaseId) : void 0;
     if (!phase2) {
       return request.prompt;
     }
@@ -24621,6 +25923,139 @@ var LoopService = class {
 [pipeline] Prior step (${prevStepId}) output:
 ${priorOutput}`;
   }
+  async runRuntimeScriptCodexSessionStep(bridge, run, request) {
+    if (!request.workflowContextId || !request.attemptId) {
+      throw new Error("Runtime script Codex sessions require workflow context and attempt ids");
+    }
+    if (!request.runtimeScript?.key) {
+      throw new Error("Runtime script Codex sessions require an idempotency key");
+    }
+    const existingTaskRun = await this.findWorkflowTaskRunByIdempotencyKey(
+      request.workflowContextId,
+      request.runtimeScript.key
+    );
+    if (existingTaskRun?.status === "completed") {
+      return {
+        status: "completed",
+        output: existingTaskRun.result ?? "",
+        session: this.codexSessionRefFromWorkflowTask(run, existingTaskRun, request, "completed")
+      };
+    }
+    if (existingTaskRun?.status === "failed") {
+      return {
+        status: "failed",
+        error: existingTaskRun.error ?? `Codex session failed: ${existingTaskRun.sessionId ?? existingTaskRun.id}`,
+        session: this.codexSessionRefFromWorkflowTask(run, existingTaskRun, request, "failed")
+      };
+    }
+    if (existingTaskRun) {
+      if (!existingTaskRun.sessionId) {
+        throw new Error(`Runtime script Codex task has no session id: ${existingTaskRun.id}`);
+      }
+      const session2 = this.codexSessionRefFromWorkflowTask(run, existingTaskRun, request, "started");
+      const result2 = await bridge.readResult(existingTaskRun.sessionId);
+      return this.resolveRuntimeScriptCodexSessionResult(request.workflowContextId, existingTaskRun.id, session2, result2);
+    }
+    const taskRunId = await this.markWorkflowTaskRunning(request.workflowContextId, {
+      attemptId: request.attemptId,
+      runId: run.id,
+      stepId: request.stepId,
+      phaseId: request.phaseId,
+      label: request.label,
+      prompt: request.prompt,
+      subagent: request.subagent,
+      agentProfile: request.agentProfile,
+      idempotencyKey: request.runtimeScript.key,
+      runtimeScript: request.runtimeScript,
+      profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, request.stepId, request.agentProfile)
+    });
+    const createdSession = await bridge.createSession({
+      runId: run.id,
+      attemptId: request.attemptId,
+      workflowContextId: request.workflowContextId,
+      stepId: request.stepId,
+      phaseId: request.phaseId,
+      title: request.label ?? request.stepId ?? "Codex workflow step",
+      prompt: request.prompt,
+      subagent: request.subagent,
+      agentProfile: request.agentProfile,
+      workflowRuntime: request.workflowRuntime,
+      workflowContractId: request.workflowContractId,
+      workflowPlan: request.workflowPlan,
+      projectId: run.codexProjectId,
+      projectLabel: run.projectLabel,
+      projectPath: run.projectPath
+    });
+    const session = {
+      ...createdSession,
+      subagent: createdSession.subagent ?? request.subagent,
+      agentProfile: createdSession.agentProfile ?? request.agentProfile
+    };
+    await this.attachWorkflowTaskSession(request.workflowContextId, taskRunId, session);
+    const result = await bridge.readResult(session.sessionId);
+    return this.resolveRuntimeScriptCodexSessionResult(request.workflowContextId, taskRunId, session, result);
+  }
+  async findWorkflowTaskRunByIdempotencyKey(workflowContextId, idempotencyKey) {
+    const state = await this.options.store.readState();
+    const context = findWorkflowContextById(state, workflowContextId);
+    return context?.taskRuns.find((taskRun) => taskRun.idempotencyKey === idempotencyKey);
+  }
+  codexSessionRefFromWorkflowTask(run, taskRun, request, status) {
+    if (!taskRun.sessionId) {
+      return void 0;
+    }
+    return {
+      sessionId: taskRun.sessionId,
+      runId: taskRun.runId,
+      attemptId: taskRun.attemptId,
+      workflowContextId: request.workflowContextId,
+      stepId: taskRun.stepId,
+      phaseId: taskRun.phaseId,
+      title: taskRun.label ?? request.label ?? taskRun.stepId,
+      status,
+      createdAt: taskRun.createdAt,
+      prompt: taskRun.prompt ?? request.prompt,
+      subagent: taskRun.subagent ?? request.subagent,
+      agentProfile: taskRun.agentProfile ?? request.agentProfile,
+      workflowRuntime: request.workflowRuntime,
+      workflowContractId: request.workflowContractId,
+      workflowPlan: request.workflowPlan,
+      projectId: run.codexProjectId,
+      projectLabel: run.projectLabel,
+      projectPath: run.projectPath
+    };
+  }
+  async resolveRuntimeScriptCodexSessionResult(workflowContextId, taskRunId, session, result) {
+    if (!session) {
+      throw new Error(`Runtime script Codex task has no session: ${taskRunId}`);
+    }
+    if (!result) {
+      await this.suspendWorkflowTaskForSession(workflowContextId, taskRunId, session);
+      throw new CodexSessionPendingError(session);
+    }
+    const sessionWithResult = {
+      ...session,
+      status: result.status,
+      threadId: result.threadId,
+      threadTitle: result.threadTitle,
+      threadUrl: result.threadUrl
+    };
+    if (result.status === "failed") {
+      const message = result.text || `Codex session failed: ${session.sessionId}`;
+      await this.failWorkflowTask(workflowContextId, taskRunId, message);
+      return {
+        status: "failed",
+        error: message,
+        session: sessionWithResult
+      };
+    }
+    await this.completeWorkflowTask(workflowContextId, taskRunId, result.text);
+    return {
+      status: "completed",
+      output: result.text,
+      session: sessionWithResult
+    };
+  }
   async runCodexSessionStep(bridge, run, request, workflowContext) {
     const taskRunId = workflowContext ? await this.markWorkflowTaskRunning(workflowContext.workflowContextId, {
       attemptId: workflowContext.attemptId,
@@ -24631,6 +26066,7 @@ ${priorOutput}`;
       prompt: request.prompt,
       subagent: request.subagent,
       agentProfile: request.agentProfile,
+      runtimeScript: request.runtimeScript,
       profilePreflight: profilePreflightForStep(run.codexSession?.profilePreflight, request.stepId, request.agentProfile)
     }) : void 0;
     const createdSession = await bridge.createSession({
@@ -24789,7 +26225,7 @@ ${priorOutput}`;
       const runId = this.nextId("run");
       const attemptId = this.nextId("attempt");
       const workflowContextId = this.nextId("workflow");
-      const graphSnapshotId = launchContract ? this.nextId("graph") : void 0;
+      const graphSnapshotId = launchContract && staticWorkflowBody(launchContract) ? this.nextId("graph") : void 0;
       const memoryWindow = loopMemoryWindow(state, loopId);
       const prompt = buildCodexSessionPrompt(loop, goal, launchContract, {
         runId,
@@ -25040,14 +26476,39 @@ ${priorOutput}`;
       );
       const isWorkflowTaskResult = Boolean(targetContext && hasWorkflowTaskLocator(resultInput));
       const targetContract = targetContext ? targetContext.contractSnapshot ?? state.formalContracts.find((candidate) => candidate.id === (targetContext.contractId ?? run.loopId)) : void 0;
+      const runtimeScriptJournalInput = runtimeScriptJournalInputForSessionResult({
+        run,
+        context: targetContext,
+        contract: targetContract,
+        taskRun: targetTaskRun,
+        input: resultInput
+      });
+      const withRuntimeScriptJournal = (nextState2) => {
+        if (!runtimeScriptJournalInput) {
+          return nextState2;
+        }
+        return {
+          ...nextState2,
+          runtimeScriptJournals: upsertRuntimeScriptJournalRecord(
+            nextState2.runtimeScriptJournals,
+            runtimeScriptJournalInput,
+            timestamp2,
+            () => this.nextId("journal")
+          )
+        };
+      };
       if (resultInput.status === "passed" && targetContext && targetContract) {
         const validationStepId = resultInput.stepId ?? targetTaskRun?.stepId;
-        const outputSchema = validationStepId ? findStepOutputSchema(targetContract.body.steps, validationStepId) : void 0;
+        const targetBody = staticWorkflowBody(targetContract);
+        const outputSchema = validationStepId && targetBody ? findStepOutputSchema(targetBody.steps, validationStepId) : void 0;
         if (outputSchema && resultInput.result !== void 0) {
           validateOutputAgainstSchema(resultInput.result, outputSchema);
         }
       }
-      const workflowContextAfterTaskResult = targetContext ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp2, { finalize: false }) : void 0;
+      const workflowContextAfterTaskResult = targetContext ? completeWorkflowContextFromSessionResult(targetContext, resultInput, timestamp2, {
+        finalize: false,
+        keepRuntimeScriptActive: targetContract?.workflow.kind === "runtime_script" && isWorkflowTaskResult && resultInput.status !== "needs_human"
+      }) : void 0;
       const graphTaskNodeTransition = workflowTaskNodeTransition({
         before: targetContext,
         after: workflowContextAfterTaskResult,
@@ -25085,9 +26546,15 @@ ${priorOutput}`;
       const shouldWaitForPendingWorkflowSessions = Boolean(
         resultInput.status === "passed" && isWorkflowTaskResult && hasRemainingWorkflowSteps && hasPendingWorkflowSessions
       );
+      const shouldResumeRuntimeScriptWorkflow = Boolean(
+        isWorkflowTaskResult && targetContract?.workflow.kind === "runtime_script" && resultInput.status !== "needs_human" && workflowContextAfterTaskResult && !hasPendingWorkflowSessions
+      );
+      const shouldKeepRuntimeScriptWaiting = Boolean(
+        isWorkflowTaskResult && targetContract?.workflow.kind === "runtime_script" && resultInput.status !== "needs_human" && workflowContextAfterTaskResult && hasPendingWorkflowSessions
+      );
       const codexSession = {
         ...run.codexSession,
-        status: shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions ? run.codexSession.status === "failed" || run.codexSession.status === "unavailable" ? run.codexSession.status : "started" : resultInput.status === "failed" ? "failed" : resultInput.status === "passed" ? completedCodexSessionStatus(run.codexSession) : run.codexSession.status === "requested" ? "started" : run.codexSession.status,
+        status: shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions || shouldResumeRuntimeScriptWorkflow ? run.codexSession.status === "failed" || run.codexSession.status === "unavailable" ? run.codexSession.status : "started" : resultInput.status === "failed" ? "failed" : resultInput.status === "passed" ? completedCodexSessionStatus(run.codexSession) : run.codexSession.status === "requested" ? "started" : run.codexSession.status,
         subagents: updateCodexSessionSubagentsForResult(
           run.codexSession.subagents,
           resultInput,
@@ -25095,7 +26562,7 @@ ${priorOutput}`;
           isTargeted
         )
       };
-      if ((shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions) && workflowContextAfterTaskResult) {
+      if ((shouldContinueThisWorkflow || shouldWaitForPendingWorkflowSessions || shouldResumeRuntimeScriptWorkflow || shouldKeepRuntimeScriptWaiting) && workflowContextAfterTaskResult) {
         const workflowProgressEvents = shouldWaitForPendingWorkflowSessions && shouldSynthesizeWorkflowEngineEvents ? workflowTaskResultEngineEvents({
           events: state.events,
           run,
@@ -25112,7 +26579,7 @@ ${priorOutput}`;
           updatedAt: timestamp2,
           completedAt: void 0
         };
-        return {
+        return withRuntimeScriptJournal({
           ...state,
           runs: state.runs.map((candidate) => candidate.id === runId ? updatedRun : candidate),
           attempts: targetAttempt ? state.attempts.map(
@@ -25142,7 +26609,7 @@ ${priorOutput}`;
               this.nextId("event"),
               runId,
               "note",
-              shouldContinueThisWorkflow ? "Codex task result recorded; continuing workflow" : "Codex task result recorded; waiting for pending workflow sessions",
+              shouldContinueThisWorkflow ? "Codex task result recorded; continuing workflow" : shouldResumeRuntimeScriptWorkflow ? "Codex task result recorded; runtime script is ready to resume" : shouldKeepRuntimeScriptWaiting ? "Codex task result recorded; waiting for pending runtime script sessions" : "Codex task result recorded; waiting for pending workflow sessions",
               timestamp2,
               {
                 attemptId,
@@ -25156,7 +26623,7 @@ ${priorOutput}`;
               }
             )
           ]
-        };
+        });
       }
       if (targetContract && usesVerificationV2Runtime(targetContract.verification) && resultInput.status === "passed" && isWorkflowTaskResult && workflowContextAfterTaskResult && !hasRemainingWorkflowSteps && !hasPendingWorkflowSessions) {
         shouldContinueWorkflow = true;
@@ -25171,7 +26638,7 @@ ${priorOutput}`;
           updatedAt: timestamp2,
           completedAt: void 0
         };
-        return {
+        return withRuntimeScriptJournal({
           ...state,
           runs: state.runs.map((candidate) => candidate.id === runId ? updatedRun : candidate),
           attempts: targetAttempt ? state.attempts.map(
@@ -25210,7 +26677,7 @@ ${priorOutput}`;
               }
             )
           ]
-        };
+        });
       }
       const verification = {
         id: this.nextId("verification"),
@@ -25339,9 +26806,9 @@ ${priorOutput}`;
         terminalRunStateOverridesForPausedReason(state, run.loopId, resultInput.pausedReason)
       ) : nextState;
       if (runStatus !== "failed") {
-        return terminalState;
+        return withRuntimeScriptJournal(terminalState);
       }
-      return resultInput.pausedReason ? applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp2) : applyFailureStopPolicy(terminalState, run.loopId, timestamp2);
+      return resultInput.pausedReason ? withRuntimeScriptJournal(applyImmediateStopPolicy(terminalState, run.loopId, resultInput.pausedReason, timestamp2)) : withRuntimeScriptJournal(applyFailureStopPolicy(terminalState, run.loopId, timestamp2));
     });
     if (shouldContinueWorkflow && continuationAttemptId) {
       return this.executeWorkflowAttempt(runId, { attemptId: continuationAttemptId });
@@ -25413,15 +26880,13 @@ ${priorOutput}`;
     let policy;
     let duplicateResultId;
     let loopId;
+    let codexSessionUpdate;
     await this.options.store.updateState((state) => {
       const run = requireRun(state, runId);
       loopId = run.loopId;
       const context = findWorkflowContextForValidatorResult(state, runId, input);
       if (input.attemptId && context.attemptId !== input.attemptId) {
         throw new Error(`Workflow context does not belong to attempt: ${context.id}`);
-      }
-      if (input.sessionId && context.taskRuns.some((taskRun) => taskRun.sessionId === input.sessionId)) {
-        throw new Error("Validator result session cannot be a workflow task session");
       }
       const attempt = requireAttempt(state, context.attemptId);
       if (attempt.runId !== runId) {
@@ -25438,10 +26903,29 @@ ${priorOutput}`;
       if (!validator) {
         throw new Error(`Validator not found: ${input.validatorId}`);
       }
+      if (validator.type !== "rubric_agent") {
+        throw new Error(`Validator does not accept external writeback: ${input.validatorId}`);
+      }
       if (validator.type !== input.result.type) {
         throw new Error(`Validator result type does not match validator: ${input.validatorId}`);
       }
       const verification = context.verification ?? createWorkflowVerificationState(timestamp2);
+      const launchedVerifierTaskRun = context.taskRuns.find(
+        (taskRun) => isVerificationTaskStepId(taskRun.stepId, input.validatorId)
+      );
+      const launchedVerifierSessionId = launchedVerifierTaskRun?.sessionId;
+      const requiresVerifierSessionIdentity = Boolean(launchedVerifierSessionId);
+      if (requiresVerifierSessionIdentity && !input.sessionId) {
+        throw new Error("Validator result sessionId is required for verifier session writeback");
+      }
+      if (input.sessionId && !validator.allowSelfReview && context.taskRuns.some(
+        (taskRun) => taskRun.sessionId === input.sessionId && !isVerificationTaskStepId(taskRun.stepId, input.validatorId)
+      )) {
+        throw new Error("Validator result session cannot be a workflow task session");
+      }
+      if (input.sessionId && launchedVerifierSessionId && launchedVerifierSessionId !== input.sessionId) {
+        throw new Error("Validator result session must match the launched verifier session");
+      }
       if (verification.idempotencyKeys.includes(idempotencyKey)) {
         duplicateResultId = verification.resultId;
         contextAfterWrite = context;
@@ -25459,8 +26943,16 @@ ${priorOutput}`;
         normalizeRecordedRubricAgentInput(input.result)
       );
       const validatorResults = [...verification.validatorResults, validatorResult];
+      const verificationTaskRun = input.sessionId ? context.taskRuns.find(
+        (taskRun) => taskRun.sessionId === input.sessionId && isVerificationTaskStepId(taskRun.stepId, input.validatorId)
+      ) : void 0;
       const pendingValidatorIds = pendingRubricAgentValidatorIds(contract.verification, {
-        ...context,
+        ...completeWorkflowContextVerificationTask(
+          context,
+          verificationTaskRun,
+          input.sessionId,
+          timestamp2
+        ),
         verification: {
           ...verification,
           validatorResults
@@ -25475,13 +26967,41 @@ ${priorOutput}`;
         updatedAt: timestamp2
       };
       contextAfterWrite = {
-        ...context,
+        ...completeWorkflowContextVerificationTask(
+          context,
+          verificationTaskRun,
+          input.sessionId,
+          timestamp2
+        ),
         verification: nextVerification,
         updatedAt: timestamp2
       };
       policy = contract.verification;
+      codexSessionUpdate = input.sessionId ? {
+        input: {
+          status: "passed",
+          summary: validatorResult.summary ?? `Validator result recorded: ${input.validatorId}`,
+          sessionId: input.sessionId,
+          stepId: verificationValidatorStepId(input.validatorId)
+        },
+        status: "completed",
+        isTargeted: true
+      } : void 0;
       return {
         ...state,
+        runs: codexSessionUpdate ? updateRun(state.runs, runId, {
+          ...run,
+          codexSession: run.codexSession ? {
+            ...run.codexSession,
+            subagents: updateCodexSessionSubagentsForResult(
+              run.codexSession.subagents,
+              codexSessionUpdate.input,
+              codexSessionUpdate.status,
+              codexSessionUpdate.isTargeted
+            )
+          } : run.codexSession,
+          updatedAt: timestamp2
+        }) : state.runs,
         workflowContexts: updateWorkflowContext(state.workflowContexts, context.id, contextAfterWrite),
         events: [
           ...state.events,
@@ -25533,13 +27053,20 @@ ${priorOutput}`;
         sequence: ++sequence
       });
     };
+    for (const validatorResult of contextAfterWrite.verification.validatorResults) {
+      emitRuntimeEvent(toEngineVerificationEvent({
+        type: "validator_done",
+        attemptId: contextAfterWrite.attemptId,
+        result: validatorResult
+      }, contextAfterWrite.attemptId));
+    }
     const result = await runVerificationV2({
       id: this.nextId("verification"),
       runId,
       attemptId: contextAfterWrite.attemptId,
       createdAt: timestamp2,
       policy,
-      workflowResult: completedWorkflowStepOutputs(contextAfterWrite),
+      workflowResult: completedWorkflowVerificationInput(contextAfterWrite),
       projectPath: contextAfterWrite.contractSnapshot?.projectBinding?.projectPath,
       contractWorkspacePath: await this.syncLoopWorkspace(loopId),
       priorValidatorResults: contextAfterWrite.verification.validatorResults,
@@ -25588,6 +27115,11 @@ ${priorOutput}`;
     const request = {
       id: this.nextId("human"),
       runId,
+      attemptId: input.attemptId,
+      workflowContextId: input.workflowContextId,
+      taskRunId: input.taskRunId,
+      sessionId: input.sessionId,
+      stepId: input.stepId,
       question: input.question,
       status: "open",
       createdAt: timestamp2
@@ -25833,7 +27365,7 @@ ${priorOutput}`;
     if (!input.contract && !input.patch) {
       throw new Error("Workflow revision requires a patch or contract");
     }
-    const revisionContractInput = input.contract ? resolveScriptContractInput({ ...input.contract, id: loopId }) : resolveScriptContractInput(applyContractPatch(baseContract, input.patch ?? {}));
+    const revisionContractInput = input.contract ? { ...input.contract, id: loopId } : applyContractPatch(baseContract, input.patch ?? {});
     const normalized = normalizeFormalContractInput(revisionContractInput, loopId);
     const contract = compileContractWithVerificationInputKind(
       {
@@ -25953,7 +27485,9 @@ ${priorOutput}`;
     return rejectedRevision;
   }
   async recordCompletedCodexSessions(runId, engineEvents) {
-    const sessions = engineEvents.filter((event) => event.type === "agent_done").map((event) => event.session).filter(isCompletedCodexSession);
+    const sessions = engineEvents.filter(
+      (event) => event.type === "agent_done" || event.type === "agent:done"
+    ).map((event) => event.session).filter(isCompletedCodexSession);
     if (sessions.length === 0) {
       return (await this.getRunDetail(runId)).run;
     }
@@ -26139,17 +27673,18 @@ ${priorOutput}`;
   }
   async startPendingRubricAgentValidators(run, context, policy) {
     const timestamp2 = this.now();
-    const pendingValidatorIds = pendingRubricAgentValidatorIds(policy, context);
+    const pendingValidators = pendingRubricAgentValidators(policy, context);
+    const pendingValidatorIds = pendingValidators.map((validator) => validator.id);
     if (pendingValidatorIds.length === 0) {
       return;
     }
-    await this.options.store.updateState((state) => {
-      requireRun(state, run.id);
-      const currentContext = requireWorkflowContext(state, context.id);
+    await this.options.store.updateState((state2) => {
+      requireRun(state2, run.id);
+      const currentContext = requireWorkflowContext(state2, context.id);
       const verification = currentContext.verification ?? createWorkflowVerificationState(timestamp2);
       return {
-        ...state,
-        workflowContexts: updateWorkflowContext(state.workflowContexts, currentContext.id, {
+        ...state2,
+        workflowContexts: updateWorkflowContext(state2.workflowContexts, currentContext.id, {
           ...currentContext,
           verification: {
             ...verification,
@@ -26161,7 +27696,7 @@ ${priorOutput}`;
           completedAt: void 0
         }),
         events: [
-          ...state.events,
+          ...state2.events,
           ...pendingValidatorIds.map(
             (validatorId) => lifecycleEvent(this.nextId("event"), run.id, "note", `Waiting for validator result: ${validatorId}`, timestamp2, {
               attemptId: context.attemptId,
@@ -26172,6 +27707,56 @@ ${priorOutput}`;
         ]
       };
     });
+    const bridge = this.options.sessionBridge;
+    if (!bridge) {
+      return;
+    }
+    const state = await this.options.store.readState();
+    const contract = context.contractSnapshot ?? requireFormalContract(state, run.loopId);
+    const workflowLaunch = buildWorkflowLaunch(contract);
+    for (const validator of pendingValidators) {
+      if (!validator.subagent) {
+        continue;
+      }
+      const stepId = verificationValidatorStepId(validator.id);
+      const idempotencyKey = verificationValidatorIdempotencyKey(run.id, context.attemptId, validator.id);
+      const existingTaskRun = await this.findWorkflowTaskRunByIdempotencyKey(context.id, idempotencyKey);
+      if (existingTaskRun?.sessionId) {
+        continue;
+      }
+      const prompt = verificationValidatorPrompt(policy, context, validator);
+      const taskRunId = existingTaskRun?.id ?? await this.markWorkflowTaskRunning(context.id, {
+        attemptId: context.attemptId,
+        runId: run.id,
+        stepId,
+        label: validator.label,
+        prompt,
+        subagent: validator.subagent,
+        idempotencyKey
+      });
+      const createdSession = await bridge.createSession({
+        runId: run.id,
+        attemptId: context.attemptId,
+        workflowContextId: context.id,
+        stepId,
+        title: validator.label,
+        prompt,
+        subagent: validator.subagent,
+        workflowRuntime: workflowLaunch.workflowRuntime,
+        workflowContractId: workflowLaunch.workflowContractId,
+        workflowPlan: workflowLaunch.workflowPlan,
+        projectId: run.codexProjectId,
+        projectLabel: run.projectLabel,
+        projectPath: run.projectPath
+      });
+      const session = {
+        ...createdSession,
+        subagent: createdSession.subagent ?? validator.subagent
+      };
+      await this.attachWorkflowTaskSession(context.id, taskRunId, session);
+      await this.suspendWorkflowTaskForSession(context.id, taskRunId, session);
+      await this.markRunWaitingForCodexSession(run.id, session);
+    }
   }
   async markWorkflowVerificationCompleted(workflowContextId, result) {
     const timestamp2 = this.now();
@@ -26205,12 +27790,12 @@ ${priorOutput}`;
       const existingContext = state.workflowContexts.find(
         (context) => context.runId === runId && context.attemptId === attemptId
       );
-      const existingContextWithGraph = existingContext ? ensureWorkflowContextGraphState(existingContext, contract, {
+      const existingPreparedContext = existingContext ? ensureWorkflowContextGraphState(existingContext, contract, {
         graphSnapshotId: existingContext.executionGraphSnapshot ? existingContext.executionGraphSnapshot.snapshotId : this.nextId("graph"),
         timestamp: timestamp2
       }) : void 0;
       preparedContext = existingContext ? {
-        ...existingContextWithGraph,
+        ...existingPreparedContext,
         status: "running",
         cursor: {
           ...existingContext.cursor,
@@ -26253,6 +27838,8 @@ ${priorOutput}`;
         prompt: input.prompt,
         subagent: input.subagent,
         agentProfile: input.agentProfile,
+        idempotencyKey: input.idempotencyKey ?? input.runtimeScript?.key,
+        runtimeScript: input.runtimeScript,
         profilePreflight: input.profilePreflight,
         status: "running",
         createdAt: timestamp2,
@@ -26421,6 +28008,25 @@ ${priorOutput}`;
       };
     });
   }
+  async markWorkflowContextWaitingForHuman(workflowContextId) {
+    const timestamp2 = this.now();
+    await this.options.store.updateState((state) => {
+      const context = requireWorkflowContext(state, workflowContextId);
+      return {
+        ...state,
+        workflowContexts: updateWorkflowContext(state.workflowContexts, workflowContextId, {
+          ...context,
+          status: "suspended",
+          cursor: {
+            ...context.cursor,
+            state: "waiting_for_human"
+          },
+          updatedAt: timestamp2,
+          completedAt: void 0
+        })
+      };
+    });
+  }
   async completeWorkflowTask(workflowContextId, taskRunId, result) {
     const timestamp2 = this.now();
     await this.options.store.updateState((state) => {
@@ -26580,9 +28186,22 @@ ${priorOutput}`;
       };
     });
   }
+  async ensureRuntimeScriptApprovalRequest(runId, contractId, workflowContextId, attemptId) {
+    const question = runtimeScriptApprovalQuestion(contractId);
+    const state = await this.options.store.readState();
+    const existing = state.humanRequests.find((request) => request.runId === runId && request.status === "open" && request.question === question);
+    if (existing) {
+      return;
+    }
+    await this.recordHumanRequest(runId, {
+      question,
+      attemptId,
+      workflowContextId
+    });
+  }
 };
 function createWorkflowContext(input) {
-  const baseContext = {
+  const baseContext = withRuntimeScriptContextState({
     id: input.id,
     runId: input.run.id,
     loopId: input.run.loopId,
@@ -26599,13 +28218,20 @@ function createWorkflowContext(input) {
     idempotencyKeys: [],
     createdAt: input.timestamp,
     updatedAt: input.timestamp
-  };
+  }, input.contract, input.timestamp);
   return input.contract && input.graphSnapshotId ? ensureWorkflowContextGraphState(baseContext, input.contract, {
     graphSnapshotId: input.graphSnapshotId,
     timestamp: input.timestamp
   }) : baseContext;
 }
 function ensureWorkflowContextGraphState(context, contract, input) {
+  if (contract.workflow.kind === "runtime_script") {
+    return withRuntimeScriptContextState({
+      ...context,
+      contractId: context.contractId ?? contract.id,
+      contractSnapshot: context.contractSnapshot ?? contract
+    }, contract, input.timestamp);
+  }
   if (context.executionGraphSnapshot && context.nodeRuns) {
     return context;
   }
@@ -26625,6 +28251,98 @@ function ensureWorkflowContextGraphState(context, contract, input) {
     executionGraphSnapshot: snapshot,
     nodeRuns: createInitialNodeRuns(snapshot, input.timestamp)
   };
+}
+function createRuntimeScriptContextState(contract, timestamp2) {
+  if (contract.workflow.kind !== "runtime_script") {
+    return void 0;
+  }
+  return {
+    scriptHash: hashRuntimeScriptSource(contract.workflow.source),
+    argsHash: hashRuntimeScriptArgs(contract.workflow.args ?? {}),
+    status: "not_started",
+    updatedAt: timestamp2
+  };
+}
+function runtimeScriptStepId(callSite) {
+  return callSite.startsWith("runtime:") ? callSite : `runtime:${callSite}`;
+}
+function ensureRuntimeScriptContextStateValue(context, contract, timestamp2) {
+  const baseState = createRuntimeScriptContextState(contract, timestamp2);
+  if (!baseState) {
+    throw new Error(`Expected runtime_script workflow contract: ${contract.id}`);
+  }
+  const existing = context.vars.runtimeScript;
+  if (!isRuntimeScriptContextState(existing)) {
+    return baseState;
+  }
+  return {
+    ...existing,
+    scriptHash: baseState.scriptHash,
+    argsHash: baseState.argsHash
+  };
+}
+function withRuntimeScriptContextState(context, contract, timestamp2) {
+  if (!contract || contract.workflow.kind !== "runtime_script") {
+    return context;
+  }
+  return {
+    ...context,
+    contractId: context.contractId ?? contract.id,
+    contractSnapshot: context.contractSnapshot ?? contract,
+    vars: {
+      ...context.vars,
+      runtimeScript: ensureRuntimeScriptContextStateValue(context, contract, timestamp2)
+    }
+  };
+}
+function isRuntimeScriptContextState(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value;
+  return typeof candidate.scriptHash === "string" && typeof candidate.argsHash === "string" && typeof candidate.status === "string" && typeof candidate.updatedAt === "string";
+}
+function runtimeScriptJournalInputForSessionResult(input) {
+  if (!input.context || !input.contract || input.contract.workflow.kind !== "runtime_script") {
+    return void 0;
+  }
+  if (input.input.status === "needs_human") {
+    return void 0;
+  }
+  const runtimeScriptState = isRuntimeScriptContextState(input.context.vars.runtimeScript) ? input.context.vars.runtimeScript : void 0;
+  const runtimeScriptTask = input.taskRun?.runtimeScript;
+  const key = runtimeScriptTask?.key ?? input.input.idempotencyKey ?? input.taskRun?.idempotencyKey;
+  const callSite = runtimeScriptTask?.callSite ?? input.input.stepId ?? input.taskRun?.stepId;
+  if (!key || !callSite) {
+    return void 0;
+  }
+  return {
+    loopId: input.run.loopId,
+    runId: input.run.id,
+    attemptId: input.context.attemptId,
+    workflowContextId: input.context.id,
+    contractId: input.contract.id,
+    scriptHash: runtimeScriptTask?.scriptHash ?? runtimeScriptState?.scriptHash ?? hashRuntimeScriptSource(input.contract.workflow.source),
+    argsHash: runtimeScriptTask?.argsHash ?? runtimeScriptState?.argsHash ?? hashRuntimeScriptArgs(input.contract.workflow.args ?? {}),
+    key,
+    callSite,
+    promptHash: runtimeScriptTask?.promptHash ?? hashRuntimeScriptPrompt(input.taskRun?.prompt ?? ""),
+    optionsHash: runtimeScriptTask?.optionsHash ?? hashRuntimeScriptOptions(input.taskRun?.label ? { label: input.taskRun.label } : {}),
+    status: input.input.status === "failed" ? "failed" : "completed",
+    output: input.input.status === "passed" ? input.input.result ?? input.input.summary : void 0,
+    error: input.input.status === "failed" ? input.input.result ?? input.input.summary : void 0,
+    sessionId: input.input.sessionId ?? input.taskRun?.sessionId
+  };
+}
+function upsertRuntimeScriptJournalRecord(records, input, timestamp2, createId2) {
+  const existing = records.find((record2) => record2.key === input.key);
+  const nextRecord = {
+    ...input,
+    id: existing?.id ?? createId2(),
+    createdAt: existing?.createdAt ?? timestamp2,
+    updatedAt: timestamp2
+  };
+  return existing ? records.map((record2) => record2.key === input.key ? nextRecord : record2) : [...records, nextRecord];
 }
 function createWorkflowVerificationState(timestamp2) {
   return {
@@ -26647,18 +28365,70 @@ function workflowVerificationAcceptsValidatorWriteback(context, verification) {
   return (verification.status === "running" || verification.status === "waiting_for_validator") && workflowContextHasCompletedVerifiableWork(context);
 }
 function workflowContextHasCompletedVerifiableWork(context) {
-  return Object.values(context.steps).some((step) => step.status === "completed" && step.output !== void 0) || context.taskRuns.some((taskRun) => taskRun.status === "completed" && taskRun.result !== void 0);
+  const runtimeScriptState = isRuntimeScriptContextState(context.vars.runtimeScript) ? context.vars.runtimeScript : void 0;
+  return runtimeScriptState?.status === "completed" && runtimeScriptState.result !== void 0 || Object.values(context.steps).some((step) => step.status === "completed" && step.output !== void 0) || context.taskRuns.some((taskRun) => taskRun.status === "completed" && taskRun.result !== void 0);
+}
+function completedWorkflowVerificationInput(context) {
+  const runtimeScriptState = isRuntimeScriptContextState(context.vars.runtimeScript) ? context.vars.runtimeScript : void 0;
+  if (runtimeScriptState?.status === "completed" && runtimeScriptState.result !== void 0) {
+    return runtimeScriptState.result;
+  }
+  return completedWorkflowStepOutputs(context);
+}
+function verificationValidatorStepId(validatorId) {
+  return `verification:${validatorId}`;
+}
+function verificationValidatorIdempotencyKey(runId, attemptId, validatorId) {
+  return `verification:${runId}:${attemptId}:${validatorId}`;
+}
+function isVerificationTaskStepId(stepId, validatorId) {
+  if (!stepId?.startsWith("verification:")) {
+    return false;
+  }
+  return validatorId ? stepId === verificationValidatorStepId(validatorId) : true;
+}
+function verificationValidatorPrompt(policy, context, validator) {
+  const criteria = policy.criteria.filter((criterion) => validator.criteriaIds.includes(criterion.id));
+  return [
+    validator.prompt,
+    "",
+    "Criteria:",
+    criteria.map((criterion) => `- [${criterion.severity}] ${criterion.label}: ${criterion.description}`).join("\n"),
+    "",
+    "Workflow result:",
+    JSON.stringify(completedWorkflowVerificationInput(context), null, 2)
+  ].join("\n");
 }
 function completedWorkflowStepOutputs(context) {
   return Object.fromEntries(
     Object.entries(context.steps).filter(([, step]) => step.status === "completed" && step.output !== void 0).map(([stepId, step]) => [stepId, step.output])
   );
 }
+function runtimeScriptContextWithResult(context, contract, result, timestamp2) {
+  return {
+    ...withRuntimeScriptContextState(context, contract, timestamp2),
+    vars: {
+      ...context.vars,
+      runtimeScript: {
+        ...ensureRuntimeScriptContextStateValue(context, contract, timestamp2),
+        status: "completed",
+        result,
+        error: void 0,
+        updatedAt: timestamp2
+      }
+    }
+  };
+}
 function pendingRubricAgentValidatorIds(policy, context) {
+  return pendingRubricAgentValidators(policy, context).map((validator) => validator.id);
+}
+function pendingRubricAgentValidators(policy, context) {
   const recordedValidatorIds = new Set(
     (context.verification?.validatorResults ?? []).map((result) => result.validatorId)
   );
-  return policy.validators.filter((validator) => validator.type === "rubric_agent" && !recordedValidatorIds.has(validator.id)).map((validator) => validator.id);
+  return policy.validators.filter(
+    (validator) => validator.type === "rubric_agent" && !recordedValidatorIds.has(validator.id)
+  );
 }
 function usesVerificationV2Runtime(policy) {
   return policy.version === 2 && !isLegacyCompatibleVerificationPolicy(policy);
@@ -26701,7 +28471,7 @@ function hasDefaultLegacyMigrationShape(policy) {
   if (policy.criteria.length === 0 && policy.validators.length === 0) return true;
   if (policy.validators.length !== 1) return false;
   const validator = policy.validators[0];
-  return validator.type === "rubric_agent" && validator.id === "rubric-agent" && validator.label === "Rubric review" && validator.scoreScale.min === 0 && validator.scoreScale.max === 1 && validator.passScore === 1 && validator.evidenceRequired === true && validator.severity === "must" && sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id));
+  return validator.type === "rubric_agent" && validator.id === "rubric-agent" && validator.label === "Rubric review" && (validator.scoreScale?.min ?? 0) === 0 && (validator.scoreScale?.max ?? 1) === 1 && (validator.passScore ?? 1) === 1 && (validator.evidenceRequired ?? true) === true && validator.severity === "must" && sameStringSet(validator.criteriaIds, policy.criteria.map((criterion) => criterion.id));
 }
 function sameStringSet(left, right) {
   if (left.length !== right.length) return false;
@@ -26799,8 +28569,10 @@ function validateWorkflowSessionResultTarget(context, input) {
   return targetTaskRun;
 }
 function hasRemainingExecutableSteps(contract, context) {
+  const body = staticWorkflowBody(contract);
+  if (!body) return false;
   const completedSteps = new Set(Object.keys(completedWorkflowStepOutputs(context)));
-  return executableWorkflowStepIds(contract.body.steps).some((stepId) => !completedSteps.has(stepId));
+  return executableWorkflowStepIds(body.steps).some((stepId) => !completedSteps.has(stepId));
 }
 function executableWorkflowStepIds(steps) {
   return steps.flatMap((step) => {
@@ -26809,6 +28581,9 @@ function executableWorkflowStepIds(steps) {
     }
     return executableWorkflowStepIds(step.children);
   });
+}
+function staticWorkflowBody(contract) {
+  return contract.body ?? (contract.workflow.kind === "static_steps" ? contract.workflow.body : void 0);
 }
 function requireLoop(state, loopId) {
   const loop = state.loops.find((candidate) => candidate.id === loopId);
@@ -26858,30 +28633,8 @@ function requireWorkflowRevisionSessionContext(state, loopId, input, revision) {
   }
   return { run, attempt };
 }
-function resolveScriptContractInput(input) {
-  const { script, ...rest } = input;
-  if (!script) {
-    if (!rest.body) {
-      throw new Error("Loop contract requires body.steps or a script");
-    }
-    return rest;
-  }
-  if (rest.body) {
-    throw new Error("Loop contract cannot include both body and script");
-  }
-  const built = evalScriptAst(script);
-  return {
-    ...rest,
-    body: { steps: built.steps },
-    ...built.budgetUsd !== void 0 && rest.budgetUsd === void 0 ? { budgetUsd: built.budgetUsd } : {}
-  };
-}
 function normalizeFormalContractInput(input, id) {
-  const { codexProjectId, projectLabel, projectPath, projectBinding, script, body, ...contractInput } = input;
-  void script;
-  if (!body) {
-    throw new Error("Loop contract requires body.steps");
-  }
+  const { codexProjectId, projectLabel, projectPath, projectBinding, ...contractInput } = input;
   const normalizedProjectBinding = {
     codexProjectId: projectBinding?.codexProjectId ?? codexProjectId,
     projectLabel: projectBinding?.projectLabel ?? projectLabel,
@@ -26890,7 +28643,6 @@ function normalizeFormalContractInput(input, id) {
   const hasProjectBinding = Object.values(normalizedProjectBinding).some(Boolean);
   return {
     ...contractInput,
-    body,
     id,
     ...hasProjectBinding ? { projectBinding: normalizedProjectBinding } : {}
   };
@@ -26916,19 +28668,68 @@ function withVerificationInputKind(contract, inputKind) {
   };
 }
 function applyContractPatch(baseContract, patch) {
-  if (patch.script) {
+  if (patch.script !== void 0) {
     return {
       ...baseContract,
       ...patch,
       id: baseContract.id,
       title: patch.title ?? baseContract.title,
       goal: patch.goal ?? baseContract.goal,
+      workflow: void 0,
       body: void 0,
       verification: patch.verification ?? baseContract.verification,
       repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
       stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
       budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
       escalation: patch.escalation ?? baseContract.escalation,
+      projectBinding: patch.projectBinding ?? baseContract.projectBinding,
+      memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
+      trigger: patch.trigger ?? baseContract.trigger,
+      status: patch.status ?? baseContract.status
+    };
+  }
+  if (patch.body !== void 0) {
+    return {
+      ...baseContract,
+      ...patch,
+      id: baseContract.id,
+      title: patch.title ?? baseContract.title,
+      goal: patch.goal ?? baseContract.goal,
+      workflow: void 0,
+      body: patch.body,
+      verification: patch.verification ?? baseContract.verification,
+      repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
+      stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+      budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+      escalation: patch.escalation ?? baseContract.escalation,
+      agentProfiles: patch.agentProfiles ?? baseContract.agentProfiles,
+      projectBinding: patch.projectBinding ?? baseContract.projectBinding,
+      memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
+      trigger: patch.trigger ?? baseContract.trigger,
+      status: patch.status ?? baseContract.status
+    };
+  }
+  if (baseContract.workflow.kind === "runtime_script" && patch.workflowKind !== "static_steps") {
+    return {
+      ...baseContract,
+      ...patch,
+      id: baseContract.id,
+      title: patch.title ?? baseContract.title,
+      goal: patch.goal ?? baseContract.goal,
+      workflow: void 0,
+      workflowKind: "runtime_script",
+      script: baseContract.workflow.source,
+      args: patch.args ?? baseContract.workflow.args,
+      limits: patch.limits ?? baseContract.workflow.limits,
+      approval: patch.approval ?? baseContract.workflow.approval,
+      journal: patch.journal ?? baseContract.workflow.journal,
+      body: void 0,
+      verification: patch.verification ?? baseContract.verification,
+      repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,
+      stopPolicy: patch.stopPolicy ?? baseContract.stopPolicy,
+      budgetUsd: patch.budgetUsd ?? baseContract.budgetUsd,
+      escalation: patch.escalation ?? baseContract.escalation,
+      agentProfiles: patch.agentProfiles ?? baseContract.agentProfiles,
       projectBinding: patch.projectBinding ?? baseContract.projectBinding,
       memoryPolicy: patch.memoryPolicy ?? baseContract.memoryPolicy,
       trigger: patch.trigger ?? baseContract.trigger,
@@ -27121,7 +28922,11 @@ function codexSessionSubagentsForContract(contract, prompt, status = "requested"
   if (!contract) {
     return [{ role: "loop-runner", status, prompt }];
   }
-  const agents = flattenWorkflowLaunchSteps(contract.body.steps, resolveEffectiveProfilesByStep(contract)).filter((step) => step.kind === "agent" || step.kind === "task").map((step) => ({
+  const body = staticWorkflowBody(contract);
+  if (!body) {
+    return [{ role: "runtime-script", status, prompt }];
+  }
+  const agents = flattenWorkflowLaunchSteps(body.steps, resolveEffectiveProfilesByStep(contract)).filter((step) => step.kind === "agent" || step.kind === "task").map((step) => ({
     stepId: step.id,
     phaseId: step.phaseId,
     role: step.label,
@@ -27228,15 +29033,58 @@ function findWorkflowContextForValidatorResult(state, runId, input) {
   }
   return context;
 }
+function completeWorkflowContextVerificationTask(context, taskRun, sessionId, timestamp2) {
+  if (!taskRun) {
+    return {
+      ...context,
+      pendingSessionIds: sessionId ? context.pendingSessionIds.filter((pendingSessionId) => pendingSessionId !== sessionId) : context.pendingSessionIds
+    };
+  }
+  return updateNodeRunForTaskResult(
+    {
+      ...context,
+      steps: {
+        ...context.steps,
+        [taskRun.stepId]: {
+          status: "completed",
+          sessionId: taskRun.sessionId,
+          output: taskRun.result ?? "",
+          updatedAt: timestamp2
+        }
+      },
+      taskRuns: context.taskRuns.map(
+        (candidate) => candidate.id === taskRun.id ? {
+          ...candidate,
+          status: "completed",
+          updatedAt: timestamp2,
+          completedAt: timestamp2
+        } : candidate
+      ),
+      pendingSessionIds: taskRun.sessionId ? context.pendingSessionIds.filter((pendingSessionId) => pendingSessionId !== taskRun.sessionId) : context.pendingSessionIds,
+      updatedAt: timestamp2
+    },
+    {
+      stepId: taskRun.stepId,
+      taskRunId: taskRun.id,
+      sessionId: taskRun.sessionId,
+      status: "passed",
+      result: taskRun.result,
+      summary: taskRun.result ?? "",
+      idempotencyKey: taskRun.idempotencyKey,
+      timestamp: timestamp2
+    }
+  );
+}
 function completeWorkflowContextFromSessionResult(context, input, timestamp2, options = {}) {
   const finalize = options.finalize ?? true;
+  const keepRuntimeScriptActive = options.keepRuntimeScriptActive ?? false;
   const targetTaskRun = context.taskRuns.find((taskRun) => matchesWorkflowTaskRun(taskRun, input)) ?? (input.attemptId ? context.taskRuns.find((taskRun) => taskRun.attemptId === input.attemptId) : void 0) ?? context.taskRuns.at(-1);
   const stepId = input.stepId ?? targetTaskRun?.stepId;
   const phaseId = targetTaskRun?.phaseId;
   const sessionId = input.sessionId ?? targetTaskRun?.sessionId;
   const taskStatus = input.status === "failed" ? "failed" : input.status === "needs_human" ? "suspended" : "completed";
-  const contextStatus = input.status === "failed" ? "failed" : input.status === "needs_human" ? "suspended" : finalize ? "completed" : "running";
-  const cursor = input.status === "failed" ? { state: "failed", stepId, phaseId, sessionId } : input.status === "needs_human" ? { state: "waiting_for_human", stepId, phaseId, sessionId } : finalize ? { state: "completed" } : { state: "executing", stepId, phaseId, sessionId };
+  const contextStatus = input.status === "failed" ? keepRuntimeScriptActive ? "running" : "failed" : input.status === "needs_human" ? "suspended" : finalize ? "completed" : "running";
+  const cursor = input.status === "failed" ? keepRuntimeScriptActive ? { state: "executing", stepId, phaseId, sessionId } : { state: "failed", stepId, phaseId, sessionId } : input.status === "needs_human" ? { state: "waiting_for_human", stepId, phaseId, sessionId } : finalize ? { state: "completed" } : { state: "executing", stepId, phaseId, sessionId };
   const nextContext = {
     ...context,
     status: contextStatus,
@@ -27378,7 +29226,146 @@ function repairReasonForV2Result(result) {
     `failed criteria: ${result.decision.failedCriterionIds.join(", ")}.`
   ].join("; ") + ` ${result.decision.repairInstructions ?? result.summary}`;
 }
+function validateRuntimeScriptApprovalPolicy(contract) {
+  if (contract.workflow.kind !== "runtime_script") {
+    return;
+  }
+  if (!contract.workflow.approval || typeof contract.workflow.approval.required !== "boolean") {
+    throw new Error(`Runtime script workflow approval policy is invalid for contract: ${contract.id}`);
+  }
+}
+function runtimeScriptApprovalRequired(contract) {
+  return contract.workflow.kind === "runtime_script" && contract.workflow.approval?.required === true;
+}
+function runtimeScriptApprovalGranted(contract) {
+  return contract.workflow.kind === "runtime_script" && typeof contract.workflow.approval?.approvedAt === "string" && contract.workflow.approval.approvedAt.length > 0 && typeof contract.workflow.approval?.approvedBy === "string" && contract.workflow.approval.approvedBy.length > 0;
+}
+function runtimeScriptApprovalQuestion(contractId) {
+  return `Runtime script approval required for ${contractId}. Review the active script, then call approve_runtime_script with loopId and approvedBy before executing.`;
+}
+function runtimeScriptEventToEngineEvent(event) {
+  const data = event.data ?? {};
+  if (event.type === "agent:start") {
+    return {
+      type: "agent:start",
+      label: stringField(data.label),
+      prompt: stringField(data.prompt) ?? "",
+      callSite: stringField(data.callSite) ?? "agent"
+    };
+  }
+  if (event.type === "agent:done") {
+    return {
+      type: "agent:done",
+      label: stringField(data.label),
+      callSite: stringField(data.callSite) ?? "agent",
+      result: stringField(data.result),
+      session: data.session
+    };
+  }
+  if (event.type === "agent:error") {
+    return {
+      type: "agent:error",
+      label: stringField(data.label),
+      callSite: stringField(data.callSite) ?? "agent",
+      error: stringField(data.error) ?? "Runtime script sub-agent failed"
+    };
+  }
+  if (event.type === "agent:cached") {
+    return {
+      type: "agent:cached",
+      label: stringField(data.label),
+      callSite: stringField(data.callSite) ?? "agent"
+    };
+  }
+  if (event.type === "runtime_parallel_started") {
+    return {
+      type: "runtime_parallel_started",
+      label: stringField(data.label),
+      count: numberField(data.count) ?? 0
+    };
+  }
+  if (event.type === "runtime_parallel_completed") {
+    return {
+      type: "runtime_parallel_completed",
+      label: stringField(data.label),
+      count: numberField(data.count) ?? 0
+    };
+  }
+  if (event.type === "runtime_pipeline_started") {
+    return {
+      type: "runtime_pipeline_started",
+      label: stringField(data.label),
+      count: numberField(data.count) ?? 0
+    };
+  }
+  if (event.type === "runtime_pipeline_completed") {
+    return {
+      type: "runtime_pipeline_completed",
+      label: stringField(data.label),
+      count: numberField(data.count) ?? 0
+    };
+  }
+  if (event.type === "runtime_phase_started") {
+    return {
+      type: "runtime_phase_started",
+      label: stringField(data.label) ?? "phase"
+    };
+  }
+  if (event.type === "runtime_phase_done") {
+    return {
+      type: "runtime_phase_done",
+      label: stringField(data.label) ?? "phase",
+      status: stringField(data.status) === "failed" ? "failed" : "ok"
+    };
+  }
+  if (event.type === "runtime_log") {
+    return {
+      type: "runtime_log",
+      message: stringField(data.message) ?? ""
+    };
+  }
+  return void 0;
+}
 function engineEventToMessage(event) {
+  if (event.type === "runtime_script_started") {
+    return `\u8FD0\u884C\u65F6\u811A\u672C\u5F00\u59CB\uFF1A${event.contractId}`;
+  }
+  if (event.type === "runtime_script_done") {
+    return `\u8FD0\u884C\u65F6\u811A\u672C\u5B8C\u6210\uFF1A${event.status}`;
+  }
+  if (event.type === "agent:start") {
+    return `\u811A\u672C Agent \u5F00\u59CB\uFF1A${event.label ?? event.callSite}`;
+  }
+  if (event.type === "agent:done") {
+    return `\u811A\u672C Agent \u5B8C\u6210\uFF1A${event.label ?? event.callSite}`;
+  }
+  if (event.type === "agent:error") {
+    return `\u811A\u672C Agent \u5931\u8D25\uFF1A${event.label ?? event.callSite}`;
+  }
+  if (event.type === "agent:cached") {
+    return `\u811A\u672C Agent \u590D\u7528\u7F13\u5B58\uFF1A${event.label ?? event.callSite}`;
+  }
+  if (event.type === "runtime_parallel_started") {
+    return `\u811A\u672C\u5E76\u884C\u5F00\u59CB\uFF1A${event.label ?? event.count}`;
+  }
+  if (event.type === "runtime_parallel_completed") {
+    return `\u811A\u672C\u5E76\u884C\u5B8C\u6210\uFF1A${event.label ?? event.count}`;
+  }
+  if (event.type === "runtime_pipeline_started") {
+    return `\u811A\u672C\u6D41\u6C34\u7EBF\u5F00\u59CB\uFF1A${event.label ?? event.count}`;
+  }
+  if (event.type === "runtime_pipeline_completed") {
+    return `\u811A\u672C\u6D41\u6C34\u7EBF\u5B8C\u6210\uFF1A${event.label ?? event.count}`;
+  }
+  if (event.type === "runtime_phase_started") {
+    return `\u811A\u672C\u9636\u6BB5\u5F00\u59CB\uFF1A${event.label}`;
+  }
+  if (event.type === "runtime_phase_done") {
+    return `\u811A\u672C\u9636\u6BB5\u5B8C\u6210\uFF1A${event.label}`;
+  }
+  if (event.type === "runtime_log") {
+    return event.message;
+  }
   if (event.type === "agent_started") {
     return `Agent \u5F00\u59CB\uFF1A${event.label ?? event.stepId ?? event.nodeId ?? "agent"}`;
   }
@@ -27430,6 +29417,29 @@ var CodexSessionPendingError = class extends Error {
 };
 function isCodexSessionPendingError(error2) {
   return error2 instanceof CodexSessionPendingError;
+}
+function pendingCodexSessionFromError(error2) {
+  if (error2 instanceof CodexSessionPendingError) {
+    return error2.session;
+  }
+  if (!(error2 instanceof Error) || error2.name !== "CodexSessionPendingError") {
+    return void 0;
+  }
+  const session = error2.session;
+  return isCodexSessionRef(session) ? session : void 0;
+}
+function isCodexSessionRef(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value;
+  return typeof candidate.sessionId === "string" && typeof candidate.runId === "string" && typeof candidate.title === "string" && typeof candidate.status === "string" && typeof candidate.createdAt === "string";
+}
+function stringField(value) {
+  return typeof value === "string" ? value : void 0;
+}
+function numberField(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
 }
 function isPendingSessionFailureEvent(event) {
   return event.type === "agent_failed" || event.type === "run_failed" || event.type === "phase_done" && event.status !== "ok";
@@ -28088,6 +30098,7 @@ function buildCodexSessionPrompt(loop, goal, contract, callbacks, memoryWindow, 
 }
 function buildWorkflowLaunch(contract) {
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
+  const body = staticWorkflowBody(contract);
   return {
     workflowRuntime: "dittosloop-local-workflow",
     workflowContractId: contract.id,
@@ -28095,7 +30106,7 @@ function buildWorkflowLaunch(contract) {
       runtime: "dittosloop-local-workflow",
       contractId: contract.id,
       goal: contract.goal,
-      steps: flattenWorkflowLaunchSteps(contract.body.steps, effectiveProfilesByStep),
+      steps: body ? flattenWorkflowLaunchSteps(body.steps, effectiveProfilesByStep) : [],
       verification: workflowLaunchVerification(contract.verification),
       repairPolicy: contract.repairPolicy,
       stopPolicy: contract.stopPolicy,
@@ -28146,6 +30157,10 @@ function flattenWorkflowLaunchSteps(steps, effectiveProfilesByStep, phaseId, dep
 }
 function formatWorkflowSteps(contract) {
   const lines = [];
+  const body = staticWorkflowBody(contract);
+  if (!body) {
+    return "- runtime_script workflow: javascript source";
+  }
   const effectiveProfilesByStep = resolveEffectiveProfilesByStep(contract);
   const visit = (steps, depth) => {
     for (const step of steps) {
@@ -28163,7 +30178,7 @@ function formatWorkflowSteps(contract) {
       }
     }
   };
-  visit(contract.body.steps, 0);
+  visit(body.steps, 0);
   return lines.join("\n");
 }
 function formatAgentProfiles(contract, profilePreflight) {
@@ -28315,6 +30330,13 @@ var scriptCallSchema = external_exports.object({
 var scriptSchema = external_exports.object({
   build: external_exports.array(scriptCallSchema).min(1)
 });
+var runtimeScriptLimitsSchema = external_exports.object({
+  timeoutMs: external_exports.number().int().positive().optional(),
+  maxAgentCalls: external_exports.number().int().positive().optional(),
+  maxParallelBranches: external_exports.number().int().positive().optional(),
+  maxPipelineItems: external_exports.number().int().positive().optional(),
+  maxLogChars: external_exports.number().int().positive().optional()
+}).strict();
 var verificationCriterionSchema = external_exports.object({
   id: external_exports.string().min(1),
   label: external_exports.string().min(1),
@@ -28365,12 +30387,15 @@ var rubricAgentValidatorSchema = external_exports.object({
   type: external_exports.literal("rubric_agent"),
   label: external_exports.string().min(1),
   criteriaIds: external_exports.array(external_exports.string().min(1)).min(1),
+  prompt: external_exports.string().min(1),
   scoreScale: external_exports.object({
     min: external_exports.number().finite(),
     max: external_exports.number().finite()
-  }),
-  passScore: external_exports.number().finite(),
-  evidenceRequired: external_exports.boolean(),
+  }).optional(),
+  passScore: external_exports.number().finite().optional(),
+  evidenceRequired: external_exports.boolean().optional(),
+  subagent: subagentSchema.optional(),
+  allowSelfReview: external_exports.boolean().optional(),
   severity: verificationSeveritySchema
 });
 var scriptValidatorSchema = external_exports.object({
@@ -28427,9 +30452,12 @@ var createLoopContractObjectSchema = external_exports.object({
   id: external_exports.string().min(1).optional(),
   title: external_exports.string().min(1),
   goal: external_exports.string().min(1),
+  workflowKind: external_exports.enum(["static_steps", "runtime_script"]).optional(),
   intent: external_exports.string().optional(),
   body: external_exports.object({ steps: external_exports.array(stepSchema).min(1) }).optional(),
-  script: scriptSchema.optional(),
+  script: external_exports.union([scriptSchema, external_exports.string().min(1)]).optional(),
+  args: external_exports.record(external_exports.unknown()).optional(),
+  limits: runtimeScriptLimitsSchema.optional(),
   verification: verificationV2Schema,
   repairPolicy: external_exports.object({
     maxAttempts: external_exports.number().int().nonnegative(),
@@ -28448,10 +30476,43 @@ var createLoopContractObjectSchema = external_exports.object({
     projectPath: external_exports.string().optional()
   }).optional()
 });
-var createLoopContractSchema = createLoopContractObjectSchema.refine(
-  (value) => Boolean(value.body) !== Boolean(value.script),
-  { message: "exactly one of body or script is required" }
-);
+var createLoopContractSchema = createLoopContractObjectSchema.superRefine(validateCreateLoopContractInput);
+function validateCreateLoopContractInput(input, ctx) {
+  if (input.body && input.script !== void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "exactly one of body or script is required; choose either body.steps or script, not both",
+      path: ["script"]
+    });
+  }
+  if (!input.body && input.script === void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "exactly one of body or script is required"
+    });
+  }
+  if (input.body && input.workflowKind === "runtime_script") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "body.steps cannot be used with workflowKind runtime_script",
+      path: ["body"]
+    });
+  }
+  if (typeof input.script === "string" && input.workflowKind !== "runtime_script") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: 'string script requires workflowKind: "runtime_script"',
+      path: ["workflowKind"]
+    });
+  }
+  if (input.script !== void 0 && typeof input.script !== "string" && input.workflowKind === "runtime_script") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "script.build is a static_steps builder script; use a string script with workflowKind runtime_script",
+      path: ["script"]
+    });
+  }
+}
 var startCodexSessionSchema = external_exports.object({
   loopId: external_exports.string().min(1),
   goal: external_exports.string().optional(),
@@ -28466,6 +30527,10 @@ var pauseLoopSchema = external_exports.object({
 });
 var resumeLoopSchema = external_exports.object({
   loopId: external_exports.string().min(1)
+});
+var approveRuntimeScriptSchema = external_exports.object({
+  loopId: external_exports.string().min(1),
+  approvedBy: external_exports.string().min(1)
 });
 var executeWorkflowAttemptSchema = external_exports.object({
   runId: external_exports.string().min(1),
@@ -28639,6 +30704,12 @@ function createToolHandlers(service) {
     resume_loop: async (input) => {
       const args = resumeLoopSchema.parse(input);
       return toToolResult(await service.resumeLoop(args.loopId));
+    },
+    approve_runtime_script: async (input) => {
+      const args = approveRuntimeScriptSchema.parse(input);
+      return toToolResult(await service.approveRuntimeScript(args.loopId, {
+        approvedBy: args.approvedBy
+      }));
     },
     start_codex_session: async (input) => {
       const args = startCodexSessionSchema.parse(input);
@@ -28899,6 +30970,12 @@ var toolDefinitions = [
     title: "Resume loop",
     description: "Resume a paused local Dittos loop and clear its consecutive failure stop state.",
     schema: resumeLoopSchema
+  },
+  {
+    name: "approve_runtime_script",
+    title: "Approve runtime script",
+    description: "Approve the active runtime_script contract so execution can enter the VM.",
+    schema: approveRuntimeScriptSchema
   },
   {
     name: "start_codex_session",
@@ -29301,6 +31378,45 @@ function workflowEventToTimelineItem(event) {
   if (event.type === "run_failed") {
     return baseItem(event, "run", "\u8FD0\u884C\u5931\u8D25", event.status, event.error);
   }
+  if (event.type === "runtime_script_started") {
+    return baseItem(event, "run", runtimeScriptLabel(event.contractId), "started");
+  }
+  if (event.type === "runtime_script_done") {
+    return baseItem(event, "run", runtimeScriptLabel(event.contractId), event.status, event.error ?? event.result);
+  }
+  if (event.type === "runtime_phase_started") {
+    return baseItem(event, "phase", event.label, "started");
+  }
+  if (event.type === "runtime_phase_done") {
+    return baseItem(event, "phase", event.label, event.status === "ok" ? "completed" : "failed");
+  }
+  if (event.type === "agent:start") {
+    return baseItem(event, "agent", runtimeAgentLabel(event), "started", event.prompt);
+  }
+  if (event.type === "agent:done") {
+    return baseItem(event, "agent", runtimeAgentLabel(event), "completed", event.result);
+  }
+  if (event.type === "agent:error") {
+    return baseItem(event, "agent", runtimeAgentLabel(event), "failed", event.error);
+  }
+  if (event.type === "agent:cached") {
+    return baseItem(event, "agent", runtimeAgentLabel(event), "completed", "agent:cached");
+  }
+  if (event.type === "runtime_parallel_started") {
+    return baseItem(event, "parallel", event.label ?? "Parallel", "started", String(event.count));
+  }
+  if (event.type === "runtime_parallel_completed") {
+    return baseItem(event, "parallel", event.label ?? "Parallel", "completed", String(event.count));
+  }
+  if (event.type === "runtime_pipeline_started") {
+    return { ...baseItem(event, "parallel", event.label ?? "Pipeline", "started", String(event.count)), pipeline: true };
+  }
+  if (event.type === "runtime_pipeline_completed") {
+    return { ...baseItem(event, "parallel", event.label ?? "Pipeline", "completed", String(event.count)), pipeline: true };
+  }
+  if (event.type === "runtime_log") {
+    return baseItem(event, "run", "Runtime log", "completed", event.message);
+  }
   if (event.type === "phase_started") {
     return baseItem(event, "phase", phaseLabel(event), "started");
   }
@@ -29380,6 +31496,12 @@ function baseItem(event, kind, label, status, message) {
 }
 function phaseLabel(event) {
   return event.label ?? event.title ?? event.phaseId ?? "Phase";
+}
+function runtimeScriptLabel(contractId) {
+  return `Runtime script ${contractId}`;
+}
+function runtimeAgentLabel(event) {
+  return event.label ?? event.callSite ?? "Agent";
 }
 function verificationChecksMessage(checks) {
   if (!checks.length) return void 0;
@@ -29930,7 +32052,8 @@ function createEmptyState() {
     humanRequests: [],
     memoryCommits: [],
     loopMemories: [],
-    artifacts: []
+    artifacts: [],
+    runtimeScriptJournals: []
   };
 }
 var LoopStore = class {
@@ -30000,7 +32123,8 @@ function normalizeState(value) {
     })),
     memoryCommits: value?.memoryCommits ?? [],
     loopMemories: deriveLoopMemories(value?.loopMemories ?? [], value?.memoryCommits ?? []),
-    artifacts: value?.artifacts ?? []
+    artifacts: value?.artifacts ?? [],
+    runtimeScriptJournals: value?.runtimeScriptJournals ?? []
   };
   return {
     ...state,

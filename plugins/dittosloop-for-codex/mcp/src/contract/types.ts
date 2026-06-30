@@ -98,10 +98,52 @@ export interface ExecutionBody {
   steps: Step[];
 }
 
+export interface StaticStepsWorkflowDefinition {
+  kind: "static_steps";
+  body: ExecutionBody;
+}
+
+export interface RuntimeScriptWorkflowDefinition {
+  kind: "runtime_script";
+  language: "javascript";
+  source: string;
+  args?: Record<string, unknown>;
+  limits?: RuntimeScriptLimits;
+  approval?: RuntimeScriptApprovalPolicy;
+  journal?: RuntimeScriptJournalPolicy;
+}
+
+export interface RuntimeScriptLimits {
+  timeoutMs?: number;
+  maxAgentCalls?: number;
+  maxParallelBranches?: number;
+  maxPipelineItems?: number;
+  maxLogChars?: number;
+}
+
+export interface RuntimeScriptApprovalPolicy {
+  required: boolean;
+  approvedAt?: string;
+  approvedBy?: string;
+}
+
+export interface RuntimeScriptJournalPolicy {
+  enabled: boolean;
+}
+
+export type WorkflowDefinition = StaticStepsWorkflowDefinition | RuntimeScriptWorkflowDefinition;
+
 export interface VerificationCriterion {
   id: string;
   label: string;
   description: string;
+  severity: "must" | "should";
+}
+
+export interface VerificationValidatorBase {
+  id: string;
+  label: string;
+  criteriaIds?: string[];
   severity: "must" | "should";
 }
 
@@ -114,27 +156,20 @@ export type ValidatorCwd =
 export type CommandValidatorCwd = Exclude<ValidatorCwd, "loop">;
 export type ScriptValidatorCwd = ValidatorCwd;
 
-export interface VerificationCommandValidator {
-  id: string;
+export interface VerificationCommandValidator extends VerificationValidatorBase {
   type: "command";
-  label: string;
   command: string;
   args?: string[];
   cwd?: CommandValidatorCwd;
   timeoutMs?: number;
-  criteriaIds?: string[];
-  severity: "must" | "should";
   parse: {
     kind: "none";
   };
 }
 
-export interface VerificationScriptValidator {
-  id: string;
+export interface VerificationScriptValidator extends VerificationValidatorBase {
   type: "script";
-  label: string;
   criteriaIds: string[];
-  severity: "must" | "should";
   runtime: "node" | "python";
   scriptRef: {
     path: string;
@@ -167,30 +202,26 @@ export type ScoreSource =
   | { type: "artifact"; artifactId: string; path: string }
   | { type: "validator_output"; validatorId: string; path: string };
 
-export interface ScoreValidator {
-  id: string;
+export interface ScoreValidator extends VerificationValidatorBase {
   type: "score";
-  label: string;
   metric: string;
   source: ScoreSource;
   operator: ">=" | ">" | "<=" | "<" | "==" | "!=";
   threshold: number;
-  criteriaIds?: string[];
-  severity: "must" | "should";
 }
 
-export interface VerificationRubricAgentValidator {
-  id: string;
+export interface VerificationRubricAgentValidator extends VerificationValidatorBase {
   type: "rubric_agent";
-  label: string;
   criteriaIds: string[];
-  scoreScale: {
+  prompt: string;
+  scoreScale?: {
     min: number;
     max: number;
   };
-  passScore: number;
-  evidenceRequired: boolean;
-  severity: "must" | "should";
+  passScore?: number;
+  evidenceRequired?: boolean;
+  subagent?: CodexSubagentSpec;
+  allowSelfReview?: boolean;
 }
 
 export type VerificationValidator =
@@ -253,7 +284,8 @@ export interface FormalLoopContract {
   title: string;
   goal: string;
   intent?: string;
-  body: ExecutionBody;
+  workflow: WorkflowDefinition;
+  body?: ExecutionBody;
   trigger: LoopTrigger;
   verification: VerificationPolicy;
   repairPolicy: RepairPolicy;
@@ -268,7 +300,22 @@ export interface FormalLoopContract {
   updatedAt: string;
 }
 
-export type FormalLoopContractInput =
-  & Pick<FormalLoopContract, "id" | "title" | "goal" | "body">
-  & { verification: VerificationPolicyInput }
-  & Partial<Omit<FormalLoopContract, "id" | "title" | "goal" | "body" | "verification">>;
+export interface LegacyScriptWorkflowInput {
+  build: Array<{ fn: string; args?: unknown[] }>;
+}
+
+export interface FormalLoopContractInput
+  extends Partial<Omit<FormalLoopContract, "id" | "title" | "goal" | "body" | "workflow" | "verification">> {
+  id: string;
+  title: string;
+  goal: string;
+  workflowKind?: WorkflowDefinition["kind"];
+  workflow?: WorkflowDefinition;
+  body?: ExecutionBody;
+  script?: LegacyScriptWorkflowInput | string;
+  args?: Record<string, unknown>;
+  limits?: RuntimeScriptLimits;
+  approval?: RuntimeScriptApprovalPolicy;
+  journal?: RuntimeScriptJournalPolicy;
+  verification: VerificationPolicyInput;
+}

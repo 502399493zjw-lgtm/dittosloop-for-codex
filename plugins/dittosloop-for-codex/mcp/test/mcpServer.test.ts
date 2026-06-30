@@ -1243,6 +1243,37 @@ test("create_loop_contract accepts a script AST that compiles to the same body a
   expect(fromScript.budgetUsd).toBe(2);
 });
 
+test("create_loop_contract accepts explicit runtime script input", async () => {
+  const handlers = await createHandlers();
+
+  const runtimeContract = readResult(await handlers.create_loop_contract({
+    workflowKind: "runtime_script",
+    title: "Dynamic review",
+    goal: "Review risky files dynamically",
+    script: "const files = await agent('List risky files'); return files;",
+    args: { maxFiles: 3 },
+    limits: { maxAgentCalls: 5, timeoutMs: 120000 },
+    verification: v2RubricAgentVerification({
+      id: "done",
+      label: "Done",
+      description: "Output satisfies the goal"
+    })
+  }));
+
+  expect(runtimeContract).toMatchObject({
+    id: "loop_1",
+    workflow: {
+      kind: "runtime_script",
+      language: "javascript",
+      source: "const files = await agent('List risky files'); return files;",
+      args: { maxFiles: 3 },
+      limits: { maxAgentCalls: 5, timeoutMs: 120000 },
+      approval: { required: true }
+    }
+  });
+  expect(runtimeContract.body).toBeUndefined();
+});
+
 test("create_loop_contract rejects providing both body and script, and providing neither", async () => {
   const handlers = await createHandlers();
 
@@ -1259,6 +1290,34 @@ test("create_loop_contract rejects providing both body and script, and providing
     goal: "Reject neither body nor script",
     verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Output is done" })
   })).rejects.toThrow(/exactly one of body or script/i);
+});
+
+test("create_loop_contract rejects invalid mixed static and runtime inputs with useful messages", async () => {
+  const handlers = await createHandlers();
+
+  await expect(handlers.create_loop_contract({
+    workflowKind: "runtime_script",
+    title: "Mixed body and runtime script",
+    goal: "Reject ambiguous workflow inputs",
+    body: { steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan." }] },
+    script: "return await agent('Review');",
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Output is done" })
+  })).rejects.toThrow(/choose either body\.steps or script/i);
+
+  await expect(handlers.create_loop_contract({
+    title: "Implicit runtime script",
+    goal: "Reject implicit runtime scripts",
+    script: "return await agent('Review');",
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Output is done" })
+  })).rejects.toThrow(/workflowKind.*runtime_script/i);
+
+  await expect(handlers.create_loop_contract({
+    workflowKind: "runtime_script",
+    title: "Runtime builder AST",
+    goal: "Reject builder AST as a runtime script",
+    script: { build: [{ fn: "task", args: [{ id: "draft", label: "Draft", prompt: "Draft." }] }] },
+    verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Output is done" })
+  })).rejects.toThrow(/script\.build.*static_steps/i);
 });
 
 test("propose_workflow_revision accepts a script-authored revision", async () => {
@@ -1305,6 +1364,7 @@ test("exposes structured schemas for refined tools through MCP listTools", async
     const { tools } = await client.listTools();
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
     const createLoopContract = byName.get("create_loop_contract");
+    const approveRuntimeScript = byName.get("approve_runtime_script");
     const proposeWorkflowRevision = byName.get("propose_workflow_revision");
 
     expect(createLoopContract?.inputSchema.properties).toMatchObject({
@@ -1315,6 +1375,11 @@ test("exposes structured schemas for refined tools through MCP listTools", async
       agentProfiles: expect.any(Object)
     });
     expect(JSON.stringify(createLoopContract?.inputSchema)).toContain("agentProfileRef");
+
+    expect(approveRuntimeScript?.inputSchema.properties).toMatchObject({
+      loopId: expect.any(Object),
+      approvedBy: expect.any(Object)
+    });
 
     expect(proposeWorkflowRevision?.inputSchema.properties).toMatchObject({
       loopId: expect.any(Object),
@@ -1345,6 +1410,7 @@ test("registers the DittosLoop tool surface", () => {
     "list_loops",
     "pause_loop",
     "resume_loop",
+    "approve_runtime_script",
     "start_codex_session",
     "execute_workflow_attempt",
     "propose_workflow_revision",
@@ -1396,6 +1462,7 @@ function v2RubricAgentVerification(
         type: "rubric_agent" as const,
         label: "Quality review",
         criteriaIds: [criterion.id],
+        prompt: "Review the workflow result against the quality criteria.",
         scoreScale: { min: 0, max: 1 },
         passScore: 1,
         evidenceRequired: true,

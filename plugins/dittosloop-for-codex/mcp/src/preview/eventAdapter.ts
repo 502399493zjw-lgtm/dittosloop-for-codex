@@ -102,6 +102,45 @@ function workflowEventToTimelineItem(event: EngineEvent): PreviewTimelineItem | 
   if (event.type === "run_failed") {
     return baseItem(event, "run", "运行失败", event.status, event.error);
   }
+  if (event.type === "runtime_script_started") {
+    return baseItem(event, "run", runtimeScriptLabel(event.contractId), "started");
+  }
+  if (event.type === "runtime_script_done") {
+    return baseItem(event, "run", runtimeScriptLabel(event.contractId), event.status, event.error ?? event.result);
+  }
+  if (event.type === "runtime_phase_started") {
+    return baseItem(event, "phase", event.label, "started");
+  }
+  if (event.type === "runtime_phase_done") {
+    return baseItem(event, "phase", event.label, event.status === "ok" ? "completed" : "failed");
+  }
+  if (event.type === "agent:start") {
+    return baseItem(event, "agent", runtimeAgentLabel(event), "started", event.prompt);
+  }
+  if (event.type === "agent:done") {
+    return baseItem(event, "agent", runtimeAgentLabel(event), "completed", event.result);
+  }
+  if (event.type === "agent:error") {
+    return baseItem(event, "agent", runtimeAgentLabel(event), "failed", event.error);
+  }
+  if (event.type === "agent:cached") {
+    return baseItem(event, "agent", runtimeAgentLabel(event), "completed", "agent:cached");
+  }
+  if (event.type === "runtime_parallel_started") {
+    return baseItem(event, "parallel", event.label ?? "Parallel", "started", String(event.count));
+  }
+  if (event.type === "runtime_parallel_completed") {
+    return baseItem(event, "parallel", event.label ?? "Parallel", "completed", String(event.count));
+  }
+  if (event.type === "runtime_pipeline_started") {
+    return { ...baseItem(event, "parallel", event.label ?? "Pipeline", "started", String(event.count)), pipeline: true };
+  }
+  if (event.type === "runtime_pipeline_completed") {
+    return { ...baseItem(event, "parallel", event.label ?? "Pipeline", "completed", String(event.count)), pipeline: true };
+  }
+  if (event.type === "runtime_log") {
+    return baseItem(event, "run", "Runtime log", "completed", event.message);
+  }
   if (event.type === "phase_started") {
     return baseItem(event, "phase", phaseLabel(event), "started");
   }
@@ -196,6 +235,14 @@ function baseItem(
 
 function phaseLabel(event: Extract<EngineEvent, { type: "phase_started" }>): string {
   return event.label ?? event.title ?? event.phaseId ?? "Phase";
+}
+
+function runtimeScriptLabel(contractId: string): string {
+  return `Runtime script ${contractId}`;
+}
+
+function runtimeAgentLabel(event: Extract<EngineEvent, { type: "agent:start" | "agent:done" | "agent:error" | "agent:cached" }>): string {
+  return event.label ?? event.callSite ?? "Agent";
 }
 
 function verificationChecksMessage(checks: Array<{ rubricId: string; status: string; evidence?: string }>): string | undefined {

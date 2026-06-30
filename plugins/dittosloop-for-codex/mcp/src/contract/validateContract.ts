@@ -4,6 +4,8 @@ import type {
   CodexProjectBinding,
   CodexSubagentSpec,
   FormalLoopContract,
+  RuntimeScriptLimits,
+  RuntimeScriptWorkflowDefinition,
   ScoreValidator,
   Step,
   VerificationCommandValidator,
@@ -12,6 +14,8 @@ import type {
   VerificationScriptValidator,
   VerificationValidator
 } from "./types.js";
+
+export const MAX_RUNTIME_SCRIPT_SOURCE_CHARS = 100_000;
 
 const scoreOperators = new Set([">=", ">", "<=", "<", "==", "!="]);
 
@@ -24,11 +28,18 @@ export function validateContract(contract: FormalLoopContract): void {
   required(contract.goal, "goal", errors);
   validateAgentProfiles(contract, errors);
 
-  if (!contract.body || !Array.isArray(contract.body.steps) || contract.body.steps.length === 0) {
-    errors.push("body.steps must contain at least one step");
+  if (!contract.workflow) {
+    errors.push("workflow is required");
+  } else if (contract.workflow.kind === "runtime_script") {
+    validateRuntimeScriptWorkflow(contract.workflow, contract.body, errors);
   } else {
-    for (const step of contract.body.steps) {
-      validateStep(contract, step, stepIds, errors);
+    const body = contract.body ?? contract.workflow.body;
+    if (!body || !Array.isArray(body.steps) || body.steps.length === 0) {
+      errors.push("body.steps must contain at least one step");
+    } else {
+      for (const step of body.steps) {
+        validateStep(contract, step, stepIds, errors);
+      }
     }
   }
 
@@ -145,15 +156,19 @@ function required(value: string | undefined, label: string, errors: string[]): v
 }
 
 function validateSubagent(subagent: CodexSubagentSpec | undefined, step: Step, errors: string[]): void {
+  validateCodexSubagentSpec(subagent, `${step.kind} step ${step.id || "<missing>"} subagent`, errors);
+}
+
+function validateCodexSubagentSpec(subagent: CodexSubagentSpec | undefined, label: string, errors: string[]): void {
   if (!subagent) return;
 
   if (subagent.timeoutMs !== undefined && (!Number.isInteger(subagent.timeoutMs) || subagent.timeoutMs <= 0)) {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.timeoutMs must be a positive integer`);
+    errors.push(`${label}.timeoutMs must be a positive integer`);
   }
 
   if (subagent.tools !== undefined) {
     if (!Array.isArray(subagent.tools) || subagent.tools.some((tool) => !tool || tool.trim().length === 0)) {
-      errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.tools must contain non-empty strings`);
+      errors.push(`${label}.tools must contain non-empty strings`);
     }
   }
 
@@ -161,7 +176,7 @@ function validateSubagent(subagent: CodexSubagentSpec | undefined, step: Step, e
     subagent.permissions?.filesystem !== undefined &&
     !["read-only", "workspace-write", "danger-full-access"].includes(subagent.permissions.filesystem)
   ) {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.filesystem is invalid`);
+    errors.push(`${label}.permissions.filesystem is invalid`);
   }
 
   if (
@@ -169,7 +184,49 @@ function validateSubagent(subagent: CodexSubagentSpec | undefined, step: Step, e
     subagent.permissions.network !== "enabled" &&
     subagent.permissions.network !== "disabled"
   ) {
-    errors.push(`${step.kind} step ${step.id || "<missing>"} subagent.permissions.network is invalid`);
+    errors.push(`${label}.permissions.network is invalid`);
+  }
+}
+
+function validateRuntimeScriptWorkflow(
+  workflow: RuntimeScriptWorkflowDefinition,
+  body: FormalLoopContract["body"],
+  errors: string[]
+): void {
+  if (workflow.language !== "javascript") {
+    errors.push("runtime_script workflow language must be javascript");
+  }
+
+  if (!workflow.source || workflow.source.trim().length === 0) {
+    errors.push("runtime_script workflow source is required");
+  } else if (workflow.source.length > MAX_RUNTIME_SCRIPT_SOURCE_CHARS) {
+    errors.push(`runtime_script workflow source must be at most ${MAX_RUNTIME_SCRIPT_SOURCE_CHARS} characters`);
+  }
+
+  if (body?.steps !== undefined) {
+    errors.push("runtime_script workflow must not include body.steps");
+  }
+
+  validateRuntimeScriptLimits(workflow.limits, errors);
+
+  if (!workflow.approval) {
+    errors.push("runtime_script workflow approval policy is required");
+  } else if (typeof workflow.approval.required !== "boolean") {
+    errors.push("runtime_script workflow approval.required must be a boolean");
+  }
+
+  if (workflow.journal !== undefined && typeof workflow.journal.enabled !== "boolean") {
+    errors.push("runtime_script workflow journal.enabled must be a boolean");
+  }
+}
+
+function validateRuntimeScriptLimits(limits: RuntimeScriptLimits | undefined, errors: string[]): void {
+  if (!limits) return;
+
+  for (const [key, value] of Object.entries(limits)) {
+    if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
+      errors.push(`runtime_script workflow limits.${key} must be a positive integer`);
+    }
   }
 }
 
@@ -538,13 +595,25 @@ function validateRubricAgentValidator(validator: VerificationRubricAgentValidato
     errors.push("rubric_agent validator criteriaIds must contain at least one criterion");
   }
 
-  const scoreValues = [validator.scoreScale.min, validator.scoreScale.max, validator.passScore];
+  if (!validator.prompt || validator.prompt.trim().length === 0) {
+    errors.push("rubric_agent validator prompt is required");
+  }
+
+  if (validator.allowSelfReview !== undefined && typeof validator.allowSelfReview !== "boolean") {
+    errors.push("rubric_agent validator allowSelfReview must be a boolean");
+  }
+
+  validateCodexSubagentSpec(validator.subagent, `rubric_agent validator ${validator.id || "<missing>"} subagent`, errors);
+
+  const scoreScale = validator.scoreScale ?? { min: 0, max: 1 };
+  const passScore = validator.passScore ?? scoreScale.max;
+  const scoreValues = [scoreScale.min, scoreScale.max, passScore];
   if (scoreValues.some((value) => !Number.isFinite(value))) {
     errors.push("score validator threshold must be finite");
     return;
   }
 
-  if (validator.passScore < validator.scoreScale.min || validator.passScore > validator.scoreScale.max) {
+  if (passScore < scoreScale.min || passScore > scoreScale.max) {
     errors.push("rubric_agent validator passScore must be inside scoreScale");
   }
 }

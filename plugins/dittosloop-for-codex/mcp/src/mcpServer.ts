@@ -165,6 +165,14 @@ const scriptSchema = z.object({
   build: z.array(scriptCallSchema).min(1)
 });
 
+const runtimeScriptLimitsSchema = z.object({
+  timeoutMs: z.number().int().positive().optional(),
+  maxAgentCalls: z.number().int().positive().optional(),
+  maxParallelBranches: z.number().int().positive().optional(),
+  maxPipelineItems: z.number().int().positive().optional(),
+  maxLogChars: z.number().int().positive().optional()
+}).strict();
+
 const verificationCriterionSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -220,12 +228,15 @@ const rubricAgentValidatorSchema = z.object({
   type: z.literal("rubric_agent"),
   label: z.string().min(1),
   criteriaIds: z.array(z.string().min(1)).min(1),
+  prompt: z.string().min(1),
   scoreScale: z.object({
     min: z.number().finite(),
     max: z.number().finite()
-  }),
-  passScore: z.number().finite(),
-  evidenceRequired: z.boolean(),
+  }).optional(),
+  passScore: z.number().finite().optional(),
+  evidenceRequired: z.boolean().optional(),
+  subagent: subagentSchema.optional(),
+  allowSelfReview: z.boolean().optional(),
   severity: verificationSeveritySchema
 });
 
@@ -286,9 +297,12 @@ const createLoopContractObjectSchema = z.object({
   id: z.string().min(1).optional(),
   title: z.string().min(1),
   goal: z.string().min(1),
+  workflowKind: z.enum(["static_steps", "runtime_script"]).optional(),
   intent: z.string().optional(),
   body: z.object({ steps: z.array(stepSchema).min(1) }).optional(),
-  script: scriptSchema.optional(),
+  script: z.union([scriptSchema, z.string().min(1)]).optional(),
+  args: z.record(z.unknown()).optional(),
+  limits: runtimeScriptLimitsSchema.optional(),
   verification: verificationV2Schema,
   repairPolicy: z.object({
     maxAttempts: z.number().int().nonnegative(),
@@ -308,10 +322,48 @@ const createLoopContractObjectSchema = z.object({
   }).optional()
 });
 
-const createLoopContractSchema = createLoopContractObjectSchema.refine(
-  (value) => Boolean(value.body) !== Boolean(value.script),
-  { message: "exactly one of body or script is required" }
-);
+const createLoopContractSchema = createLoopContractObjectSchema.superRefine(validateCreateLoopContractInput);
+
+function validateCreateLoopContractInput(input: z.infer<typeof createLoopContractObjectSchema>, ctx: z.RefinementCtx): void {
+  if (input.body && input.script !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "exactly one of body or script is required; choose either body.steps or script, not both",
+      path: ["script"]
+    });
+  }
+
+  if (!input.body && input.script === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "exactly one of body or script is required"
+    });
+  }
+
+  if (input.body && input.workflowKind === "runtime_script") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "body.steps cannot be used with workflowKind runtime_script",
+      path: ["body"]
+    });
+  }
+
+  if (typeof input.script === "string" && input.workflowKind !== "runtime_script") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'string script requires workflowKind: "runtime_script"',
+      path: ["workflowKind"]
+    });
+  }
+
+  if (input.script !== undefined && typeof input.script !== "string" && input.workflowKind === "runtime_script") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "script.build is a static_steps builder script; use a string script with workflowKind runtime_script",
+      path: ["script"]
+    });
+  }
+}
 
 const startCodexSessionSchema = z.object({
   loopId: z.string().min(1),
@@ -329,6 +381,11 @@ const pauseLoopSchema = z.object({
 
 const resumeLoopSchema = z.object({
   loopId: z.string().min(1)
+});
+
+const approveRuntimeScriptSchema = z.object({
+  loopId: z.string().min(1),
+  approvedBy: z.string().min(1)
 });
 
 const executeWorkflowAttemptSchema = z.object({
@@ -529,6 +586,12 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     resume_loop: async (input) => {
       const args = resumeLoopSchema.parse(input);
       return toToolResult(await service.resumeLoop(args.loopId));
+    },
+    approve_runtime_script: async (input) => {
+      const args = approveRuntimeScriptSchema.parse(input);
+      return toToolResult(await service.approveRuntimeScript(args.loopId, {
+        approvedBy: args.approvedBy
+      }));
     },
     start_codex_session: async (input) => {
       const args = startCodexSessionSchema.parse(input);
@@ -816,6 +879,12 @@ const toolDefinitions = [
     title: "Resume loop",
     description: "Resume a paused local Dittos loop and clear its consecutive failure stop state.",
     schema: resumeLoopSchema
+  },
+  {
+    name: "approve_runtime_script",
+    title: "Approve runtime script",
+    description: "Approve the active runtime_script contract so execution can enter the VM.",
+    schema: approveRuntimeScriptSchema
   },
   {
     name: "start_codex_session",

@@ -11,7 +11,7 @@ DittosLoop turns delegated Codex work into a visible local loop: a contract, run
 
 The runtime state is the source of truth. The preview only displays what the local MCP runtime records.
 
-The plugin includes an independent formal runtime. For structured loops, use formal contracts with a workflow body, verification criteria, validators, decision policy, repair policy, stop policy, and optional Codex project binding.
+The plugin includes an independent formal runtime. For structured loops, use formal contracts with either `body.steps`, legacy `script.build`, or `workflowKind: "runtime_script"` plus a JavaScript `script`, alongside verification criteria, validators, decision policy, repair policy, stop policy, and optional Codex project binding.
 
 ## When to Use
 
