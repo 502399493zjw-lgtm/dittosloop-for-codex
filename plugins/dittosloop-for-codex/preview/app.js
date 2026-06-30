@@ -1166,8 +1166,7 @@ function runFinalOutput(detail) {
     return "";
   }
 
-  const explicit = run.result || run.summary;
-  if (explicit) return explicit;
+  if (run.result) return run.result;
 
   const taskRuns = (detail.workflowContexts ?? [])
     .flatMap((context) => context.taskRuns ?? [])
@@ -1178,7 +1177,7 @@ function runFinalOutput(detail) {
     )
     .sort((left, right) => workflowTaskRunTimestamp(left).localeCompare(workflowTaskRunTimestamp(right)));
 
-  return taskRuns.at(-1)?.result ?? "";
+  return taskRuns.at(-1)?.result ?? run.summary ?? "";
 }
 
 function workflowTaskRunTimestamp(taskRun) {
@@ -1284,6 +1283,28 @@ function renderWorkflowRevisionRow(revision) {
   ]);
 }
 
+function canonicalVerificationAgents(results) {
+  return (results ?? []).map((result) => ({
+    id: result.id,
+    avatar: result.status === "failed" ? "!" : "验",
+    name: "验证结果",
+    status: result.status,
+    description: result.summary,
+    meta: result.attemptId ? `Attempt ${result.attemptId}` : "Run level"
+  }));
+}
+
+function canonicalVerificationPhase(agents) {
+  if (!agents.length) return null;
+  const latest = agents.at(-1);
+  return {
+    id: "verification",
+    name: "验证",
+    status: timelineStatus(latest.status),
+    agents
+  };
+}
+
 function buildRunPhases(detail) {
   const run = detail.run;
   const workflowViewNodes = detail.workflowView?.nodes ?? [];
@@ -1304,14 +1325,7 @@ function buildRunPhases(detail) {
     meta: attempt.completedAt ? formatDate.format(new Date(attempt.completedAt)) : "运行中",
     showSessionLink: false
   }));
-  const verificationAgents = detail.verificationResults.map((result) => ({
-    id: result.id,
-    avatar: result.status === "failed" ? "!" : "验",
-    name: "验证结果",
-    status: result.status,
-    description: result.summary,
-    meta: result.attemptId ? `Attempt ${result.attemptId}` : "Run level"
-  }));
+  const verificationAgents = canonicalVerificationAgents(detail.verificationResults);
   const phases = [];
   const startAgents = [...sessionAgents, ...attemptAgents];
 
@@ -1339,6 +1353,7 @@ function buildRunPhases(detail) {
 
   for (const section of detail.timeline ?? []) {
     if (hasWorkflowView && isWorkflowRuntimeSection(section)) continue;
+    if (section.id === "verification" && verificationAgents.length) continue;
     const sectionPhases = isWorkflowRuntimeSection(section)
       ? workflowDisplayPhases(section, run.status)
       : shouldShowTimelineSectionAsPhase(section, workflowOnlyMode)
@@ -1347,13 +1362,9 @@ function buildRunPhases(detail) {
     phases.push(...sectionPhases);
   }
 
-  if (!phases.some((phase) => phase.id === "verification") && verificationAgents.length) {
-    phases.push({
-      id: "verification",
-      name: "验证",
-      status: verificationAgents.some((agent) => agent.status === "failed") ? "failed" : "passed",
-      agents: verificationAgents
-    });
+  const verificationPhase = canonicalVerificationPhase(verificationAgents);
+  if (!phases.some((phase) => phase.id === "verification") && verificationPhase) {
+    phases.push(verificationPhase);
   }
 
   if (!phases.length) {
