@@ -79,6 +79,19 @@ async function createHandlers() {
   return handlers as ReturnType<typeof createToolHandlers> & { __sessionRequests: CodexSessionRequest[] };
 }
 
+async function recordHostThread(
+  handlers: Awaited<ReturnType<typeof createHandlers>>,
+  runId: string,
+  suffix = "1"
+) {
+  await handlers.record_codex_thread({
+    runId,
+    threadId: `thread_${suffix}`,
+    threadTitle: `DittosLoop test thread ${suffix}`,
+    threadUrl: `codex://thread/thread_${suffix}`
+  });
+}
+
 test("exposes loop operations as MCP content", async () => {
   const handlers = await createHandlers();
 
@@ -125,6 +138,7 @@ test("exposes formal contract and session-first workflow operations as MCP conte
   expect(handlers.start_loop_run).toBeUndefined();
   expect(handlers.resume_loop_run).toBeUndefined();
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  await recordHostThread(handlers, launch.run.id);
   const run = readResult(await handlers.execute_workflow_attempt({
     runId: launch.run.id,
     attemptId: launch.attempt.id
@@ -143,7 +157,7 @@ test("exposes formal contract and session-first workflow operations as MCP conte
       id: "run_1",
       status: "running",
       codexSession: {
-        status: "requested",
+        status: "started",
         subagents: [
           {
             role: "Scan",
@@ -184,6 +198,25 @@ test("exposes formal contract and session-first workflow operations as MCP conte
       })
     })
   ]));
+});
+
+test("rejects workflow execution before the requested Codex thread is bound", async () => {
+  const handlers = await createHandlers();
+
+  const contract = readResult(await handlers.create_loop_contract({
+    title: "AI monitor",
+    goal: "Track AI tool updates",
+    body: {
+      steps: [{ id: "scan", kind: "agent", label: "Scan", prompt: "Scan updates" }]
+    },
+    verification: v2RubricAgentVerification()
+  }));
+  const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+
+  await expect(handlers.execute_workflow_attempt({
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  })).rejects.toThrow(/Codex thread must be bound before executing workflow attempts/);
 });
 
 test("create_loop_contract rejects legacy rubrics shape at the MCP boundary", async () => {
@@ -514,6 +547,7 @@ test("session result envelope prefers workflow task result over run summary", as
     verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual report" }));
+  await recordHostThread(handlers, launch.run.id);
 
   await handlers.execute_workflow_attempt({
     runId: launch.run.id,
@@ -619,6 +653,7 @@ test("exposes workflow execution and precise session result writeback as MCP con
     verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  await recordHostThread(handlers, launch.run.id);
   const run = readResult<{
     run: { id: string; status: string; codexSession?: { status: string; subagents?: Array<{ role: string; status: string }> } };
     sessionResult?: unknown;
@@ -634,7 +669,7 @@ test("exposes workflow execution and precise session result writeback as MCP con
       id: launch.run.id,
       status: "running",
       codexSession: {
-        status: "requested",
+        status: "started",
         subagents: [{ role: "Scan", status: "requested" }]
       }
     }
@@ -746,6 +781,7 @@ test("does not relaunch existing pending workflow sessions through the MCP handl
     verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  await recordHostThread(handlers, launch.run.id);
   await handlers.execute_workflow_attempt({
     runId: launch.run.id,
     attemptId: launch.attempt.id
@@ -787,6 +823,7 @@ test("passes codex task subagent tools through the MCP workflow execution path",
     verification: v2RubricAgentVerification({ id: "done", label: "Done", description: "Task finishes" })
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Run scan" }));
+  await recordHostThread(handlers, launch.run.id);
 
   expect(launch.run.codexSession.subagents).toMatchObject([
     {
@@ -920,6 +957,7 @@ test("accepts taskRunId-only precise session result writeback through MCP", asyn
     verification: v2RubricAgentVerification()
   }));
   const launch = readResult(await handlers.start_codex_session({ loopId: contract.id, goal: "Manual check" }));
+  await recordHostThread(handlers, launch.run.id);
   await handlers.execute_workflow_attempt({
     runId: launch.run.id,
     attemptId: launch.attempt.id

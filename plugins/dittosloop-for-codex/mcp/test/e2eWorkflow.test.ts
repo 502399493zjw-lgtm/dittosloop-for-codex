@@ -158,6 +158,7 @@ test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and
     projectLabel: "dittos loop",
     projectPath: "/Users/edisonzhong/Documents/dittos loop"
   });
+  await recordHostThread(handlers, launch.run.id);
   const run = await callTool(handlers.execute_workflow_attempt, {
     runId: launch.run.id,
     attemptId: launch.attempt.id
@@ -394,6 +395,7 @@ test("resumes a suspended task workflow with subagent metadata through session w
     reviewerProfile
   );
 
+  await recordHostThread(handlers, launch.run.id);
   const firstExecution = await callTool<{ status: string }>(handlers.execute_workflow_attempt, {
     runId: launch.run.id,
     attemptId: launch.attempt.id
@@ -488,8 +490,8 @@ test("resumes a suspended task workflow with subagent metadata through session w
   workflowContext = detail.workflowContexts.find((context) => context.id === launch.launchRequest.workflowContextId);
 
   expect(detail.run.status).toBe("completed");
-  expect(detail.run.codexSession?.threadId).toBeUndefined();
-  expect(detail.run.codexSession?.threadUrl).toBeUndefined();
+  expect(detail.run.codexSession?.threadId).toBe("thread_host");
+  expect(detail.run.codexSession?.threadUrl).toBe("codex://thread/thread_host");
   expect(detail.run.codexSession?.subagents?.map((agent) => agent.status)).toEqual(["completed", "completed"]);
   expect(detail.attempts[0]?.status).toBe("completed");
   expect(workflowContext?.status).toBe("completed");
@@ -505,32 +507,22 @@ test("resumes a suspended task workflow with subagent metadata through session w
   );
 
   expect(previewDetail.run.status).toBe("completed");
-  expect(previewDetail.run.codexSession?.threadId).toBeUndefined();
-  expect(previewDetail.run.codexSession?.threadUrl).toBeUndefined();
+  expect(previewDetail.run.codexSession?.threadId).toBe("thread_host");
+  expect(previewDetail.run.codexSession?.threadUrl).toBe("codex://thread/thread_host");
   expect(previewDetail.verificationResults[0]?.status).toBe("passed");
   const snapshotRun = previewSnapshot.runs.find((run: { id: string }) => run.id === launch.run.id);
   expect(snapshotRun).toMatchObject({
     id: launch.run.id,
     status: "completed"
   });
-  expect(snapshotRun.codexSession?.threadId).toBeUndefined();
-  expect(snapshotRun.codexSession?.threadUrl).toBeUndefined();
+  expect(snapshotRun.codexSession?.threadId).toBe("thread_host");
+  expect(snapshotRun.codexSession?.threadUrl).toBe("codex://thread/thread_host");
   expect(openSession).toMatchObject({
     runId: launch.run.id,
-    status: "unavailable",
-    launchRequest: {
-      runId: launch.run.id,
-      attemptId: launch.attempt.id,
-      workflowContextId: launch.launchRequest.workflowContextId,
-      loopId: loop.id
-    },
-    recordThread: {
-      tool: "record_codex_thread",
-      runId: launch.run.id
-    }
+    status: "ready",
+    threadId: "thread_host",
+    threadUrl: "codex://thread/thread_host"
   });
-  expect(openSession.threadUrl).toBeUndefined();
-  expect(openSession.recordThread).not.toHaveProperty("threadUrlTemplate");
   expect(previewContext?.taskRuns.find((taskRun) => taskRun.stepId === "collect")?.subagent).toEqual(
     researcherSubagent
   );
@@ -605,6 +597,7 @@ test("authors a loop via script, suspends on the first task, and resumes to comp
     { loopId: loop.id, goal: "Run the scripted pipeline." }
   );
 
+  await recordHostThread(handlers, launch.run.id);
   const firstExecution = await callTool<{ status: string }>(handlers.execute_workflow_attempt, {
     runId: launch.run.id,
     attemptId: launch.attempt.id
@@ -717,6 +710,7 @@ test("multi-agent workflow requires separate rubric-agent validator before compl
     loopId: loop.id,
     goal: "Draft and verify once."
   });
+  await recordHostThread(handlers, launch.run.id);
   await callTool(handlers.execute_workflow_attempt, {
     runId: launch.run.id,
     attemptId: launch.attempt.id
@@ -980,6 +974,19 @@ function v2DecisionPolicy() {
 async function callTool<T = any>(handler: (input: unknown) => Promise<TextToolResult>, input: unknown): Promise<T> {
   const result = await handler(input);
   return JSON.parse(result.content[0].text) as T;
+}
+
+async function recordHostThread(
+  handlers: ReturnType<typeof createToolHandlers>,
+  runId: string,
+  suffix = "host"
+) {
+  await callTool(handlers.record_codex_thread, {
+    runId,
+    threadId: `thread_${suffix}`,
+    threadTitle: `DittosLoop host thread ${suffix}`,
+    threadUrl: `codex://thread/thread_${suffix}`
+  });
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

@@ -47,7 +47,8 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 创建 loop 使用 `create_loop_contract`，但必须先通过创建前交互门。
 - Dynamic workflow script 使用 `workflowKind: "runtime_script"` 加字符串 `script`。
 - 用户可见正式 run 使用 `start_codex_session` 启动。
-- 正式 workflow 执行使用返回的 `runId` 和 `attemptId` 调用 `execute_workflow_attempt`。
+- 正式 workflow 执行前必须已绑定真实的宿主 Codex thread；只有 `launchRequest` 或 requested 状态不够。
+- 绑定完成后，使用返回的 `runId` 和 `attemptId` 调用 `execute_workflow_attempt`。
 - Runtime script 需要审批时，先检查 active script，再调用 `approve_runtime_script`。
 - 除非 blocker 明确，否则完成 run 前必须先记录验证。
 - 活跃 run 中的用户决策要先用 `record_human_request` 记录，再向用户询问，并用 `resolve_human_request` 关闭。
@@ -90,7 +91,8 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 创建 loop 前只展示 `Rubric Draft`，没有展示 `Loop Draft` 或等待必要确认。
 - 对外部平台监控、社媒采集、登录态、频率、成本、关键词歧义等场景做静默默认。
 - 创建 runtime script 后，在审批前直接执行。
-- 绕过 `start_codex_session` 启动用户可见 run；应使用 `start_codex_session`，再使用 `execute_workflow_attempt`。
+- 绕过 `start_codex_session` 启动用户可见 run；应使用 `start_codex_session`，绑定真实 Codex thread，再使用 `execute_workflow_attempt`。
+- 在只有 launch request、没有真实 `threadId` 或 `threadUrl` 时执行正式 workflow。
 - 在记录验证之前完成 run。
 - 记录 session 或 verification 结果时缺少可用的精确 `attemptId`、`workflowContextId`、`taskRunId`、`sessionId`、`stepId` 或 `idempotencyKey`。
 - 把 verifier 或 repair 写进 worker 主流程，而不是保留在外层验证或修复策略中。

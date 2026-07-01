@@ -607,6 +607,8 @@ export function createToolHandlers(service: LoopService): ToolHandlerMap {
     },
     execute_workflow_attempt: async (input) => {
       const args = executeWorkflowAttemptSchema.parse(input);
+      const detail = await service.getRunDetail(args.runId);
+      assertCodexThreadBoundForWorkflowExecution(detail.run);
       const run = await service.executeWorkflowAttempt(args.runId, {
         attemptId: args.attemptId
       });
@@ -823,6 +825,18 @@ async function toWorkflowToolResponse(service: LoopService, run: LoopRun): Promi
   };
 }
 
+function assertCodexThreadBoundForWorkflowExecution(run: LoopRun): void {
+  const codexSession = run.codexSession;
+  if (!codexSession || codexSession.mode !== "new_session" || codexSession.threadId || codexSession.threadUrl) {
+    return;
+  }
+
+  throw new Error(
+    `Codex thread must be bound before executing workflow attempts for run ${run.id}. ` +
+      "Create a new Codex thread from launchRequest.prompt, call record_codex_thread with the real threadId or threadUrl, then retry execute_workflow_attempt."
+  );
+}
+
 function isWorkflowSessionResultStatus(status: LoopRun["status"]): status is WorkflowSessionResultStatus {
   return status === "completed" || status === "failed" || status === "waiting_for_human";
 }
@@ -929,7 +943,8 @@ const toolDefinitions = [
   {
     name: "execute_workflow_attempt",
     title: "Execute workflow attempt",
-    description: "Execute the structured workflow inside an existing visible Codex session attempt.",
+    description:
+      "Execute the structured workflow inside an existing visible Codex session attempt. The requested top-level Codex thread must be recorded first with record_codex_thread.",
     schema: executeWorkflowAttemptSchema
   },
   {

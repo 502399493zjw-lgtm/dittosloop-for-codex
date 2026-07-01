@@ -41,11 +41,10 @@
 - 当 runtime script 需要审批时，检查 active script 后使用 `approve_runtime_script`。
 - 复用已有 loop 前使用 `list_loops`。
 - 使用 `start_codex_session` 创建可见 run、attempt、host Codex thread request、workflow context 和有界 memory excerpt。
-- `start_codex_session` 返回 launch request；如果没有自动出现可见 Codex thread，用返回的 prompt 创建 thread，并调用 `record_codex_thread`。
-- 当 thread 尚未绑定时，`open_codex_session` 可能返回 `launchRequest` 和 `recordThread`；用它们创建 Codex thread 并记录 `threadId` 来恢复。
-- 只有 `threadId` 时，把 `threadUrl` 记录为 `codex://thread/{threadId}`，或让 `record_codex_thread` 自动生成。
+- `start_codex_session` 返回 launch request；如果没有自动出现可见 Codex thread，用返回的 prompt 创建真实 thread，并调用 `record_codex_thread`。
+- 当 thread 尚未绑定时，`open_codex_session` 可能返回 `launchRequest` 和 `recordThread`；用它们创建 Codex thread 并记录真实 `threadId`，只有 host 提供可打开 URL 时才记录 `threadUrl`。
 - 不要混淆 workflow task `sessionId` 和 Codex thread ids。`sessionId` 只用于 `record_session_result` 定位。
-- 本地 workflow 可以在真实 Codex thread 绑定前完成，但 `codexSession.status` 不应视为 `completed`，直到记录了 `threadId` 或 `threadUrl`。
+- `execute_workflow_attempt` 要求正式 run 已绑定真实 Codex thread；只有 `launchRequest`、requested 状态或未绑定 thread 的 run 会被拒绝执行。
 - 当存在 worker profile 信息时，`start_codex_session` 会记录有效 profile snapshot 并执行 best-effort 本地检查；它不提供原生 Codex skill enforcement。
 - Required profile skills 状态为 missing 或 unknown 时会阻止启动，除非传入 `allowDegradedProfiles: true`。
 - 使用返回的 `runId` 和 `attemptId` 调用 `execute_workflow_attempt`，让 run、attempt、workflow context、task runs 和 result writeback 保持在同一条路径。
