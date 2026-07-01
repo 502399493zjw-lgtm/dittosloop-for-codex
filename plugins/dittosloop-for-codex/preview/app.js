@@ -747,7 +747,9 @@ async function copyNewLoopPrompt() {
   }
 
   const launch = await response.json();
+  window.__dittosloopNewLoopLaunchRequest = launch.launchRequest;
   window.__dittosloopNewLoopPrompt = launch.prompt;
+  await requestHostCodexThread(launch.launchRequest);
   const copied = await copyText(launch.prompt);
   if (!copied) {
     renderPromptNotice("已创建构建提示，但浏览器没有开放剪贴板。请手动复制下面的 prompt。", launch.prompt);
@@ -788,12 +790,13 @@ async function copyLoopLaunchPrompt(loop) {
     if (existingLaunch?.prompt) {
       window.__dittosloopLastLaunchRequest = existingLaunch.launchRequest;
       window.__dittosloopLastLaunchPrompt = existingLaunch.prompt;
+      await requestHostCodexThread(existingLaunch.launchRequest);
       const copied = await copyText(existingLaunch.prompt);
       if (!copied) {
-        renderPromptNotice("已创建启动请求，但浏览器没有开放剪贴板。请手动复制下面的 prompt。", existingLaunch.prompt);
+        renderPromptNotice("已创建启动请求，正在请求 Codex 打开新会话。浏览器没有开放剪贴板，请手动复制下面的 prompt。", existingLaunch.prompt);
         return;
       }
-      showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
+      showLaunchRequestToast(copied);
       return;
     }
 
@@ -812,15 +815,74 @@ async function copyLoopLaunchPrompt(loop) {
     const launch = await response.json();
     window.__dittosloopLastLaunchRequest = launch.launchRequest;
     window.__dittosloopLastLaunchPrompt = launch.prompt;
+    await requestHostCodexThread(launch.launchRequest);
     const copied = await copyText(launch.prompt);
     if (!copied) {
-      renderPromptNotice("已创建启动请求，但浏览器没有开放剪贴板。请手动复制下面的 prompt。", launch.prompt);
+      renderPromptNotice("已创建启动请求，正在请求 Codex 打开新会话。浏览器没有开放剪贴板，请手动复制下面的 prompt。", launch.prompt);
       return;
     }
-    showToast("已复制启动提示，请打开 Codex 新会话粘贴运行。");
+    showLaunchRequestToast(copied);
   } catch (error) {
     console.error(error);
     showToast("创建启动请求失败：预览服务已断开，请重新打开 DittosLoop 预览后再试。", "error");
+  }
+}
+
+function showLaunchRequestToast(copied) {
+  showToast(
+    copied
+      ? "已创建启动请求，正在请求 Codex 打开新会话。提示已复制，可手动粘贴运行。"
+      : "已创建启动请求，正在请求 Codex 打开新会话。"
+  );
+}
+
+async function requestHostCodexThread(launchRequest) {
+  if (!launchRequest) return false;
+
+  const createThread = window.codexApp?.createThread;
+  if (typeof createThread === "function") {
+    let thread;
+    try {
+      thread = await createThread.call(window.codexApp, launchRequest);
+    } catch (error) {
+      console.warn("Codex host createThread failed; falling back to launch event.", error);
+      return requestHostCodexThreadViaEvent(launchRequest);
+    }
+
+    await recordHostCreatedCodexThread(launchRequest, thread);
+    return true;
+  }
+
+  return requestHostCodexThreadViaEvent(launchRequest);
+}
+
+function requestHostCodexThreadViaEvent(launchRequest) {
+  window.dispatchEvent(new CustomEvent("dittosloop:create-codex-thread", { detail: launchRequest }));
+  window.parent?.postMessage({ type: "dittosloop:create-codex-thread", launchRequest }, "*");
+  return true;
+}
+
+async function recordHostCreatedCodexThread(launchRequest, thread) {
+  const threadId = thread?.threadId ?? thread?.id;
+  if (!launchRequest?.runId || !threadId) return false;
+
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(launchRequest.runId)}/codex-thread`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        threadId,
+        threadTitle: thread.threadTitle ?? thread.title,
+        threadUrl: thread.threadUrl ?? thread.url
+      })
+    });
+    if (!response.ok) {
+      console.warn("Codex thread recording failed after host created thread.", response.status);
+    }
+    return response.ok;
+  } catch (error) {
+    console.warn("Codex thread recording failed after host created thread.", error);
+    return false;
   }
 }
 

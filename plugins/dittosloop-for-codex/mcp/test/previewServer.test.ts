@@ -303,6 +303,12 @@ test("preview script includes codex session launch controls", async () => {
 
   expect(app).toContain("copyLoopLaunchPrompt");
   expect(app).toContain("copyNewLoopPrompt");
+  expect(app).toContain("requestHostCodexThread");
+  expect(app).toContain("requestHostCodexThreadViaEvent");
+  expect(app).toContain("recordHostCreatedCodexThread");
+  expect(app).toContain("window.codexApp?.createThread");
+  expect(app).toContain("dittosloop:create-codex-thread");
+  expect(app).toContain("window.parent?.postMessage");
   expect(app).toContain("copyText");
   expect(app).toContain("projectForLoop");
   expect(app).toContain("project?.name || project?.label");
@@ -316,10 +322,11 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("workspace-closed");
   expect(app).toContain("/codex-session");
   expect(app).toContain("/api/new-loop-session");
+  expect(app).toContain("window.__dittosloopNewLoopLaunchRequest = launch.launchRequest");
   expect(app).toContain("已复制成功，请打开 Codex 新会话粘贴构建。");
   expect(app).toContain("}, \"创建并复制启动请求\"),");
   expect(app).not.toContain("}, \"复制启动请求\"),");
-  expect(app).toContain("已复制启动提示，请打开 Codex 新会话粘贴运行。");
+  expect(app).toContain("已创建启动请求，正在请求 Codex 打开新会话。提示已复制，可手动粘贴运行。");
   expect(app).toContain("sessionActionForRun");
   expect(app).toContain("window.__dittosloopLastLaunchPrompt");
   expect(app).toContain("launchRequest");
@@ -329,7 +336,6 @@ test("preview script includes codex session launch controls", async () => {
   expect(app).toContain("window.confirm");
   expect(app).not.toContain("创建 Codex 会话请求");
   expect(app).not.toContain("Codex App 创建");
-  expect(app).not.toContain("dittosloop:create-codex-thread");
   expect(app).not.toContain("没有可用的 Codex App 项目");
   expect(app).not.toContain("projectChoices(currentSnapshot)[0]");
   expect(app).not.toContain("再次点击删除");
@@ -347,12 +353,16 @@ test("loop launch copy reuses an existing run prompt and reports failures with t
   expect(app).toContain("function existingLoopLaunch(loop)");
   expect(app).toContain("if (existingLaunch?.prompt)");
   expect(app).toContain("window.__dittosloopLastLaunchPrompt = existingLaunch.prompt");
-  expect(app).toContain("showToast(\"已复制启动提示，请打开 Codex 新会话粘贴运行。\")");
+  expect(app).toContain("await requestHostCodexThread(existingLaunch.launchRequest)");
+  expect(app).toContain("await requestHostCodexThread(launch.launchRequest)");
+  expect(app).toContain("return requestHostCodexThreadViaEvent(launchRequest)");
+  expect(app).toContain("Codex thread recording failed after host created thread.");
+  expect(app).toContain("showLaunchRequestToast(copied)");
   expect(app).toContain("showToast(`复制启动提示失败：${errorMessage(response,");
   expect(app).toContain("showToast(\"创建启动请求失败：预览服务已断开，请重新打开 DittosLoop 预览后再试。\", \"error\")");
   expect(app).toContain("showToast(\"读取运行详情失败：预览服务已断开，请重新打开 DittosLoop 预览后再试。\", \"error\")");
   expect(app).toContain("const copied = await copyText(launch.prompt)");
-  expect(app).toContain("renderPromptNotice(\"已创建启动请求，但浏览器没有开放剪贴板。请手动复制下面的 prompt。\", launch.prompt)");
+  expect(app).toContain("renderPromptNotice(\"已创建启动请求，正在请求 Codex 打开新会话。浏览器没有开放剪贴板，请手动复制下面的 prompt。\", launch.prompt)");
   const copyLaunchBody = app.slice(
     app.indexOf("async function copyLoopLaunchPrompt(loop)"),
     app.indexOf("function existingLoopLaunch(loop)")
