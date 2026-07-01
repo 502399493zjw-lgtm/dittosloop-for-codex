@@ -67,6 +67,19 @@ test("loop skill requires direct delivery of verified workflow results", async (
   assert.match(combined, /文件链接.*附后|链接.*次要|artifacts.*secondary/i);
 });
 
+test("loop skill requires final reply disclosure for coverage limits and memory writes", async () => {
+  const skill = await readFile(skillPath, "utf8");
+  const memory = await readSkillFile("references/memory-and-artifacts.md");
+  const combined = `${skill}\n${memory}`;
+
+  assert.match(combined, /本轮是公开无登录可验证扫描，不代表平台全量覆盖。/);
+  assert.match(combined, /搜索失败、登录墙、404、验证码、风控或访问限制/);
+  assert.match(combined, /最终用户回复必须具体说明问题、受影响范围/);
+  assert.match(combined, /最终用户回复必须提及已写入 memory/);
+  assert.match(memory, /final user-facing reply must mention that memory was written/);
+  assert.doesNotMatch(skill, /不要写入某个业务 loop memory/);
+});
+
 test("loop skill docs describe runtime script workflows without a generated local skill guide", async () => {
   const skill = await readFile(skillPath, "utf8");
   const createLoop = await readSkillFile("references/create-loop.md");

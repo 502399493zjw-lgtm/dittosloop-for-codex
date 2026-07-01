@@ -16,6 +16,8 @@ After verifier results are visible, the top-level visible Codex session decides 
 
 If yes, call `commit_memory`.
 
+When memory is written, the final user-facing reply must mention that memory was written and summarize the memory's category or purpose in one sentence. This is an execution note, not a replacement for the workflow result.
+
 Do not let lower-level workflow tasks decide long-term memory ownership by themselves; they should surface observations in their task results.
 
 ## Artifacts

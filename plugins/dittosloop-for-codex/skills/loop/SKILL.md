@@ -60,13 +60,17 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 当前 task session 仅支持省略 `sessionPolicy` 或 `sessionPolicy: "new"`。
 - 如果 workflow 工具返回 `sessionResult`，最终回复必须把 `sessionResult.result` 或 `sessionResult.finalAnswer` 作为主答案直接给用户；verification 说明、artifacts 和文件链接只能附后，不得用摘要、报告位置或链接替代验证后的 workflow result。
 - Workflow result 是唯一对外答案源。Chat/session 最终回复只能透传或引用验证后的 `sessionResult.result`、`sessionResult.finalAnswer` 或已完成 run 的 `result`，不得重新改写、压缩或拼接一份平行答案；执行说明、verification 和 artifacts 必须单独附后。
+- 执行中若出现任何可能影响结果覆盖率、质量、置信度或可复查性的具体问题，最终用户回复必须具体说明问题、受影响范围，以及对结论完整性或可信度的影响；不得只写在报告尾部、artifact、运行日志、memory 或 verification 中。
+- 对公开无登录平台扫描类 loop，如果任一目标平台出现搜索失败、登录墙、404、验证码、风控或访问限制并影响覆盖率，报告摘要区和最终聊天回复必须包含原句：“本轮是公开无登录可验证扫描，不代表平台全量覆盖。” 并紧接具体列出本轮遇到的平台、入口、失败形态和影响。
+- 如果验证后的 `sessionResult.result` 未包含上述执行问题披露，先补正 workflow/session result 或已完成 run 的对外结果，再发送最终聊天回复；不要在 chat 里临时拼一份绕过 workflow result 的平行答案。
+- 如果本轮写入、追加或更新了 loop memory，最终用户回复必须提及已写入 memory，并用一句话说明写入的内容类别或用途；这属于执行说明，不能替代 workflow result 主答案。
 
 ## 偏好捕获
 
 当用户针对 DittosLoop 的输出、循环行为、报告格式、验证方式、产物形态或交互流程给出纠正性反馈时：
 
 1. 先将反馈应用到当前回答或当前活跃 loop 结果中。
-2. 判断反馈对象：如果反馈影响当前业务 loop 的后续执行，走 workflow revision、verification 更新或 loop memory；如果反馈影响本 skill 的通用规则，不要写入某个业务 loop memory，应把它作为 skill 文档修订处理。
+2. 判断反馈对象：如果反馈影响当前业务 loop 的后续执行，走 workflow revision、verification 更新或 loop memory；如果反馈影响本 skill 的通用规则，应把它作为 skill 文档修订处理。
 3. 如果该反馈看起来有助于改善当前 loop，用中文简短追问：“这个反馈要沉淀下来，用来改善整个 loop 吗？”
 4. 用户明确同意后，再判断反馈应落到当前 workflow、任务输出要求、verification criteria/validators/decision policy、运行记录，还是长期记忆。
 5. 如果反馈会影响当前 loop 之后的执行方式，应通过 workflow revision 更新当前 loop；如果反馈会影响验收标准，应更新 verification criteria/validators/decision policy。
@@ -101,5 +105,6 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 在记录验证之前完成 run。
 - 记录 session 或 verification 结果时缺少可用的精确 `attemptId`、`workflowContextId`、`taskRunId`、`sessionId`、`stepId` 或 `idempotencyKey`。
 - 把 workflow task、session transcript 或手工摘要当成最终 chat 答案，导致 preview、history 和 chat 展示的结果层级不一致。
+- 执行中出现会影响结果质量、覆盖范围或置信度的问题，却只在报告尾部、运行记录、memory 或 verification 中写，最终聊天回复没有具体说明。
 - 把 verifier 或 repair 写进 worker 主流程，而不是保留在外层验证或修复策略中。
 - 在活跃 run 中询问用户输入时，没有先记录打开的 request。
