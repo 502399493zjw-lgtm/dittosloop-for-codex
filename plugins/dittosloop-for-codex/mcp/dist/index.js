@@ -28651,6 +28651,8 @@ function withVerificationInputKind(contract, inputKind) {
 }
 function applyContractPatch(baseContract, patch) {
   if (patch.script !== void 0) {
+    const runtimeScriptPatch = typeof patch.script === "string";
+    const baseRuntimeWorkflow = baseContract.workflow.kind === "runtime_script" ? baseContract.workflow : void 0;
     return {
       ...baseContract,
       ...patch,
@@ -28658,6 +28660,11 @@ function applyContractPatch(baseContract, patch) {
       title: patch.title ?? baseContract.title,
       goal: patch.goal ?? baseContract.goal,
       workflow: void 0,
+      workflowKind: patch.workflowKind ?? (runtimeScriptPatch ? "runtime_script" : void 0),
+      args: patch.args ?? (runtimeScriptPatch ? baseRuntimeWorkflow?.args : void 0),
+      limits: patch.limits ?? (runtimeScriptPatch ? baseRuntimeWorkflow?.limits : void 0),
+      approval: patch.approval ?? (runtimeScriptPatch ? baseRuntimeWorkflow?.approval : void 0),
+      journal: patch.journal ?? (runtimeScriptPatch ? baseRuntimeWorkflow?.journal : void 0),
       body: void 0,
       verification: patch.verification ?? baseContract.verification,
       repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,

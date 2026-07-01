@@ -5015,6 +5015,9 @@ function applyContractPatch(
   // A patch may carry a script instead of a body. When it does, defer to
   // the compiler and do not inherit the base body.
   if (patch.script !== undefined) {
+    const runtimeScriptPatch = typeof patch.script === "string";
+    const baseRuntimeWorkflow = baseContract.workflow.kind === "runtime_script" ? baseContract.workflow : undefined;
+
     return {
       ...baseContract,
       ...patch,
@@ -5022,6 +5025,11 @@ function applyContractPatch(
       title: patch.title ?? baseContract.title,
       goal: patch.goal ?? baseContract.goal,
       workflow: undefined,
+      workflowKind: patch.workflowKind ?? (runtimeScriptPatch ? "runtime_script" : undefined),
+      args: patch.args ?? (runtimeScriptPatch ? baseRuntimeWorkflow?.args : undefined),
+      limits: patch.limits ?? (runtimeScriptPatch ? baseRuntimeWorkflow?.limits : undefined),
+      approval: patch.approval ?? (runtimeScriptPatch ? baseRuntimeWorkflow?.approval : undefined),
+      journal: patch.journal ?? (runtimeScriptPatch ? baseRuntimeWorkflow?.journal : undefined),
       body: undefined,
       verification: patch.verification ?? baseContract.verification,
       repairPolicy: patch.repairPolicy ?? baseContract.repairPolicy,

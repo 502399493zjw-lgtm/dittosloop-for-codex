@@ -1792,6 +1792,52 @@ test("proposes workflow revisions from a visible Codex session without replacing
   });
 });
 
+test("preserves runtime script args and limits when revising the script source", async () => {
+  const service = await createServiceWithSequentialIds();
+  const formal = await service.createLoopContract({
+    title: "Runtime script monitor",
+    goal: "Run a dynamic monitor with stable defaults",
+    workflowKind: "runtime_script",
+    script: "return args.target;",
+    args: { target: "codex", maxItems: 5 },
+    limits: { maxAgentCalls: 3, timeoutMs: 60000 },
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "The workflow completes", severity: "must" }]
+    }
+  });
+  const launch = await service.startCodexSessionRun(formal.id, { goal: "Run once" });
+
+  const revision = await service.proposeWorkflowRevision(formal.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id,
+    rationale: "Update orchestration without changing runtime defaults.",
+    patch: {
+      script: "return `${args.target}:${args.maxItems}`;"
+    }
+  });
+
+  expect(revision.contract.workflow).toMatchObject({
+    kind: "runtime_script",
+    source: "return `${args.target}:${args.maxItems}`;",
+    args: { target: "codex", maxItems: 5 },
+    limits: { maxAgentCalls: 3, timeoutMs: 60000 }
+  });
+
+  await service.promoteWorkflowRevision(formal.id, revision.id, {
+    runId: launch.run.id,
+    attemptId: launch.attempt.id
+  });
+
+  const snapshot = await service.getSnapshot();
+  expect(snapshot.formalContracts[0].workflow).toMatchObject({
+    kind: "runtime_script",
+    source: "return `${args.target}:${args.maxItems}`;",
+    args: { target: "codex", maxItems: 5 },
+    limits: { maxAgentCalls: 3, timeoutMs: 60000 }
+  });
+});
+
 test("requires visible run and attempt context for workflow revision mutations", async () => {
   const service = await createServiceWithSequentialIds();
   const formal = await createFormalLoop(service);
