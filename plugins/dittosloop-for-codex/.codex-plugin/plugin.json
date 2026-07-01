@@ -1,6 +1,6 @@
 {
   "name": "dittosloop-for-codex",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Turn Codex work into visible local Dittos loops with run history, verification, memory, and preview.",
   "author": {
     "name": "Dittos Loop"
