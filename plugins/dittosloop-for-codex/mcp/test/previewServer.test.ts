@@ -527,9 +527,9 @@ test("serves the loop snapshot api", async () => {
   const service = await createService({
     codexProjects: [
       {
-        id: "/Users/edisonzhong/Documents/dittos loop",
+        id: "/workspace/dittos-loop",
         name: "dittos loop",
-        path: "/Users/edisonzhong/Documents/dittos loop"
+        path: "/workspace/dittos-loop"
       }
     ]
   });
@@ -681,7 +681,7 @@ test("serves the templates gallery api", async () => {
       desc: "把测试一路修到全过、lint 干净",
       trigger: "手动",
       checks: ["全部测试通过"],
-      buildPrompt: "请用 DittosLoop For Codex 创建一个 loop。Title: 测试修绿。Trigger: manual。Verification checks: (1) 全部测试通过。请调用 create_loop。",
+      buildPrompt: "请用 DittosLoop For Codex 创建一个 loop。Title: 测试修绿。Trigger: manual。Verification checks: (1) 全部测试通过。请调用 create_loop_contract。",
       source: {
         label: "awesome-agent-loops",
         url: "https://github.com/serenakeyitan/awesome-agent-loops"
@@ -702,7 +702,7 @@ test("serves the templates gallery api", async () => {
       category: "engineering",
       cadence: "manual",
       checks: ["全部测试通过"],
-      buildPrompt: expect.stringContaining("create_loop"),
+      buildPrompt: expect.stringContaining("create_loop_contract"),
       source: {
         label: "awesome-agent-loops",
         url: "https://github.com/serenakeyitan/awesome-agent-loops"
@@ -722,7 +722,7 @@ test("serves a template prompt api without launching a session", async () => {
       desc: "把测试一路修到全过、lint 干净",
       trigger: "手动",
       checks: ["全部测试通过"],
-      buildPrompt: "请用 DittosLoop For Codex 创建一个 loop。Title: 测试修绿。Trigger: manual。Verification checks: (1) 全部测试通过。请调用 create_loop。"
+      buildPrompt: "请用 DittosLoop For Codex 创建一个 loop。Title: 测试修绿。Trigger: manual。Verification checks: (1) 全部测试通过。请调用 create_loop_contract。"
     }
   ]);
   const server = await startPreviewServer({
@@ -925,7 +925,7 @@ test("launches a template as a visible codex terminal session on macOS", async (
       desc: "测试命令转义",
       trigger: "手动",
       checks: ["prompt 保持完整"],
-      buildPrompt: "Title: 带引号任务。Intent: 处理 \"quote\" 和 \\ slash。Trigger: manual。Verification checks: (1) prompt 保持完整。请调用 create_loop。"
+      buildPrompt: "Title: 带引号任务。Intent: 处理 \"quote\" 和 \\ slash。Trigger: manual。Verification checks: (1) prompt 保持完整。请调用 create_loop_contract。"
     }
   ]);
   const spawns: Array<{ command: string; args: string[]; options: unknown }> = [];
@@ -976,7 +976,7 @@ test("returns a host-mediated template codex session request without opening Ter
       desc: "交给 Codex App 打开",
       trigger: "手动",
       checks: ["返回 launchRequest"],
-      buildPrompt: "Title: 宿主打开。Trigger: manual。Verification checks: (1) 返回 launchRequest。请调用 create_loop。"
+      buildPrompt: "Title: 宿主打开。Trigger: manual。Verification checks: (1) 返回 launchRequest。请调用 create_loop_contract。"
     }
   ]);
   const server = await startPreviewServer({
@@ -1029,7 +1029,7 @@ test("returns a copyable template prompt outside macOS", async () => {
       desc: "非 macOS 降级",
       trigger: "手动",
       checks: ["返回 prompt"],
-      buildPrompt: "Title: 手动复制。Trigger: manual。Verification checks: (1) 返回 prompt。请调用 create_loop。"
+      buildPrompt: "Title: 手动复制。Trigger: manual。Verification checks: (1) 返回 prompt。请调用 create_loop_contract。"
     }
   ]);
   const server = await startPreviewServer({
@@ -1082,9 +1082,9 @@ test("creates a host-mediated new loop codex session request", async () => {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+      codexProjectId: "/workspace/dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath: "/workspace/dittos-loop"
     })
   });
   const launch = await response.json();
@@ -1765,9 +1765,9 @@ test("starts a codex session run from the preview api", async () => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       goal: "Check today updates",
-      codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+      codexProjectId: "/workspace/dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath: "/workspace/dittos-loop"
     })
   });
   const launch = await response.json();
@@ -1777,13 +1777,13 @@ test("starts a codex session run from the preview api", async () => {
     run: {
       loopId: loop.id,
       goal: "Check today updates",
-      codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+      codexProjectId: "/workspace/dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop",
+      projectPath: "/workspace/dittos-loop",
       codexSession: {
         mode: "new_session",
         status: "requested",
-        codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+        codexProjectId: "/workspace/dittos-loop",
         projectLabel: "dittos loop"
       }
     },

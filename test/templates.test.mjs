@@ -84,6 +84,11 @@ const expectedHookTemplates = [
 test("includes the selected Hook Engineering template cards", async () => {
   const templates = await readTemplates();
 
+  for (const template of templates) {
+    assert.match(template.buildPrompt, /\bcreate_loop_contract\b/, `${template.id} should use create_loop_contract`);
+    assert.doesNotMatch(template.buildPrompt, /\bcreate_loop\b/, `${template.id} should use create_loop_contract`);
+  }
+
   for (const expected of expectedHookTemplates) {
     const actual = byId(templates, expected.id);
     assert.ok(actual, `missing template ${expected.id}`);
@@ -96,7 +101,7 @@ test("includes the selected Hook Engineering template cards", async () => {
     assert.equal(actual.source?.label, "数字生命卡兹克");
     assert.equal(actual.source?.url, "https://x.com/khazix0918/status/2070403772703285575?s=46");
     assert.match(actual.buildPrompt, /请用 DittosLoop For Codex 创建一个循环/);
-    assert.match(actual.buildPrompt, /请调用 create_loop 创建该循环/);
+    assert.match(actual.buildPrompt, /请调用 create_loop_contract 创建该循环/);
     assert.match(actual.buildPrompt, /get_preview_url/);
     for (const phrase of expected.promptIncludes) {
       assert.match(actual.buildPrompt, new RegExp(phrase), `${expected.id} prompt should include ${phrase}`);

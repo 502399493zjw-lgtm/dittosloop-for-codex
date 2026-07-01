@@ -1,7 +1,22 @@
 {
   "name": "@dittosloop/for-codex-mcp",
-  "version": "0.1.0",
+  "version": "0.1.6",
+  "description": "Local MCP runtime for the DittosLoop For Codex plugin.",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/502399493zjw-lgtm/dittosloop-for-codex.git",
+    "directory": "plugins/dittosloop-for-codex/mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/502399493zjw-lgtm/dittosloop-for-codex/issues"
+  },
+  "homepage": "https://github.com/502399493zjw-lgtm/dittosloop-for-codex/tree/main/plugins/dittosloop-for-codex/mcp#readme",
+  "packageManager": "npm@11.12.1",
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

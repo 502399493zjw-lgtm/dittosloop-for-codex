@@ -1,7 +1,21 @@
 {
   "name": "dittosloop-for-codex-repo",
-  "version": "0.1.0",
+  "version": "0.1.6",
+  "description": "Git-backed Codex plugin marketplace repo for DittosLoop For Codex.",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/502399493zjw-lgtm/dittosloop-for-codex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/502399493zjw-lgtm/dittosloop-for-codex/issues"
+  },
+  "homepage": "https://github.com/502399493zjw-lgtm/dittosloop-for-codex#readme",
+  "packageManager": "npm@11.12.1",
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "scripts": {
     "build": "npm --prefix plugins/dittosloop-for-codex/mcp run build",

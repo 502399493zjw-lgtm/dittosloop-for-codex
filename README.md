@@ -1,6 +1,6 @@
 # DittosLoop For Codex
 
-`DittosLoop For Codex` is a local-first Codex plugin that turns delegated work into visible Dittos loops. It bundles a skill, a local MCP runtime, JSON-backed loop state, and a browser preview for loop contracts, runs, verification, human requests, memory, and artifacts.
+`DittosLoop For Codex` is a local-first Codex plugin that turns delegated work into visible Dittos loops. It bundles a skill, a local MCP runtime, JSON-backed loop state, reminder hooks, and a browser preview for loop contracts, runs, verification, human requests, memory, and artifacts.
 
 This repo is shaped as a GitHub-ready Codex plugin marketplace source. The first milestone is local install and local preview.
 
@@ -51,9 +51,26 @@ npm run check
 - `.agents/plugins/marketplace.json`: marketplace entry for this repo
 - `plugins/dittosloop-for-codex/skills/loop/SKILL.md`: installed loop workflow
 - `plugins/dittosloop-for-codex/mcp`: TypeScript MCP runtime
+- `plugins/dittosloop-for-codex/hooks`: reminder hooks for loopable work
 - `plugins/dittosloop-for-codex/preview`: local preview UI
 - `scripts/validate-plugin.mjs`: local plugin/package validator
 - `examples/state.sample.json`: preview-ready sample loop state
+
+## Hook Behavior
+
+The plugin includes a lightweight `loopable-reminder` hook. It can remind Codex
+that recurring, stateful, periodically verifiable, or future-handoff work may be
+worth turning into a loop.
+
+Hooks are not the source of truth. They do not create, schedule, persist, or run
+loops silently. Core loop contracts, runs, attempts, verification, memory, human
+requests, and artifacts are owned by the MCP runtime.
+
+The reminder hook stores its own small cooldown state outside the repo under:
+
+```text
+~/.codex/dittosloop-for-codex/loopable-reminder-state.json
+```
 
 ## Local Setup
 
@@ -159,6 +176,9 @@ Current workflow task sessions only support omitted `sessionPolicy` or `sessionP
 
 - `create_loop_contract`
 - `list_loops`
+- `pause_loop`
+- `resume_loop`
+- `approve_runtime_script`
 - `start_codex_session`
 - `execute_workflow_attempt`
 - `propose_workflow_revision`
@@ -167,6 +187,7 @@ Current workflow task sessions only support omitted `sessionPolicy` or `sessionP
 - `reject_workflow_revision`
 - `record_codex_thread`
 - `record_session_result`
+- `record_validator_result`
 - `open_codex_session`
 - `start_attempt`
 - `complete_attempt`
@@ -174,6 +195,7 @@ Current workflow task sessions only support omitted `sessionPolicy` or `sessionP
 - `record_verification`
 - `record_human_request`
 - `resolve_human_request`
+- `read_loop_memory`
 - `commit_memory`
 - `add_artifact`
 - `mark_run_repairing`
@@ -211,6 +233,10 @@ npm --prefix plugins/dittosloop-for-codex/mcp run build
 ```
 
 When manifest metadata or MCP tools change, rebuild, run `npm run check`, reinstall or refresh the plugin from the marketplace, restart Codex, and test in a new thread.
+
+The repository packages are marked `private` to prevent accidental npm
+publication. The supported distribution path is this Git-backed Codex plugin
+marketplace repo.
 
 ## Sharing
 

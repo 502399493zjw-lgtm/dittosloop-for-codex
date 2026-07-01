@@ -667,33 +667,33 @@ test("normalizes project fields on formal loop creation into the contract bindin
       mode: "after_workflow",
       rubrics: [{ id: "zh", label: "中文日报", requirement: "输出中文日报", severity: "must" }]
     },
-    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    codexProjectId: "/workspace/dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    projectPath: "/workspace/dittos-loop"
   });
 
   expect(formal.projectBinding).toEqual({
-    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    codexProjectId: "/workspace/dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    projectPath: "/workspace/dittos-loop"
   });
 
   await expect(service.getSnapshot()).resolves.toMatchObject({
     loops: [
       {
         id: formal.id,
-        codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+        codexProjectId: "/workspace/dittos-loop",
         projectLabel: "dittos loop",
-        projectPath: "/Users/edisonzhong/Documents/dittos loop"
+        projectPath: "/workspace/dittos-loop"
       }
     ],
     formalContracts: [
       {
         id: formal.id,
         projectBinding: {
-          codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+          codexProjectId: "/workspace/dittos-loop",
           projectLabel: "dittos loop",
-          projectPath: "/Users/edisonzhong/Documents/dittos loop"
+          projectPath: "/workspace/dittos-loop"
         }
       }
     ]
@@ -1985,7 +1985,7 @@ test("uses the configured Codex session bridge as the default formal workflow ex
     projectBinding: {
       codexProjectId: "project-dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath: "/workspace/dittos-loop"
     }
   });
 
@@ -2015,7 +2015,7 @@ test("uses the configured Codex session bridge as the default formal workflow ex
     threadUrl: "codex://thread/thread_1",
     codexProjectId: "project-dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop",
+    projectPath: "/workspace/dittos-loop",
     subagents: [
       {
         role: "日报 worker",
@@ -2053,7 +2053,7 @@ test("uses the configured Codex session bridge as the default formal workflow ex
       },
       projectId: "project-dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath: "/workspace/dittos-loop"
     }
   ]);
   const detail = await service.getRunDetail(run.id);
@@ -2115,7 +2115,7 @@ test("keeps a bridge-backed formal workflow running while the Codex session resu
     projectBinding: {
       codexProjectId: "project-dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath: "/workspace/dittos-loop"
     }
   });
 
@@ -2134,7 +2134,7 @@ test("keeps a bridge-backed formal workflow running while the Codex session resu
       status: "requested",
       codexProjectId: "project-dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop",
+      projectPath: "/workspace/dittos-loop",
       subagents: [
         {
           role: "日报 worker",
@@ -2387,17 +2387,17 @@ test("binds loop runs to the Codex project selected for the loop", async () => {
   const loop = await createFormalLoop(service, {
     title: "Project monitor",
     goal: "Watch a Codex project",
-    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    codexProjectId: "/workspace/dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    projectPath: "/workspace/dittos-loop"
   });
 
   const { run } = await service.startCodexSessionRun(loop.id, { goal: "Run scheduled check" });
 
   expect(run).toMatchObject({
-    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    codexProjectId: "/workspace/dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    projectPath: "/workspace/dittos-loop"
   });
 });
 
@@ -2436,24 +2436,24 @@ test("starts a host-mediated Codex session launch request with project binding a
 
   const launch = await service.startCodexSessionRun(loop.id, {
     goal: "Check today updates",
-    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    codexProjectId: "/workspace/dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    projectPath: "/workspace/dittos-loop"
   });
 
   expect(launch.run).toMatchObject({
     id: "run_1",
     loopId: loop.id,
     goal: "Check today updates",
-    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    codexProjectId: "/workspace/dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop",
+    projectPath: "/workspace/dittos-loop",
     codexSession: {
       mode: "new_session",
       status: "requested",
-      codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+      codexProjectId: "/workspace/dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop",
+      projectPath: "/workspace/dittos-loop",
       subagents: [
         {
           role: "Run worker",
@@ -2472,9 +2472,9 @@ test("starts a host-mediated Codex session launch request with project binding a
     runId: launch.run.id,
     loopId: loop.id,
     title: "DittosLoop: AI Dev Tools Update Monitor",
-    codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+    codexProjectId: "/workspace/dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop",
+    projectPath: "/workspace/dittos-loop",
     prompt: launch.prompt
   });
   expect(launch.prompt).toContain("AI Dev Tools Update Monitor");
@@ -2483,9 +2483,9 @@ test("starts a host-mediated Codex session launch request with project binding a
   await expect(service.getRunDetail(launch.run.id)).resolves.toMatchObject({
     run: { codexSession: { status: "requested" } },
     loop: {
-      codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+      codexProjectId: "/workspace/dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath: "/workspace/dittos-loop"
     },
     events: [
       {
@@ -2494,9 +2494,9 @@ test("starts a host-mediated Codex session launch request with project binding a
           codexSession: {
             mode: "new_session",
             status: "requested",
-            codexProjectId: "/Users/edisonzhong/Documents/dittos loop",
+            codexProjectId: "/workspace/dittos-loop",
             projectLabel: "dittos loop",
-            projectPath: "/Users/edisonzhong/Documents/dittos loop",
+            projectPath: "/workspace/dittos-loop",
             subagents: [{ role: "Run worker", status: "requested" }]
           }
         }
@@ -4999,7 +4999,7 @@ test("opens a Codex session backed run without creating a new run", async () => 
     projectBinding: {
       codexProjectId: "project-dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath: "/workspace/dittos-loop"
     }
   });
   const launch = await service.startCodexSessionRun(formal.id, {

@@ -11,14 +11,14 @@ test("uses explicit runtime environment settings", () => {
       DITTOSLOOP_PREVIEW_PORT: "49999",
       DITTOSLOOP_CODEX_PROJECTS: JSON.stringify([
         {
-          id: "/Users/tester/project",
+          id: "/home/tester/project",
           label: "Tester Project",
-          path: "/Users/tester/project"
+          path: "/home/tester/project"
         }
       ])
     },
     "/plugin/root",
-    "/Users/tester"
+    "/home/tester"
   );
 
   expect(config).toEqual({
@@ -29,19 +29,19 @@ test("uses explicit runtime environment settings", () => {
     templatesFile: join("/plugin/root", "templates", "templates.json"),
     codexProjects: [
       {
-        id: "/Users/tester/project",
+        id: "/home/tester/project",
         name: "Tester Project",
-        path: "/Users/tester/project"
+        path: "/home/tester/project"
       }
     ]
   });
 });
 
 test("defaults to local Codex data and preview paths", () => {
-  const config = resolveRuntimeConfig({}, "/plugin/root", "/Users/tester");
+  const config = resolveRuntimeConfig({}, "/plugin/root", "/home/tester");
 
   expect(config).toEqual({
-    dataDir: join("/Users/tester", ".codex", "dittosloop-for-codex"),
+    dataDir: join("/home/tester", ".codex", "dittosloop-for-codex"),
     previewPort: 47888,
     previewBaseUrl: "http://127.0.0.1:47888",
     staticDir: join("/plugin/root", "preview"),
@@ -55,17 +55,17 @@ test("parses a single codex project from runtime environment", () => {
     {
       DITTOSLOOP_CODEX_PROJECT_ID: "project-id",
       DITTOSLOOP_CODEX_PROJECT_NAME: "Project Name",
-      DITTOSLOOP_CODEX_PROJECT_PATH: "/Users/tester/project"
+      DITTOSLOOP_CODEX_PROJECT_PATH: "/home/tester/project"
     },
     "/plugin/root",
-    "/Users/tester"
+    "/home/tester"
   );
 
   expect(config.codexProjects).toEqual([
     {
       id: "project-id",
       name: "Project Name",
-      path: "/Users/tester/project"
+      path: "/home/tester/project"
     }
   ]);
 });

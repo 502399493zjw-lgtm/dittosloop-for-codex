@@ -28,7 +28,8 @@ afterEach(async () => {
 
 test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and preview detail", async () => {
   const sessionBridge = createCompletedSessionBridge();
-  const service = await createService(sessionBridge);
+  const projectPath = await createProjectPath();
+  const service = await createService(sessionBridge, { projectPath });
   const handlers = createToolHandlers(service);
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
   servers.push(server);
@@ -40,7 +41,7 @@ test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and
     projectBinding: {
       codexProjectId: "dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath
     },
     body: {
       steps: [
@@ -156,7 +157,7 @@ test("runs a formal fan-out workflow end to end through MCP, Codex sessions, and
     goal: "执行一次真实端到端日报闭环。",
     codexProjectId: "dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    projectPath
   });
   await recordHostThread(handlers, launch.run.id);
   const run = await callTool(handlers.execute_workflow_attempt, {
@@ -296,7 +297,8 @@ test("resumes a suspended task workflow with subagent metadata through session w
   };
 
   const sessionBridge = createPendingSessionBridge();
-  const service = await createService(sessionBridge);
+  const projectPath = await createProjectPath();
+  const service = await createService(sessionBridge, { projectPath });
   const handlers = createToolHandlers(service);
   const server = await startPreviewServer({ service, staticDir: previewDir, port: 0 });
   servers.push(server);
@@ -308,7 +310,7 @@ test("resumes a suspended task workflow with subagent metadata through session w
     projectBinding: {
       codexProjectId: "dittos-loop",
       projectLabel: "dittos loop",
-      projectPath: "/Users/edisonzhong/Documents/dittos loop"
+      projectPath
     },
     body: {
       steps: [
@@ -379,7 +381,7 @@ test("resumes a suspended task workflow with subagent metadata through session w
     goal: "Start the local suspended workflow.",
     codexProjectId: "dittos-loop",
     projectLabel: "dittos loop",
-    projectPath: "/Users/edisonzhong/Documents/dittos loop"
+    projectPath
   });
 
   expect(launch.launchRequest.workflowPlan.steps.find((step) => step.id === "collect")?.subagent).toEqual(
@@ -826,10 +828,11 @@ test("multi-agent workflow requires separate rubric-agent validator before compl
   ]);
 });
 
-async function createService(sessionBridge: CodexSessionBridge) {
+async function createService(sessionBridge: CodexSessionBridge, options: { projectPath?: string } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "dittosloop-e2e-"));
   tempDirs.push(dir);
   const counters = new Map<string, number>();
+  const projectPath = options.projectPath ?? (await createProjectPath());
 
   return new LoopService({
     store: new LoopStore(dir),
@@ -844,11 +847,17 @@ async function createService(sessionBridge: CodexSessionBridge) {
       {
         id: "dittos-loop",
         name: "dittos loop",
-        path: "/Users/edisonzhong/Documents/dittos loop"
+        path: projectPath
       }
     ],
     sessionBridge
   });
+}
+
+async function createProjectPath() {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-project-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 function createCompletedSessionBridge() {

@@ -30959,7 +30959,7 @@ function createToolHandlers(service) {
 function createMcpServer(service) {
   const server = new McpServer({
     name: "dittosloop-for-codex",
-    version: "0.1.0"
+    version: "0.1.6"
   });
   registerDittosLoopTools(server, createToolHandlers(service));
   return server;
