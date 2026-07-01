@@ -10,14 +10,18 @@ export async function runRuntimeScriptInVm(input: RuntimeScriptRunInput): Promis
     throw new Error(`Runtime script failed validation: ${validation.errors.join("; ")}`);
   }
 
-  const clonedArgs = cloneRuntimeScriptArgs(input.args);
-  const api = createRuntimeScriptScheduler(input);
+  const runtimeArgs = createRuntimeScriptContextArgs(input.args, input.runtimeContextTimeIso ?? input.now());
+  const runtimeInput: RuntimeScriptRunInput = {
+    ...input,
+    args: runtimeArgs
+  };
+  const api = createRuntimeScriptScheduler(runtimeInput);
 
   return await new Promise<unknown>((resolve, reject) => {
     const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(runtimeScriptWorkerSource)}`), {
       workerData: {
         source: input.source,
-        args: clonedArgs,
+        args: runtimeArgs,
         limits: input.limits,
         contractId: input.contractId
       }
@@ -92,6 +96,27 @@ export async function runRuntimeScriptInVm(input: RuntimeScriptRunInput): Promis
       }
     };
   });
+}
+
+export function createRuntimeScriptContextArgs(
+  args: Record<string, unknown>,
+  nowIso: string
+): Record<string, unknown> {
+  const clonedArgs = cloneRuntimeScriptArgs(args);
+  const dateKey = deriveRuntimeScriptDateKey(nowIso);
+
+  return {
+    triggerTimeIso: nowIso,
+    observedTimeIso: nowIso,
+    runKey: dateKey,
+    dateKey,
+    ...clonedArgs
+  };
+}
+
+function deriveRuntimeScriptDateKey(nowIso: string): string {
+  const datePart = nowIso.split("T", 1)[0]?.trim();
+  return datePart || nowIso.slice(0, 10);
 }
 
 function cloneRuntimeScriptArgs(args: Record<string, unknown>): Record<string, unknown> {

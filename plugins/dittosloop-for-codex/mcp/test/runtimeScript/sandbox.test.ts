@@ -95,6 +95,52 @@ function createRunInput(overrides: Partial<RuntimeScriptRunInput> = {}): Runtime
 }
 
 describe("runRuntimeScriptInVm", () => {
+  test("injects runtime observation time args", async () => {
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return {
+          triggerTimeIso: args.triggerTimeIso,
+          observedTimeIso: args.observedTimeIso,
+          runKey: args.runKey,
+          dateKey: args.dateKey
+        };
+      `,
+      now: () => "2026-07-01T09:00:52.603Z"
+    }));
+
+    expect(result).toEqual({
+      triggerTimeIso: "2026-07-01T09:00:52.603Z",
+      observedTimeIso: "2026-07-01T09:00:52.603Z",
+      runKey: "2026-07-01",
+      dateKey: "2026-07-01"
+    });
+  });
+
+  test("does not override explicit runtime context args", async () => {
+    const result = await runRuntimeScriptInVm(createRunInput({
+      source: `
+        return {
+          triggerTimeIso: args.triggerTimeIso,
+          observedTimeIso: args.observedTimeIso,
+          runKey: args.runKey,
+          dateKey: args.dateKey
+        };
+      `,
+      args: {
+        triggerTimeIso: "2026-06-30T23:00:00.000Z",
+        runKey: "manual-run"
+      },
+      now: () => "2026-07-01T09:00:52.603Z"
+    }));
+
+    expect(result).toEqual({
+      triggerTimeIso: "2026-06-30T23:00:00.000Z",
+      observedTimeIso: "2026-07-01T09:00:52.603Z",
+      runKey: "manual-run",
+      dateKey: "2026-07-01"
+    });
+  });
+
   test('return await agent("hello") returns fake bridge output', async () => {
     const bridge = new FakeSubagentBridge([completed("hello from bridge")]);
 

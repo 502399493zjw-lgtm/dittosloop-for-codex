@@ -24148,13 +24148,17 @@ async function runRuntimeScriptInVm(input) {
   if (!validation.ok) {
     throw new Error(`Runtime script failed validation: ${validation.errors.join("; ")}`);
   }
-  const clonedArgs = cloneRuntimeScriptArgs(input.args);
-  const api = createRuntimeScriptScheduler(input);
+  const runtimeArgs = createRuntimeScriptContextArgs(input.args, input.runtimeContextTimeIso ?? input.now());
+  const runtimeInput = {
+    ...input,
+    args: runtimeArgs
+  };
+  const api = createRuntimeScriptScheduler(runtimeInput);
   return await new Promise((resolve, reject) => {
     const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(runtimeScriptWorkerSource)}`), {
       workerData: {
         source: input.source,
-        args: clonedArgs,
+        args: runtimeArgs,
         limits: input.limits,
         contractId: input.contractId
       }
@@ -24221,6 +24225,21 @@ async function runRuntimeScriptInVm(input) {
       }
     };
   });
+}
+function createRuntimeScriptContextArgs(args, nowIso) {
+  const clonedArgs = cloneRuntimeScriptArgs(args);
+  const dateKey = deriveRuntimeScriptDateKey(nowIso);
+  return {
+    triggerTimeIso: nowIso,
+    observedTimeIso: nowIso,
+    runKey: dateKey,
+    dateKey,
+    ...clonedArgs
+  };
+}
+function deriveRuntimeScriptDateKey(nowIso) {
+  const datePart = nowIso.split("T", 1)[0]?.trim();
+  return datePart || nowIso.slice(0, 10);
 }
 function cloneRuntimeScriptArgs(args) {
   try {
@@ -25273,6 +25292,7 @@ var LoopService = class {
         journal: createLoopStoreRuntimeScriptJournal(this.options.store),
         subagentBridge: this.createRuntimeScriptSubagentBridge(this.options.sessionBridge, run, attempt, workflowContext, contract),
         emit: emitRuntimeEvent,
+        runtimeContextTimeIso: run.createdAt,
         now: this.now
       });
     } catch (error2) {

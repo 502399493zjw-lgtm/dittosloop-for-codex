@@ -17,9 +17,11 @@ import {
   hashRuntimeScriptSource,
   runtimeAgentJournalKey
 } from "../src/runtimeScript/hash.js";
+import { createRuntimeScriptContextArgs } from "../src/runtimeScript/sandbox.js";
 
 const tempDirs: string[] = [];
 const fixedTime = "2026-06-29T00:00:00.000Z";
+const fixedRuntimeArgs = createRuntimeScriptContextArgs({}, fixedTime);
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -53,6 +55,27 @@ async function createServiceWithSequentialIds(sessionBridge?: CodexSessionBridge
     },
     previewBaseUrl: "http://127.0.0.1:47888",
     sessionBridge
+  });
+}
+
+async function createServiceWithMutableNow(input: {
+  sessionBridge?: CodexSessionBridge;
+  now: () => string;
+}) {
+  const dir = await mkdtemp(join(tmpdir(), "dittosloop-runtime-script-service-"));
+  tempDirs.push(dir);
+  const counters = new Map<string, number>();
+
+  return new LoopService({
+    store: new LoopStore(dir),
+    now: input.now,
+    createId: (prefix) => {
+      const next = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, next);
+      return `${prefix}_${next}`;
+    },
+    previewBaseUrl: "http://127.0.0.1:47888",
+    sessionBridge: input.sessionBridge
   });
 }
 
@@ -188,7 +211,7 @@ function runtimeExplicitAgentJournalKey(
   return runtimeAgentJournalKey({
     contractId,
     scriptHash: hashRuntimeScriptSource(source),
-    argsHash: hashRuntimeScriptArgs({}),
+    argsHash: hashRuntimeScriptArgs(fixedRuntimeArgs),
     callSite: options.key,
     prompt,
     options
@@ -383,7 +406,7 @@ test("reuses a completed pending runtime script agent result when the run resume
   const idempotencyKey = runtimeAgentJournalKey({
     contractId: contract.id,
     scriptHash: hashRuntimeScriptSource(source),
-    argsHash: hashRuntimeScriptArgs({}),
+    argsHash: hashRuntimeScriptArgs(fixedRuntimeArgs),
     callSite: "agent:1:greeter",
     prompt,
     options
@@ -449,6 +472,83 @@ test("reuses a completed pending runtime script agent result when the run resume
       .filter((event): event is { type: string } => Boolean(event))
       .map((event) => event.type)
   ).toEqual(expect.arrayContaining(["agent:cached", "runtime_script_done"]));
+});
+
+test("keeps runtime context args stable when a pending run resumes later", async () => {
+  const { bridge, requests } = createPendingSessionBridge();
+  let currentTime = fixedTime;
+  const service = await createServiceWithMutableNow({
+    sessionBridge: bridge,
+    now: () => currentTime
+  });
+  const prompt = "Say hello after delayed resume";
+  const options = { label: "greeter" };
+  const source = `
+    const output = await agent("${prompt}", ${JSON.stringify(options)});
+    return { triggerTimeIso: args.triggerTimeIso, output };
+  `;
+  const contract = await service.createLoopContract({
+    title: "Runtime script delayed resume",
+    goal: "Resume a pending runtime script agent after wall-clock time changes",
+    workflowKind: "runtime_script",
+    script: source,
+    verification: {
+      mode: "after_workflow",
+      rubrics: [{ id: "done", label: "Done", requirement: "Runtime script result is acceptable", severity: "must" }]
+    }
+  });
+  await service.approveRuntimeScript(contract.id, { approvedBy: "test" });
+  const launch = await service.startCodexSessionRun(contract.id, { goal: "Run delayed runtime script execution" });
+
+  const firstRun = await service.executeWorkflowAttempt(launch.run.id, {
+    attemptId: launch.attempt.id
+  });
+
+  expect(firstRun.status).toBe("running");
+  expect(requests).toHaveLength(1);
+
+  const idempotencyKey = runtimeAgentJournalKey({
+    contractId: contract.id,
+    scriptHash: hashRuntimeScriptSource(source),
+    argsHash: hashRuntimeScriptArgs(fixedRuntimeArgs),
+    callSite: "agent:1:greeter",
+    prompt,
+    options
+  });
+
+  currentTime = "2026-06-29T01:00:00.000Z";
+
+  await service.recordSessionResult(firstRun.id, {
+    attemptId: launch.attempt.id,
+    workflowContextId: launch.launchRequest.workflowContextId,
+    sessionId: "session_1",
+    stepId: "runtime:agent:1:greeter",
+    idempotencyKey,
+    status: "passed",
+    summary: "async hello",
+    result: "async hello"
+  });
+
+  const resumedRun = await service.executeWorkflowAttempt(firstRun.id, {
+    attemptId: launch.attempt.id,
+    verifier: async ({ result }) => ({
+      status: (result as { triggerTimeIso: string; output: string }).triggerTimeIso === fixedTime ? "passed" : "failed",
+      summary: "Verified stable runtime context",
+      checks: [{ rubricId: "done", status: "passed", evidence: JSON.stringify(result) }]
+    })
+  });
+
+  expect(resumedRun.status).toBe("completed");
+  expect(requests).toHaveLength(1);
+
+  const detail = await service.getRunDetail(resumedRun.id);
+  expect(detail.workflowContexts[0].vars.runtimeScript).toMatchObject({
+    status: "completed",
+    result: {
+      triggerTimeIso: fixedTime,
+      output: "async hello"
+    }
+  });
 });
 
 test("runtime script v2 rubric agent verification waits for validator writeback after worker completion", async () => {
@@ -520,7 +620,7 @@ test("runtime script v2 rubric agent verification waits for validator writeback 
   const idempotencyKey = runtimeAgentJournalKey({
     contractId: contract.id,
     scriptHash: hashRuntimeScriptSource(source),
-    argsHash: hashRuntimeScriptArgs({}),
+    argsHash: hashRuntimeScriptArgs(fixedRuntimeArgs),
     callSite: "agent:1:draft-worker",
     prompt,
     options

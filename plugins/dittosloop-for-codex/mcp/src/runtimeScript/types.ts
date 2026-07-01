@@ -28,6 +28,7 @@ export interface RuntimeScriptRunInput {
   journal: RuntimeScriptJournal;
   subagentBridge: WorkflowSubagentBridge;
   emit?: (event: RuntimeScriptEventInput) => void;
+  runtimeContextTimeIso?: string;
   now: () => string;
 }
 

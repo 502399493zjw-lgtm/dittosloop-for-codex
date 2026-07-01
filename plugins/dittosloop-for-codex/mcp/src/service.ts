@@ -776,6 +776,7 @@ export class LoopService {
         journal: createLoopStoreRuntimeScriptJournal(this.options.store),
         subagentBridge: this.createRuntimeScriptSubagentBridge(this.options.sessionBridge, run, attempt, workflowContext, contract),
         emit: emitRuntimeEvent,
+        runtimeContextTimeIso: run.createdAt,
         now: this.now
       });
     } catch (error) {

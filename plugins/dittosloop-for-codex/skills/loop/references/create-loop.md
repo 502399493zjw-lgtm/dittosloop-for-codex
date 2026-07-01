@@ -66,8 +66,11 @@ Runtime script 编写规则：
 
 - 使用字符串 `script`，并搭配 `workflowKind: "runtime_script"`。
 - 脚本内部使用注入 helpers：`phase()`、`agent()`、`parallel()`、`pipeline()`、`log()` 和 `args`。
+- 不要在脚本里访问 `Date`、`Math.random()`、`performance` 等非确定性全局对象；runtime validator 会拒绝这类脚本。
+- Runtime 会在 `args` 中自动补齐 `triggerTimeIso`、`observedTimeIso`、`runKey`、`dateKey`。需要业务时区或窗口长度时，在合同 `args` 中显式提供 `timezone`、`windowHours` 等业务参数。
 - 当 rerun/resume cache 需要可预测时，为 `agent()` 调用提供稳定的 `key`。
 - 保持脚本可复现，把可变输入放进 `args`，不要把用户特定状态硬编码进脚本。
+- 对任务必需的业务参数（例如 `timezone`、`windowHours`、来源列表）在脚本开头 fail-fast 校验，并给出清楚错误信息。
 - Runtime script 默认需要审批；创建后如果仍是 pending approval，执行前调用 `approve_runtime_script`。
 
 ## 脚本编排提示

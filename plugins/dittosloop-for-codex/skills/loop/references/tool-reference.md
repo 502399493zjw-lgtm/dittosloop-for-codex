@@ -37,6 +37,8 @@
 - 每个 loop 都使用 `create_loop_contract`。
 - `create_loop_contract` 的 workflow 输入使用 `workflowKind: "runtime_script"` 加字符串 `script`。
 - Runtime script contract input 还可以包含可选 `args` 和可选 `limits`；runtime script 默认需要审批，最终摘要中应明确说明。
+- Runtime script 沙箱禁止 `Date`、`Math.random()`、`performance` 等非确定性全局对象；脚本应使用 `args.triggerTimeIso` / `args.observedTimeIso` 和 `args.runKey` / `args.dateKey`。
+- Runtime 会自动注入上述观测时间参数；业务参数例如 `timezone`、`windowHours`、来源列表仍应由 loop 合同 `args` 显式传入，并由脚本 fail-fast 校验。
 - 字符串 `script` 必须搭配 `workflowKind: "runtime_script"`。
 - 当 runtime script 需要审批时，检查 active script 后使用 `approve_runtime_script`。
 - 复用已有 loop 前使用 `list_loops`。
