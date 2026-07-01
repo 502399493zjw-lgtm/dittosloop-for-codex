@@ -57,4 +57,3 @@
 - 当验证失败需要修复工作时，在 `record_verification` 上设置 `repair: true`，或调用 `mark_run_repairing`。
 - 只有在验证已记录或 blocker 明确时，才使用 `complete_run`。
 - 当用户想看可视 loop 视图时，使用 `get_preview_url`，并在 Codex 的 in-app browser 中打开该 URL。
-- 每个 loop 生成的指导路径是 `skill/dittosloop-for-codex-loop.md`；把它当成 runtime output，不要当成已安装 skill。

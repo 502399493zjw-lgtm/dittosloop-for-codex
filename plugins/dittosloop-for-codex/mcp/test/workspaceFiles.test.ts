@@ -120,6 +120,18 @@ describe("loopWorkspaceFiles", () => {
     const workflowFile = files.find((file) => file.path === "workflow.json");
     const runtimeFile = files.find((file) => file.path === "runtime.js");
     const contractFile = files.find((file) => file.path === "contract.json");
+    const paths = files.map((file) => file.path);
+
+    expect(paths).toEqual([
+      "memory.md",
+      "workflow.json",
+      "runtime.js",
+      "verification.md",
+      "status.json",
+      "contract.json"
+    ]);
+    expect(paths).not.toContain("skill/dittosloop-for-codex-loop.md");
+    expect(paths).not.toContain("runtime/dittosloop-for-codex-loop.md");
 
     expect(runtimeFile).toMatchObject({
       path: "runtime.js",
