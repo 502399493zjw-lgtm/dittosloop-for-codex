@@ -54,6 +54,7 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 如果当前会话不是已绑定的 worker thread，不要代替 worker 调用 `execute_workflow_attempt`、执行搜索/写报告或 `record_session_result` 填充 task。唯一例外是用户明确要求当前会话做故障恢复；此时必须先说明这是 manual recovery，并写入事件记录。
 - Runtime script 需要审批时，先检查 active script，再调用 `approve_runtime_script`。
 - 除非 blocker 明确，否则完成 run 前必须先记录验证。
+- 任何 loop run 在验证通过后、最终回复前，必须执行 memory sweep：检查本轮结果是否包含可复用监控对象、关键词、平台限制、用户偏好、修复经验或 workflow 改进；若有则调用 `commit_memory`，若无则在内部判断为 no durable memory。
 - 活跃 run 中的用户决策要先用 `record_human_request` 记录，再向用户询问，并用 `resolve_human_request` 关闭。
 - 预览界面仅用于展示；不要把它当成可编辑状态。
 - task session 结果回写要使用精确定位符，并在可用时使用 `idempotencyKey`。
@@ -103,6 +104,7 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 创建了新的可见 Codex thread 后，源会话继续替 worker 搜索、整理报告或回写 task，导致“触发了新会话但还是源会话在整”。
 - 在只有 launch request、没有真实 `threadId` 或 `threadUrl` 时执行正式 workflow。
 - 在记录验证之前完成 run。
+- 验证通过后直接最终回复，没有执行 memory sweep，导致新增监控对象、关键词、平台限制或规则只留在一次性报告里。
 - 记录 session 或 verification 结果时缺少可用的精确 `attemptId`、`workflowContextId`、`taskRunId`、`sessionId`、`stepId` 或 `idempotencyKey`。
 - 把 workflow task、session transcript 或手工摘要当成最终 chat 答案，导致 preview、history 和 chat 展示的结果层级不一致。
 - 执行中出现会影响结果质量、覆盖范围或置信度的问题，却只在报告尾部、运行记录、memory 或 verification 中写，最终聊天回复没有具体说明。
