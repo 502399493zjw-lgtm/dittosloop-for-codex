@@ -168,12 +168,17 @@ test("create loop guidance describes clarification, creation, and preview handof
   const defineRubric = await readSkillFile("references/define-rubric.md");
 
   assert.match(createLoop, /## (Creation Method|创建前方法)/);
-  assert.match(createLoop, /Restate the inferred loop goal, boundary, trigger, and expected outputs|loop 目标、边界、触发方式和预期输出/);
+  assert.match(
+    createLoop,
+    /Restate the inferred loop goal, boundary, trigger, trigger conditions, and expected outputs|loop 目标、边界、触发方式、触发条件和预期输出/
+  );
   assert.match(createLoop, /Make reasonable defaults for low-risk details|低风险细节使用合理默认值/);
   assert.match(
     createLoop,
-    /safety, permissions, cost, destructive actions, external side effects, project binding, or verification|安全、权限、成本、破坏性操作、外部副作用、项目绑定或验证/
+    /safety, permissions, cost, destructive actions, external side effects, project binding, trigger conditions, or verification|安全、权限、成本、破坏性操作、外部副作用、项目绑定、触发条件或验证/
   );
+  assert.match(createLoop, /触发类型：手动触发、定时触发、事件触发、一次性运行，或只创建不运行/);
+  assert.match(createLoop, /当前会话主动触发并创建新 worker 时的执行归属/);
   assert.match(createLoop, /compact contract draft|紧凑合同草稿/);
   assert.doesNotMatch(createLoop, /```text\nRubric Draft\n/);
   assert.doesNotMatch(createLoop, /evaluator-builder subagent/);

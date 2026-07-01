@@ -35,10 +35,12 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 
 最小顺序：
 
-1. 展示 `Loop Draft`：目标、边界、触发方式、脚本编排方式、脚本职责、输出、需要用户确认的点。
+1. 展示 `Loop Draft`：目标、边界、触发方式、触发条件、脚本编排方式、脚本职责、输出、需要用户确认的点。
 2. 当验证标准重要时，再展示 `Rubric Draft`。
-3. 对模糊、高影响或涉及外部平台、登录态、成本、频率或副作用的 loop，等待用户确认或纠正后才创建合同。
+3. 对模糊、高影响或涉及外部平台、登录态、成本、频率、自动触发或副作用的 loop，等待用户确认或纠正后才创建合同。
 4. 只有明显低风险且细节可安全推断的 loop，才可以说明默认值后继续创建。
+
+`Loop Draft` 必须显式列出触发合同：手动触发、定时触发、事件触发或只创建不自动运行；涉及定时/重复运行时要列出频率、时区、停止条件和是否需要每次人工确认。不要把“以后再说”默认为手动或定时，除非你把默认值写出来并得到用户接受。
 
 不得只给 Rubric Draft。Rubric Draft 不是 Loop Draft 的替代品。
 
@@ -48,7 +50,8 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - Dynamic workflow script 使用 `workflowKind: "runtime_script"` 加字符串 `script`。
 - 用户可见正式 run 使用 `start_codex_session` 启动。
 - 正式 workflow 执行前必须已绑定真实的宿主 Codex thread；只有 `launchRequest` 或 requested 状态不够。
-- 绑定完成后，使用返回的 `runId` 和 `attemptId` 调用 `execute_workflow_attempt`。
+- 绑定完成后，只有承载该 run 的可见 worker thread 才能推进 workflow 和回写 task 结果；触发它的源会话只负责启动、绑定、查看状态和向用户报告。
+- 如果当前会话不是已绑定的 worker thread，不要代替 worker 调用 `execute_workflow_attempt`、执行搜索/写报告或 `record_session_result` 填充 task。唯一例外是用户明确要求当前会话做故障恢复；此时必须先说明这是 manual recovery，并写入事件记录。
 - Runtime script 需要审批时，先检查 active script，再调用 `approve_runtime_script`。
 - 除非 blocker 明确，否则完成 run 前必须先记录验证。
 - 活跃 run 中的用户决策要先用 `record_human_request` 记录，再向用户询问，并用 `resolve_human_request` 关闭。
@@ -93,6 +96,7 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 对外部平台监控、社媒采集、登录态、频率、成本、关键词歧义等场景做静默默认。
 - 创建 runtime script 后，在审批前直接执行。
 - 绕过 `start_codex_session` 启动用户可见 run；应使用 `start_codex_session`，绑定真实 Codex thread，再使用 `execute_workflow_attempt`。
+- 创建了新的可见 Codex thread 后，源会话继续替 worker 搜索、整理报告或回写 task，导致“触发了新会话但还是源会话在整”。
 - 在只有 launch request、没有真实 `threadId` 或 `threadUrl` 时执行正式 workflow。
 - 在记录验证之前完成 run。
 - 记录 session 或 verification 结果时缺少可用的精确 `attemptId`、`workflowContextId`、`taskRunId`、`sessionId`、`stepId` 或 `idempotencyKey`。

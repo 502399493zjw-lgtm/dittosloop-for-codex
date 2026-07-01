@@ -7,20 +7,22 @@
 1. 复用已有 loop 前，先使用 `list_loops`。
 2. 使用 `start_codex_session` 创建可见 run、attempt、host Codex thread request、workflow context 和有界 memory excerpt。
 3. 如果 host 没有自动创建可见 Codex thread，使用返回的 `launchRequest.prompt` 通过 Codex thread 工具创建真实 thread，然后立刻调用 `record_codex_thread`，写入真实 `threadId`；只有 host 提供可打开 URL 时才写入 `threadUrl`。
-4. 不要把 workflow `sessionId` 当成可见 Codex thread。`sessionId` 只标识 loop runtime 内部的 pending task session。
-5. 当 workflow 使用 worker profile 信息时，预期 `start_codex_session` 会执行 best-effort 本地检查，并把有效 profile snapshot 记录到 pending 或 running task state。
-6. Required profile skills 缺失或未知会阻止 `start_codex_session`，除非请求显式设置 `allowDegradedProfiles: true`。
-7. Advisory profile skill failures 可以警告，但不阻止启动。
-8. 优先使用注入的 memory excerpt。当需要更持久上下文时，用 `loopId`、`limit` 和 `offset` 调用 `read_loop_memory`。
-9. 只有在 `record_codex_thread` 已成功记录真实 `threadId` 或真实 `threadUrl` 后，才能在同一个 Codex session 中使用返回的 `runId` 和 `attemptId` 调用 `execute_workflow_attempt`，推进 runtime script scheduler。
-10. 如果 loop contract 是 `workflow.kind = "runtime_script"` 且需要审批，先检查 active script，再调用 `approve_runtime_script`，然后执行 workflow attempt。
-11. 如果无法绑定真实 Codex thread，不要执行 workflow；使用 `open_codex_session` 查看缺失信息并停止为 blocker。
-12. 只有在 normal workflow attempt 外有实质性手工跟进工作时，才使用 `start_attempt`。
-13. 用 `append_event` 记录有意义的进度。
-14. 手工 attempt 完成或失败时使用 `complete_attempt`。
-15. 运行检查或人工 review 后使用 `record_verification`；当结果属于特定 attempt 时带上 `attemptId`。
-16. 当 runtime script loop 需要动态 workflow 验证时，优先使用独立 verifier 子 agent，让 JavaScript 驱动的 worker 结果由另一个可见 session 审查。
-17. 只有在验证已记录或 blocker 明确时，才使用 `complete_run`。
+4. 源会话和 worker thread 的职责必须分开：源会话只负责触发、绑定、查看状态和向用户报告；已绑定的可见 worker thread 才负责调用 `execute_workflow_attempt`、执行 worker 任务、搜索/写报告、`record_session_result` 回写 task。
+5. 不要把 workflow `sessionId` 当成可见 Codex thread。`sessionId` 只标识 loop runtime 内部的 pending task session。
+6. 当 workflow 使用 worker profile 信息时，预期 `start_codex_session` 会执行 best-effort 本地检查，并把有效 profile snapshot 记录到 pending 或 running task state。
+7. Required profile skills 缺失或未知会阻止 `start_codex_session`，除非请求显式设置 `allowDegradedProfiles: true`。
+8. Advisory profile skill failures 可以警告，但不阻止启动。
+9. 优先使用注入的 memory excerpt。当需要更持久上下文时，用 `loopId`、`limit` 和 `offset` 调用 `read_loop_memory`。
+10. 只有已绑定的 worker thread 才能使用返回的 `runId` 和 `attemptId` 调用 `execute_workflow_attempt`，推进 runtime script scheduler。源会话可以用 run detail 或 preview 检查状态，但不要代替 worker 执行 workflow。
+11. 如果 loop contract 是 `workflow.kind = "runtime_script"` 且需要审批，先检查 active script，再调用 `approve_runtime_script`；审批可由源会话完成，但 workflow attempt 的执行仍应交给 worker thread。
+12. 如果无法绑定真实 Codex thread，不要执行 workflow；使用 `open_codex_session` 查看缺失信息并停止为 blocker。
+13. 只有在 normal workflow attempt 外有实质性手工跟进工作时，才使用 `start_attempt`。
+14. 源会话只有在用户明确要求“由当前会话接管/修复/续跑”时，才可以做 manual recovery；开始前必须说明它不再是纯 loop 触发，并用 `append_event` 记录 `manualRecovery: true` 和原因。
+15. 用 `append_event` 记录有意义的进度。
+16. 手工 attempt 完成或失败时使用 `complete_attempt`。
+17. 运行检查或人工 review 后使用 `record_verification`；当结果属于特定 attempt 时带上 `attemptId`。
+18. 当 runtime script loop 需要动态 workflow 验证时，优先使用独立 verifier 子 agent，让 JavaScript 驱动的 worker 结果由另一个可见 session 审查。
+19. 只有在验证已记录或 blocker 明确时，才使用 `complete_run`。
 
 ## 验证后结果交付
 
