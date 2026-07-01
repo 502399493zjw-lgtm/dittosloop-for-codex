@@ -30,6 +30,9 @@
 - `sessionResult.status === "waiting_for_human"` 时，输出打开的 `humanRequest.question` 或 `sessionResult.finalAnswer`，不要把候选结果称为最终结果。
 - `sessionResult.artifacts`、文件链接和 verification 状态只能放在主答案之后。
 - 不得用 summary-only、报告位置说明、文件链接或重新改写的摘要替代验证后的 workflow result。
+- Workflow result 是唯一对外答案源。Session/chat 输出只是交付载体：有 canonical result 时必须透传或引用同一份结果，不要根据中间 task result、session transcript 或记忆重新拼一份答案。
+- 检查既有 run 时，优先使用已完成 run 的 `result`；只有 canonical result 缺失时，才说明缺失并引用中间材料作为诊断线索。
+- 如果需要解释执行中遇到的问题，把来源受限、重试、弱信号、修复动作等写在单独的执行说明里，不要混入 workflow result 正文。
 
 runtime script 执行会运行 JavaScript 源码，使用 journal/cache 记录复用已完成的 `agent()` 调用，发出 runtime script events，并把 script 的最终返回值作为 workflow result。
 

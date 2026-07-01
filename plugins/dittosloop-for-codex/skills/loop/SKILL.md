@@ -56,6 +56,7 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - task session 结果回写要使用精确定位符，并在可用时使用 `idempotencyKey`。
 - 当前 task session 仅支持省略 `sessionPolicy` 或 `sessionPolicy: "new"`。
 - 如果 workflow 工具返回 `sessionResult`，最终回复必须把 `sessionResult.result` 或 `sessionResult.finalAnswer` 作为主答案直接给用户；verification 说明、artifacts 和文件链接只能附后，不得用摘要、报告位置或链接替代验证后的 workflow result。
+- Workflow result 是唯一对外答案源。Chat/session 最终回复只能透传或引用验证后的 `sessionResult.result`、`sessionResult.finalAnswer` 或已完成 run 的 `result`，不得重新改写、压缩或拼接一份平行答案；执行说明、verification 和 artifacts 必须单独附后。
 
 ## 偏好捕获
 
@@ -95,5 +96,6 @@ DittosLoop 会把委托给 Codex 的工作变成一个可见的本地 loop：合
 - 在只有 launch request、没有真实 `threadId` 或 `threadUrl` 时执行正式 workflow。
 - 在记录验证之前完成 run。
 - 记录 session 或 verification 结果时缺少可用的精确 `attemptId`、`workflowContextId`、`taskRunId`、`sessionId`、`stepId` 或 `idempotencyKey`。
+- 把 workflow task、session transcript 或手工摘要当成最终 chat 答案，导致 preview、history 和 chat 展示的结果层级不一致。
 - 把 verifier 或 repair 写进 worker 主流程，而不是保留在外层验证或修复策略中。
 - 在活跃 run 中询问用户输入时，没有先记录打开的 request。
