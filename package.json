@@ -1,6 +1,6 @@
 {
   "name": "dittosloop-for-codex-repo",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Git-backed Codex plugin marketplace repo for DittosLoop For Codex.",
   "private": true,
   "license": "MIT",
